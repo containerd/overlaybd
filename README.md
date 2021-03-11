@@ -117,7 +117,7 @@ Credentials have to be updated before expiration if temporary credential is used
 ### Usage
 
 OverlayBD is working together with overlaybd-snapshotter and ctr plugin.
-See [EXAMPLES](https://github.com/alibaba/accelerated-container-image/docs/EXAMPLES.md)
+See [EXAMPLES](https://github.com/alibaba/accelerated-container-image/blob/main/docs/EXAMPLES.md)
 
 ## Licenses
 
