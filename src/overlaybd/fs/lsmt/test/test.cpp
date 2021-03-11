@@ -1,4 +1,20 @@
 /*
+ * Copyright (C) 2021 Alibaba Group.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * See the file COPYING included with this distribution for more details.
+ */
+
+/*
 VirualReadOnly -> IFileRO -> IFileRW -> LSMTReadOnlyFile -> LSMTFile
 
 IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> ComboIndex
@@ -25,7 +41,7 @@ template <typename IDX>
 void lookup_test(const SegmentMapping *mapping, size_t n1, Segment s, const SegmentMapping *stdrst,
                  size_t n2) {
     SegmentMapping out[10];
-    IDX idx(mapping, n1);
+    IDX idx(mapping, n1, false);
     size_t n = idx.lookup(s, out, LEN(out));
 
     EXPECT_EQ(n, n2);
@@ -45,14 +61,14 @@ void lookup_test(IMemoryIndex &idx);
 
 TEST(Index, lookup) {
     const static SegmentMapping mapping[] = {{0, 10, 0}, {10, 10, 50}, {100, 10, 20}};
-    Index idx(mapping, LEN(mapping));
+    Index idx(mapping, LEN(mapping), false);
 
     lookup_test<Index>(mapping, {5, 10}, {{5, 5, 5}, {10, 5, 50}});
     lookup_test<Index>(mapping, {16, 10}, {{16, 4, 56}});
     lookup_test<Index>(mapping, LEN(mapping), {26, 10}, nullptr, 0);
     lookup_test<Index>(mapping, {6, 100}, {{6, 4, 6}, {10, 10, 50}, {100, 6, 20}});
 
-    LevelIndex idx1(mapping, LEN(mapping));
+    LevelIndex idx1(mapping, LEN(mapping), false);
     lookup_test<LevelIndex>(mapping, {5, 10}, {{5, 5, 5}, {10, 5, 50}});
     lookup_test<LevelIndex>(mapping, {16, 10}, {{16, 4, 56}});
     lookup_test<LevelIndex>(mapping, LEN(mapping), {26, 10}, nullptr, 0);
@@ -79,23 +95,18 @@ TEST(Index0, insert) {
         cout << i << endl;
         EXPECT_EQ(stdrst[i], p[i]);
     }
-
+    uint64_t check = 0;
+    for (size_t i = 0; i < idx.size(); ++i) {
+        check += p[i].length * (!p[i].zeroed);
+    }
     delete[] p;
+    ASSERT_EQ(check, idx.block_count());
 }
 
-TEST(Index0, lookup) {
-
-    lookup_test<Index0>(mapping0, {4, 12}, {{4, 1, 4}, {5, 10, 3}, {15, 1, 55}});
-    lookup_test<Index0>(mapping0, {6, 120},
-                        {{6, 9, 4}, {15, 10, 55}, {30, 10, 20}, {40, 10, 123}, {50, 76, 40}});
-    lookup_test<Index0>(mapping0, {27, 180},
-                        {{30, 10, 20}, {40, 10, 123}, {50, 80, 40}, {150, 57, 21}});
-}
-// #endif
 
 #define RAND_RANGE                                                                                 \
     (uint64_t)(rand() % ((32 << 20) - 128)),                                                       \
-        (uint32_t)(rand() % (1 << 6) + 1) //生成一个1M以内，长度不超过64的线段
+        (uint32_t)(rand() % (1 << 6) + 1)
 
 uint64_t max_offset = 0;
 static void do_randwrite(/* LSMT:: */ IComboIndex *idx0, uint32_t *moffsets) {
@@ -106,8 +117,6 @@ static void do_randwrite(/* LSMT:: */ IComboIndex *idx0, uint32_t *moffsets) {
     auto x = s.moffset;
     for (auto j = s.offset; j < s.end(); ++j)
         moffsets[j] = x++;
-    //  s=s.discard();
-    // cout<<"done_randwrite"<<endl;
 }
 
 static void do_randread(/* LSMT:: */ IMemoryIndex *mi, uint32_t *moffsets) {
@@ -188,9 +197,15 @@ IMemoryIndex0 *idx0 = create_memory_index0();
 
 TEST(Perf, Index0_randwrite1M) {
 
-    for (int i = 0; i < 1000 * 1000; ++i)
+    for (int i = 0; i < 1000000; ++i)
         idx0->insert({RAND_RANGE, (uint64_t)i});
     cout << idx0->size() << " elements in the index" << endl;
+    auto p = idx0->dump();
+    size_t index_size = 0;
+    for (size_t i = 0; i < idx0->size(); i++) {
+        index_size += p[i].length * (!p[i].zeroed);
+    }
+    ASSERT_EQ(index_size, idx0->block_count());
 }
 
 void test_randread1M(IMemoryIndex *idx) {
@@ -271,10 +286,10 @@ TEST(Index, merge) {
     const static SegmentMapping mapping3[] = {
         {23, 10, 0}, {65, 10, 50}, {89, 10, 20}, {230, 43, 432}, {1999, 31, 2393}};
 
-    LevelIndex idx0(mapping0, LEN(mapping0));
-    LevelIndex idx1(mapping1, LEN(mapping1));
-    LevelIndex idx2(mapping2, LEN(mapping2));
-    LevelIndex idx3(mapping3, LEN(mapping3));
+    LevelIndex idx0(mapping0, LEN(mapping0), false);
+    LevelIndex idx1(mapping1, LEN(mapping1), false);
+    LevelIndex idx2(mapping2, LEN(mapping2), false);
+    LevelIndex idx3(mapping3, LEN(mapping3), false);
     const IMemoryIndex *indexes[] = {&idx0, &idx1, &idx2, &idx3};
 
     test_merge_combo(indexes, 2,
@@ -466,7 +481,6 @@ TEST_F(FileTest3, stack_files) {
     CleanUp();
     cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
     for (int i = 0; i < FLAGS_layers; ++i) {
-        // files[i] = create_ro_layer();
         files[i] = create_commit_layer(0, 1 /*libaio*/);
     }
 
@@ -490,6 +504,52 @@ TEST_F(FileTest3, stack_files) {
 
     auto file = stack_files(upper, lower, 0, true);
 
+    verify_file(file);
+    delete file;
+}
+
+TEST_F(FileTest3, stack_files_with_zfile) {
+    CleanUp();
+    cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
+    for (int i = 0; i < FLAGS_layers; ++i) {
+        files[i] = create_commit_layer(0, 0 , true,
+                                       false);
+    }
+    cout << "verifying stacked RO layers file" << endl;
+    auto lower = open_files_ro(files, FLAGS_layers);
+    ((LSMTReadOnlyFile *)lower)->m_index =
+        create_level_index(lower->index()->buffer(), lower->index()->size(), 0, UINT64_MAX, false);
+    EXPECT_EQ(((LSMTReadOnlyFile *)lower)->close_seal(), -1);
+    CommitArgs _(nullptr);
+    EXPECT_EQ(((LSMTReadOnlyFile *)lower)->commit(_), -1);
+    auto stat = ((LSMTReadOnlyFile *)lower)->data_stat();
+    LOG_INFO("RO valid data: `", stat.valid_data_size);
+    cout << "generating a RW layer by randwrite()" << endl;
+    auto upper = create_a_layer();
+    auto file = stack_files(upper, lower, 0, true);
+    verify_file(file);
+    delete file;
+}
+
+TEST_F(FileTest3, stack_files_with_zfile_checksum) {
+    CleanUp();
+    cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
+    for (int i = 0; i < FLAGS_layers; ++i) {
+        files[i] = create_commit_layer(0, 0 , true,
+                                       true);
+    }
+    cout << "verifying stacked RO layers file" << endl;
+    auto lower = open_files_ro(files, FLAGS_layers);
+    ((LSMTReadOnlyFile *)lower)->m_index =
+        create_level_index(lower->index()->buffer(), lower->index()->size(), 0, UINT64_MAX, false);
+    EXPECT_EQ(((LSMTReadOnlyFile *)lower)->close_seal(), -1);
+    CommitArgs _(nullptr);
+    EXPECT_EQ(((LSMTReadOnlyFile *)lower)->commit(_), -1);
+    auto stat = ((LSMTReadOnlyFile *)lower)->data_stat();
+    LOG_INFO("RO valid data: `", stat.valid_data_size);
+    cout << "generating a RW layer by randwrite()" << endl;
+    auto upper = create_a_layer();
+    auto file = stack_files(upper, lower, 0, true);
     verify_file(file);
     delete file;
 }

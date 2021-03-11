@@ -7,6 +7,5 @@ target_compile_options(zfile_lib PUBLIC -msse4.2 -mcrc32)
 target_link_libraries(zfile_lib)
 
 if(BUILD_TESTING)
-  enable_testing()
   add_subdirectory(test)
 endif()
