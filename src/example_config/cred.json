@@ -1,0 +1,8 @@
+{
+    "auths": {
+        "hub.docker.com": {
+            "username": "username",
+            "password": "password"
+        }
+    }
+}
