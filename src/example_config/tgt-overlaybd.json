@@ -1,0 +1,13 @@
+{
+    "logLevel": 1,
+    "registryCacheDir": "/opt/overlaybd/registry_cache",
+    "registryCacheSizeGB": 1,
+    "credentialFilePath": "/opt/overlaybd/cred.json",
+    "ioEngine": 1,
+    "download": {
+        "enable": true,
+        "delay": 120,
+        "delayExtra": 30,
+        "maxMBps": 100
+    }
+}
