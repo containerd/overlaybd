@@ -1,3 +1,18 @@
+/*
+ * Copyright (C) 2021 Alibaba Group.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * See the file COPYING included with this distribution for more details.
+ */
 #pragma once
 
 #include <vector>
@@ -37,15 +52,11 @@ const static char fnnew[] = "fnnew.lsmt";
 #define PREAD_LEN (1 << 20)
 ALIGNED_MEM4K(buf, PREAD_LEN);
 
-const static uint64_t TEST_DATA_VSIZE = 128 << 20; // TEST_DATA_SIZE; /* * ALIGNMENT */;
-
 #define LEN(x) (size_t)(sizeof(x) / sizeof(x[0]))
 
 //#define DISABLE_TEST true
 
 #define LAYER_SIZE 5
-/* 1024 * 1024 = 1MB = 512MB virtual size */
-#define TEST_DATA_SIZE ((uint64_t)1024 * 1024 * 1024 * 2)
 
 vector<string> args{};
 
@@ -61,7 +72,7 @@ class FileTest : public ::testing::Test {
 public:
     IFileSystem *lfs = nullptr;
     vector<string> data_name, idx_name, layer_name;
-    char layer_data[128]{}, layer_index[128]{}, layer[128]{};
+    char layer_data[128]{}, layer_index[128]{}, layer_gc[128]{}, layer[128]{};
     uint64_t vsize = FLAGS_vsize << 20;
     uint32_t IMAGE_RO_LAYERS = FLAGS_layers;
 
@@ -118,9 +129,9 @@ public:
         auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         LOG_DEBUG("open_file: ` `", data_name.back().c_str(), idx_name.back().c_str());
         LayerInfo _;
-        LOG_INFO("now create a rw layer with invalid args.. expected ret: nullptr");
+        LOG_INFO("TEST: now create a rw layer with invalid args.. expected ret: nullptr");
         EXPECT_EQ(nullptr, ::create_file_rw(_, true));
-        LOG_INFO("test OK");
+        LOG_INFO("TEST OK");
         LayerInfo args(fdata, findex);
         if (parent_uuid != "")
             args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
@@ -131,14 +142,15 @@ public:
     IFileRW *open_file_rw() {
         auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_APPEND, S_IRWXU);
         auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_APPEND, S_IRWXU);
-        EXPECT_EQ(LSMT::open_file_rw(fdata, nullptr), nullptr);
         EXPECT_EQ(LSMT::open_file_rw(nullptr, findex), nullptr);
         EXPECT_EQ(LSMT::open_file_rw(nullptr, nullptr), nullptr);
         auto file = LSMT::open_file_rw(fdata, findex, true);
         return file;
     }
     IFileRO *open_file_ro(const char *fn = fndata) {
+        LOG_INFO("TEST: now open a ro layer with invalid args.. expected ret: nullptr");
         EXPECT_EQ(LSMT::open_file_ro(nullptr), nullptr);
+        LOG_INFO("TEST OK");
         auto fdata = lfs->open(fn, O_RDONLY);
         auto file = LSMT::open_file_ro(fdata, true);
         return file;
@@ -180,7 +192,7 @@ public:
         struct iovec iov[8]{};
         for (size_t i = 0; i < nwrites; ++i) {
             off_t offset = DO_ALIGN(rand() % vsize);
-            off_t length = DO_ALIGN(rand() % (64 * 1024));
+            off_t length = DO_ALIGN(rand() % (128 * 1024));
             if ((uint64_t)(offset + length) > vsize)
                 length = DO_ALIGN(vsize - offset);
             if (length == 0) {
@@ -189,9 +201,10 @@ public:
                 continue;
             }
             memset(buf, 0, length);
-            {
+            auto roll = rand() % 4;
+            if (roll != 0) {
                 for (auto j = 0; j < length; j++) {
-                    auto k = rand() % 4 + 1;
+                    auto k = rand() % 256;
                     buf[j] = k; // j  & 0xff;
                 }
                 LOG_DEBUG("offset: `, length: `", offset, length);
@@ -206,6 +219,67 @@ public:
                     iov[i].iov_len = seg_offset[i + 1] - seg_offset[i];
                 }
                 ssize_t ret = file->pwritev(iov, slice_count, offset);
+                if (ret != length) {
+                    LOG_ERROR("`(`)", errno, strerror(errno));
+                    exit(-1);
+                }
+                EXPECT_EQ(ret, length);
+            } else {
+                file->fallocate(3, offset, length);
+            }
+            if (FLAGS_verify) {
+                memcpy(data + offset, buf, length);
+            }
+        }
+        gettimeofday(&end_time, 0);
+        auto elapsed_time = end_time.tv_sec * 1000000 + end_time.tv_usec -
+                            start_time.tv_sec * 1000000 - start_time.tv_usec;
+        printf("time cost: %ldms\n", elapsed_time / 1000);
+    }
+
+    void randwrite1(LSMT::IFileRW *file0, LSMT::IFileRW *file1, size_t nwrites) {
+        timeval start_time, end_time;
+        gettimeofday(&start_time, 0);
+        printf("randwrite( %lu times ) in two files ", nwrites);
+        // char buf[1<<20]{};
+        ALIGNED_MEM4K(buf, 1 << 20)
+        struct iovec iov[8]{};
+        for (size_t i = 0; i < nwrites; ++i) {
+            off_t offset = DO_ALIGN(rand() % vsize);
+            off_t length = DO_ALIGN(rand() % (128 * 1024));
+            if ((uint64_t)(offset + length) > vsize)
+                length = DO_ALIGN(vsize - offset);
+            if (length == 0) {
+                offset -= ALIGNMENT;
+                length = ALIGNMENT;
+                continue;
+            }
+            memset(buf, 0, length);
+            {
+                for (auto j = 0; j < length; j++) {
+                    auto k = rand() % 256;
+                    buf[j] = k; // j  & 0xff;
+                }
+                LOG_DEBUG("offset: `, length: `", offset, length);
+                auto slice_count = rand() % 4 + 1;
+                vector<int> seg_offset{0};
+                for (int i = 0; i < slice_count - 1; i++) {
+                    seg_offset.push_back(rand() % length);
+                }
+                seg_offset.push_back(length);
+                for (auto i = 0; i < slice_count; i++) {
+                    iov[i].iov_base = &buf[seg_offset[i]];
+                    iov[i].iov_len = seg_offset[i + 1] - seg_offset[i];
+                }
+                ssize_t ret = file0->pwritev(iov, slice_count, offset);
+                // ssize_t ret = file->pwrite(buf, length, offset);
+                if (ret != length) {
+                    LOG_ERROR("`(`)", errno, strerror(errno));
+                    exit(-1);
+                }
+                EXPECT_EQ(ret, length);
+
+                ret = file1->pwritev(iov, slice_count, offset);
                 if (ret != length) {
                     LOG_ERROR("`(`)", errno, strerror(errno));
                     exit(-1);
@@ -271,8 +345,7 @@ public:
         EXPECT_EQ(file->lseek(0, SEEK_END), (off_t)vsize);
         ALIGNED_MEM4K(buf, 1 << 20)
         auto buf_len = PREAD_LEN;
-        for (off_t o = 0; o < (off_t)vsize; o += buf_len /* sizeof(buf) */) // buf[1<<20], 一次读1MB
-        {
+        for (off_t o = 0; o < (off_t)vsize; o += buf_len) {
             auto ret = file->pread(buf, buf_len, o);
             EXPECT_EQ(ret, (ssize_t)buf_len);
             if (ret != buf_len) {
@@ -282,11 +355,12 @@ public:
             if (!FLAGS_verify)
                 continue;
             char *v = (data + o);
-            ret = memcmp(v, buf, buf_len);
-            EXPECT_EQ(ret, 0);
-            if (ret != 0) {
-                LOG_ERROR_RETURN(0, false, "verify failed (offset: `), err: `(`)", o, errno,
-                                 strerror(errno));
+            for (auto i = 0; i < buf_len; i++) {
+                EXPECT_EQ(buf[i], v[i]);
+                if (buf[i] != v[i]) {
+                    LOG_ERROR_RETURN(0, false, "verify failed (offset: `, inner: `), err: `(`)",
+                                     o + i, i, errno, strerror(errno));
+                }
             }
         }
         return true;
@@ -350,10 +424,22 @@ public:
         return lfs->open(data_name.back().c_str(), O_RDONLY);
     }
 
-    IFile *create_commit_layer(int i = 0, int io_engine = 0) {
+    IFile *create_commit_layer(int i = 0, int io_engine = 0, bool compress = false,
+                               bool verify = false) {
         auto file = create_a_layer();
+        IFile *as = nullptr;
+        IFile *dst = nullptr;
+        auto dst_filename = layer_name.back();
+        if (compress) {
+            auto temp_filename = dst_filename + ".tmp";
+            as = lfs->open(temp_filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+            dst = FileSystem::open_localfile_adaptor(dst_filename.c_str(),
+                                                     O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
 
-        auto as = lfs->open(layer_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+        } else {
+            as = lfs->open(dst_filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+            dst = as;
+        }
         CommitArgs args(as);
         char msg[1024]{};
         args.user_tag = msg;
@@ -371,6 +457,18 @@ public:
         tmp->get_uuid(uuid, 1);
         parent_uuid = UUID::String(uuid).c_str();
         LOG_INFO("reset parent_uuid: `", parent_uuid.c_str());
+        if (compress) {
+            LOG_INFO("compress commit file and enable checksum.");
+            CompressOptions opt;
+            opt.verify = verify;
+            CompressArgs zfile_args(opt);
+            int ret = zfile_compress(as, dst, &zfile_args);
+            if (ret != 0) {
+                LOG_ERRNO_RETURN(0, nullptr, "compress commmit file failed.");
+            }
+            dst = ZFile::zfile_open_ro(dst, true);
+            return dst;
+        }
         return FileSystem::open_localfile_adaptor(("/tmp/" + layer_name.back()).c_str(), O_RDONLY,
                                                   420U, ioengine_libaio);
     }
@@ -382,6 +480,54 @@ public:
         }
         auto image_ro_layers = open_files_ro(files, total_layers, true);
         return image_ro_layers;
+    }
+
+    virtual IFileRO *load_image(IFileSystem *lfs, int image_ro_layer_size,
+                                IFile **gc_layers = nullptr, size_t n = 0) {
+
+        memset(files, 0, sizeof(files));
+        for (int i = 0; i < image_ro_layer_size; i++) {
+            LOG_INFO("layer `, `", i, layer_name[i].c_str());
+            files[i] = lfs->open(layer_name[i].c_str(), O_RDONLY /*| O_DIRECT */);
+            if (is_zfile(files[i]) == 0) {
+                struct stat _st;
+                files[i]->fstat(&_st);
+                clayer_size.push_back(_st.st_size);
+                files[i] = zfile_open_ro(files[i]);
+            }
+        }
+        int total_layers = image_ro_layer_size + n;
+        for (int i = 0; i < (int)n; i++)
+            files[image_ro_layer_size + i] = gc_layers[i];
+        auto image_ro_layers = open_files_ro(files, total_layers, true);
+        return image_ro_layers;
+    }
+
+    void compare_commit(IFileRW *file_rw, IFileRO *file_ro) {
+        LOG_INFO("compare RW file & commit file");
+        struct stat st_rw, st_ro;
+        file_rw->fstat(&st_rw);
+        file_ro->fstat(&st_ro);
+        EXPECT_EQ(st_rw.st_size, st_ro.st_size);
+        auto vsize = st_rw.st_size;
+        size_t len = vsize / ALIGNMENT;
+        vector<Segment> reads{};
+        for (int i = 0; i < 10000; i++) {
+            uint64_t offset = (rand() % len);
+            uint32_t length = 64; // 32K
+            if (offset + length > len)
+                offset = len - length;
+            Segment s;
+            s.offset = offset;
+            s.length = length;
+            reads.push_back(s);
+        }
+        char buffer_rw[32768], buffer_ro[32768];
+        for (auto s : reads) {
+            file_rw->pread(buffer_rw, s.length * ALIGNMENT, s.offset * ALIGNMENT);
+            file_ro->pread(buffer_ro, s.length * ALIGNMENT, s.offset * ALIGNMENT);
+            EXPECT_EQ(memcmp(buffer_rw, buffer_ro, s.length * ALIGNMENT), 0);
+        }
     }
 
     virtual void TearDown() override {

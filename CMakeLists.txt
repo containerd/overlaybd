@@ -22,6 +22,11 @@ add_definitions("-DRAPIDJSON_HAS_STDSTRING=1")
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED on)
 
+if(BUILD_TESTING)
+  enable_testing()
+  include(CTest)
+endif()
+
 add_subdirectory(src)
 add_subdirectory(baselayers)
 
