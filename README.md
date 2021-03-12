@@ -47,7 +47,7 @@ cd overlaybd
 mkdir build
 cd build
 cmake ..
-make
+make -j
 sudo make install
 
 # restart tgt service to reload backing-store
