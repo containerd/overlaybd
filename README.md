@@ -8,19 +8,11 @@ It is a solution of remote container image by supporting fetching image data on-
 At the heart of the acceleration is overlaybd, which provides a merged view of a sequence of block-based layers as an block device. 
 This repository is a component of Accelerated Container Image, provides an implementation of overlaybd and as a third-party backing-store of tgt, which is an user space iSCSI target framework.
 
-## Getting Started
-### Building
-#### Requirements
+## Setup
 
-To build overlaybd, the following dependencies are required:
+## System Requirements
 
-* CMake >= 3.8+
-
-* gcc/g++ >= 7+
-
-* Libaio, libcurl and openssl runtime and development libraries.
-  * CentOS/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel`
-  * Debian/Ubuntu: `sudo apt install libcurl4-openssl-dev libssl-dev libaio-dev`
+Overlaybd provides virtual block devices through iSCSI protocol and tgt, so an iSCSI environment is required.
 
 * [The Linux target framework (tgt)](https://github.com/fujita/tgt)
   * CentOS/Fedora: `sudo yum install scsi-target-utils` (epel maybe required)
@@ -30,6 +22,23 @@ To build overlaybd, the following dependencies are required:
   * CentOS/Fedora: `sudo yum install iscsi-initiator-utils`
   * Debian/Ubuntu: `sudo apt install open-iscsi`
 
+### Install From RPM/DEB
+
+You may download our RPM/DEB packages form [Release](https://github.com/alibaba/overlaybd/releases) and install.
+
+### Build From Source
+
+#### Requirements
+
+To build overlaybd from source code, the following dependencies are required:
+
+* CMake >= 3.8+
+
+* gcc/g++ >= 7+
+
+* Libaio, libcurl and openssl runtime and development libraries.
+  * CentOS/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel`
+  * Debian/Ubuntu: `sudo apt install libcurl4-openssl-dev libssl-dev libaio-dev`
 
 #### Build
 
@@ -57,9 +66,8 @@ sudo systemctl restart tgtd
 A `liboverlaybd.so` file is installed to `/usr/lib{64}/tgt/backing-store`, tgtd service has to be restarted to load this dynamic library as a backing-store module.
 Command-line tools are installed to `/opt/overlaybd/bin/`.
 
-### Configure
 
-The default configuration files are installed after `make install`.
+## Configuration
 
 Default configure file `tgt-overlaybd.json` is installed to `/etc/overlaybd/`.
 
@@ -114,10 +122,10 @@ Credentials have to be updated before expiration if temporary credential is used
 
 > **Important**: The corresponding credential has to be set before launching devices.
 
-### Usage
+## Usage
 
 Overlaybd is working together with overlaybd-snapshotter and ctr plugin.
-See [EXAMPLES](https://github.com/alibaba/accelerated-container-image/blob/main/docs/EXAMPLES.md)
+See [EXAMPLES](https://github.com/alibaba/accelerated-container-image/blob/main/docs/EXAMPLES.md).
 
 ## Licenses
 
