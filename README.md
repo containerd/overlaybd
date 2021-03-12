@@ -1,18 +1,18 @@
-# OverlayBD
+# Overlaybd
 
 ## Accelerated Container Image
 
 [Accelerated Container Image](https://github.com/alibaba/accelerated-container-image) is an open-source implementation of paper ["DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba). 
 It is a solution of remote container image by supporting fetching image data on-demand without downloading and unpacking the whole image before a container running.
 
-At the heart of the acceleration is OverlayBD, which provides a merged view of a sequence of block-based layers as an block device. 
-This repository is a component of Accelerated Container Image, provides an implementation of OverlayBD and as a third-party backing-store of tgt, which is an user space iSCSI target framework.
+At the heart of the acceleration is overlaybd, which provides a merged view of a sequence of block-based layers as an block device. 
+This repository is a component of Accelerated Container Image, provides an implementation of overlaybd and as a third-party backing-store of tgt, which is an user space iSCSI target framework.
 
 ## Getting Started
 ### Building
 #### Requirements
 
-To build OverlayBD, the following dependencies are required:
+To build overlaybd, the following dependencies are required:
 
 * CMake >= 3.8+
 
@@ -23,8 +23,8 @@ To build OverlayBD, the following dependencies are required:
   * Debian/Ubuntu: `sudo apt install libcurl4-openssl-dev libssl-dev libaio-dev`
 
 * [The Linux target framework (tgt)](https://github.com/fujita/tgt)
-  * CentOS/Fedora: `yum install scsi-target-utils`, epel maybe required.
-  * Debian/Ubuntu: `apt install tgt`
+  * CentOS/Fedora: `sudo yum install scsi-target-utils` (epel maybe required)
+  * Debian/Ubuntu: `sudo apt install tgt`
 
 * iscsi-initiator-utils
   * CentOS/Fedora: `sudo yum install iscsi-initiator-utils`
@@ -54,8 +54,8 @@ sudo make install
 sudo systemctl restart tgtd
 ```
 
-A `liboverlaybd.so` file is installed to `/usr/lib{64}/tgt/backing-store`,tgtd service has to be restarted to load this dynamic library as a backing-store module.
-OverlayBD related command-line tools are installed to `/opt/overlaybd/bin/`.
+A `liboverlaybd.so` file is installed to `/usr/lib{64}/tgt/backing-store`, tgtd service has to be restarted to load this dynamic library as a backing-store module.
+Command-line tools are installed to `/opt/overlaybd/bin/`.
 
 ### Configure
 
@@ -87,11 +87,11 @@ Default configure file `tgt-overlaybd.json` is installed to `/etc/overlaybd/`.
 | registryCacheSizeGB | The max size of cache, in GB.                                                                         |
 | credentialFilePath  | The credential used for fetching images on registry. `/opt/overlaybd/cred.json` is the default value. |
 | download.enable     | Whether background downloading is enabled or not.                                                     |
-| download.delay      | The seconds waiting to start downloading task after the OverlayBD device launched.                    |
+| download.delay      | The seconds waiting to start downloading task after the overlaybd device launched.                    |
 | download.delayExtra | A random extra delay is attached to delay, avoiding too many tasks started at the same time.          |
 | download.maxMBps    | The speed limit in MB/s for a downloading task.
 
-> NOTE: `download` is the config for background downloading. After an OverlayBD device is lauched, a background task will be running to fetch the whole blobs into local directories. After downloading, I/O requests are directed to local files. Different to other options, download config is reloaded when a device lauching.
+> NOTE: `download` is the config for background downloading. After an overlaybd device is lauched, a background task will be running to fetch the whole blobs into local directories. After downloading, I/O requests are directed to local files. Different to other options, download config is reloaded when a device lauching.
 
 Here is an example of credential file described by `credentialFilePath` field.
 
@@ -110,15 +110,15 @@ Here is an example of credential file described by `credentialFilePath` field.
 ```
 
 Credentials are reloaded when authentication is required.
-Credentials have to be updated before expiration if temporary credential is used, otherwise OverlayBD keeps reloading until a valid credential is set.
+Credentials have to be updated before expiration if temporary credential is used, otherwise overlaybd keeps reloading until a valid credential is set.
 
 > **Important**: The corresponding credential has to be set before launching devices.
 
 ### Usage
 
-OverlayBD is working together with overlaybd-snapshotter and ctr plugin.
+Overlaybd is working together with overlaybd-snapshotter and ctr plugin.
 See [EXAMPLES](https://github.com/alibaba/accelerated-container-image/blob/main/docs/EXAMPLES.md)
 
 ## Licenses
 
-* OverlayBD is released under the General Public License, Version 2.0.
+Overlaybd is released under the General Public License, Version 2.0.
