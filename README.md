@@ -5,12 +5,14 @@
 [Accelerated Container Image](https://github.com/alibaba/accelerated-container-image) is an open-source implementation of paper ["DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba). 
 It is a solution of remote container image by supporting fetching image data on-demand without downloading and unpacking the whole image before a container running.
 
-At the heart of the acceleration is overlaybd, which provides a merged view of a sequence of block-based layers as an block device. 
+At the heart of the acceleration is overlaybd, which provides a merged view of a sequence of block-based layers as an block device.
 This repository is a component of Accelerated Container Image, provides an implementation of overlaybd and as a third-party backing-store of tgt, which is an user space iSCSI target framework.
+
+The rest of this document will show you how to setup overlaybd.
 
 ## Setup
 
-## System Requirements
+### System Requirements
 
 Overlaybd provides virtual block devices through iSCSI protocol and tgt, so an iSCSI environment is required.
 
@@ -66,9 +68,11 @@ sudo systemctl restart tgtd
 A `liboverlaybd.so` file is installed to `/usr/lib{64}/tgt/backing-store`, tgtd service has to be restarted to load this dynamic library as a backing-store module.
 Command-line tools are installed to `/opt/overlaybd/bin/`.
 
+During compilation, some third-party dependency libraries will be automatically downloaded, see `CMake/external<lib_name>.cmake`. If you are having problems to download, you could manually prepare these libs under `external/<lib_name>/src/`, see CMake [doc](https://cmake.org/cmake/help/latest/module/ExternalProject.html).
 
 ## Configuration
 
+### overlaybd config
 Default configure file `tgt-overlaybd.json` is installed to `/etc/overlaybd/`.
 
 ```json
@@ -99,7 +103,9 @@ Default configure file `tgt-overlaybd.json` is installed to `/etc/overlaybd/`.
 | download.delayExtra | A random extra delay is attached to delay, avoiding too many tasks started at the same time.          |
 | download.maxMBps    | The speed limit in MB/s for a downloading task.
 
-> NOTE: `download` is the config for background downloading. After an overlaybd device is lauched, a background task will be running to fetch the whole blobs into local directories. After downloading, I/O requests are directed to local files. Different to other options, download config is reloaded when a device lauching.
+> NOTE: `download` is the config for background downloading. After an overlaybd device is lauched, a background task will be running to fetch the whole blobs into local directories. After downloading, I/O requests are directed to local files. Unlike other options, download config is reloaded when a device launching.
+
+### credential config
 
 Here is an example of credential file described by `credentialFilePath` field.
 
@@ -117,15 +123,13 @@ Here is an example of credential file described by `credentialFilePath` field.
 }
 ```
 
-Credentials are reloaded when authentication is required.
-Credentials have to be updated before expiration if temporary credential is used, otherwise overlaybd keeps reloading until a valid credential is set.
+> **Important**: The corresponding credential has to be set before launching devices, if your image registry requires authentication. Otherwise overlaybd will keep on reloading until a valid credential is set.
 
-> **Important**: The corresponding credential has to be set before launching devices.
+For the convenience of testing, we provided a public registry on Aliyun ACR, see later examples.
 
-## Usage
+## What's next?
 
-Overlaybd is working together with overlaybd-snapshotter and ctr plugin.
-See [EXAMPLES](https://github.com/alibaba/accelerated-container-image/blob/main/docs/EXAMPLES.md).
+Now we have finished the setup of overlaybd, let's go back to [Accelerated Container Image](https://github.com/alibaba/accelerated-container-image) repo and start to run our first accelerated container.
 
 ## Licenses
 
