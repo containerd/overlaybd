@@ -1,21 +1,18 @@
 /*
-  * fiemap.h
-  * 
-  * Copyright (C) 2021 Alibaba Group.
-  * 
-  * This program is free software; you can redistribute it and/or
-  * modify it under the terms of the GNU General Public License
-  * as published by the Free Software Foundation; either version 2
-  * of the License, or (at your option) any later version.
-  * 
-  * This program is distributed in the hope that it will be useful,
-  * but WITHOUT ANY WARRANTY; without even the implied warranty of
-  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  * GNU General Public License for more details.
-  * 
-  * See the file COPYING included with this distribution for more details.
-*/
+   Copyright The Overlaybd Authors
 
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
 #pragma once
 #include <inttypes.h>
 
@@ -23,7 +20,7 @@ namespace FileSystem
 {
     typedef uint32_t __u32;
     typedef uint64_t __u64;
-    
+
     struct fiemap_extent {
         __u64 fe_logical;  /* logical offset in bytes for the start of
                             * the extent from the beginning of the file */
@@ -35,7 +32,7 @@ namespace FileSystem
         __u32 fe_flags;    /* FIEMAP_EXTENT_* flags for this extent */
         __u32 fe_reserved[3];
     };
-    
+
     struct fiemap {
         __u64 fm_start;         /* logical offset (inclusive) at
                                  * which to start mapping (in) */
@@ -59,13 +56,13 @@ namespace FileSystem
     };
 
 #define FIEMAP_MAX_OFFSET   (~0ULL)
-    
+
 #define FIEMAP_FLAG_SYNC    0x00000001 /* sync file data before map */
 #define FIEMAP_FLAG_XATTR   0x00000002 /* map extended attribute tree */
 #define FIEMAP_FLAG_CACHE   0x00000004 /* request caching of the extents */
-    
+
 #define FIEMAP_FLAGS_COMPAT (FIEMAP_FLAG_SYNC | FIEMAP_FLAG_XATTR)
-    
+
 #define FIEMAP_EXTENT_LAST              0x00000001 /* Last extent in file. */
 #define FIEMAP_EXTENT_UNKNOWN           0x00000002 /* Data location unknown. */
 #define FIEMAP_EXTENT_DELALLOC          0x00000004 /* Location still pending.

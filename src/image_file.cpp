@@ -1,20 +1,18 @@
 /*
- * image_file.cpp
- *
- * Copyright (C) 2021 Alibaba Group.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * See the file COPYING included with this distribution for more details.
- */
+   Copyright The Overlaybd Authors
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -42,7 +40,7 @@
 FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
     int flags = O_RDONLY;
 
-    LOG_INFO("open ro file: `", path);
+    LOG_DEBUG("open ro file: `", path);
     int ioengine = gconf.ioEngine();
     if (ioengine > 2) {
         LOG_WARN("invalid ioengine: `, set to psync", ioengine);
@@ -100,7 +98,7 @@ FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std
         url += "/";
     url += digest;
 
-    LOG_INFO("open file from remotefs: `, size: `", url, size);
+    LOG_DEBUG("open file from remotefs: `, size: `", url, size);
     FileSystem::IFile *remote_file = gfs.remote_fs->open(url.c_str(), O_RDONLY);
     if (!remote_file) {
         if (errno == EPERM)
@@ -205,7 +203,7 @@ int ImageFile::open_lower_layer(FileSystem::IFile *&file, ImageConfigNS::LayerCo
         }
     }
     if (file != nullptr) {
-        LOG_INFO("layer index: `, open(`) success", index, opened);
+        LOG_DEBUG("layer index: `, open(`) success", index, opened);
         return 0;
     }
     return -1;
@@ -223,7 +221,7 @@ LSMT::IFileRO *ImageFile::open_lowers(std::vector<ImageConfigNS::LayerConfig> &l
     std::vector<FileSystem::IFile *> files;
     files.resize(lowers.size(), nullptr);
     auto n = std::min(PARALLEL_LOAD_INDEX, (int)lowers.size());
-    LOG_INFO("create ` photon threads to open lowers", n);
+    LOG_DEBUG("create ` photon threads to open lowers", n);
 
     ParallelOpenTask tm(files, lowers.size(), lowers);
     for (auto i = 0; i < n; ++i) {
@@ -321,9 +319,9 @@ int ImageFile::init_image_file() {
     }
 
     if (upper.index() == "" || upper.data() == "") {
-        LOG_WARN("RW layer's path not set. return RO layers.");
+        LOG_INFO("RW layer path not set. return RO layers.");
         m_file = lower_file;
-        m_read_only = true;
+        read_only = true;
         goto SUCCESS_EXIT;
     }
 
@@ -338,7 +336,7 @@ int ImageFile::init_image_file() {
         goto ERROR_EXIT;
     }
     m_file = stack_ret;
-    m_read_only = false;
+    read_only = false;
 
 SUCCESS_EXIT:
     if (conf.download().enable() == true) {

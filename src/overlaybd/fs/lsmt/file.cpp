@@ -1,20 +1,18 @@
 /*
- * file.cpp
- *
- * Copyright (C) 2021 Alibaba Group.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * See the file COPYING included with this distribution for more details.
- */
+   Copyright The Overlaybd Authors
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
 #include "file.h"
 #include <string.h>
 #include <stdarg.h>
@@ -175,8 +173,7 @@ public:
     uint64_t lsmt_io_size = 0;
 
     virtual ~LSMTReadOnlyFile() {
-        LOG_DEBUG("~LSMTReadOnlyFile()");
-        LOG_INFO("pread times: `, size: `M", lsmt_io_cnt, lsmt_io_size >> 20);
+        LOG_DEBUG("pread times: `, size: `M", lsmt_io_cnt, lsmt_io_size >> 20);
         close();
         if (m_file_ownership) {
             LOG_DEBUG("m_file_ownership:`, m_files.size:`", m_file_ownership, m_files.size());
@@ -1096,7 +1093,7 @@ static IMemoryIndex *load_merge_index(vector<IFile *> &files, vector<UUID> &uuid
                                       HeaderTrailer &ht) {
     photon::join_handle *ths[PARALLEL_LOAD_INDEX];
     auto n = min(PARALLEL_LOAD_INDEX, (int)files.size());
-    LOG_INFO("create ` photon threads to merge index", n);
+    LOG_DEBUG("create ` photon threads to merge index", n);
     parallel_load_task tm((IFile **)&(files[0]), files.size());
     for (auto i = 0; i < n; ++i) {
         ths[i] = photon::thread_enable_join(photon::thread_create(&do_parallel_load_index, &tm));
@@ -1144,9 +1141,9 @@ IFileRO *open_files_ro(IFile **files, size_t n, bool ownership) {
     rst->m_vsize = ht.virtual_size;
     rst->m_file_ownership = ownership;
 
-    LOG_INFO("open ` layers", n);
+    LOG_DEBUG("open ` layers", n);
     for (int i = 0; i < (int)n; i++) {
-        LOG_INFO(rst->m_uuid[i]);
+        LOG_DEBUG(rst->m_uuid[i]);
     }
     return rst;
 }

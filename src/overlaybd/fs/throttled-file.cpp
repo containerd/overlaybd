@@ -1,19 +1,17 @@
 /*
-  * throttled-file.cpp
-  * 
-  * Copyright (C) 2021 Alibaba Group.
-  * 
-  * This program is free software; you can redistribute it and/or
-  * modify it under the terms of the GNU General Public License
-  * as published by the Free Software Foundation; either version 2
-  * of the License, or (at your option) any later version.
-  * 
-  * This program is distributed in the hope that it will be useful,
-  * but WITHOUT ANY WARRANTY; without even the implied warranty of
-  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  * GNU General Public License for more details.
-  * 
-  * See the file COPYING included with this distribution for more details.
+   Copyright The Overlaybd Authors
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 */
 
 #include "throttled-file.h"
@@ -53,7 +51,7 @@ namespace FileSystem
             if (rate()) {
                 auto w0 = now - m_time_window * 1024UL;
                 uint64_t head_working_time = m_events.front().amount / rate() * 1024UL;
-                while (!m_events.empty() && _get_time(m_events.front().time_stamp) < w0 && 
+                while (!m_events.empty() && _get_time(m_events.front().time_stamp) < w0 &&
                     _get_time(m_events.front().time_stamp) + head_working_time <= now)
                 {
                     m_sum -= m_events.front().amount;
@@ -140,7 +138,7 @@ namespace FileSystem
             return timems - m_timestamp_base;
         }
     };
-    
+
     struct scoped_queue
     {
         StatisticsQueue& _q;
@@ -159,7 +157,7 @@ namespace FileSystem
             _q.try_pop();
         }
     };
-    
+
     struct scoped_semaphore
     {
         uint64_t m_count;
@@ -231,7 +229,7 @@ namespace FileSystem
             }
         }
     };
-    
+
     template<typename Func, typename Adv>
     static inline __attribute__((always_inline))
     ssize_t split_io(ALogStringL name, size_t count, size_t block_size,
@@ -239,7 +237,7 @@ namespace FileSystem
     {
         if (block_size == 0 || count <= block_size)
             return func(count);
-        
+
         ssize_t cnt = 0;
         while(count > 0)
         {
@@ -279,7 +277,7 @@ namespace FileSystem
             {
             }
         };
-        
+
         struct scoped_throttle
         {
             uint64_t count;
@@ -409,7 +407,7 @@ namespace FileSystem
                 [&](size_t len) { v.next(); });
         }
     };
-    
+
     IFile* new_throttled_file(IFile* file, const ThrottleLimits& limits)
     {
         return new ThrottledFile(file, limits);
