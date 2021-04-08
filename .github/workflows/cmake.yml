@@ -1,11 +1,11 @@
 name: CMake
 
-on: 
-  push: 
-    branches: 
-    - main 
-  pull_request: 
-    branches: 
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
     - main
 
 env:
@@ -21,20 +21,21 @@ jobs:
     - name: Install Dependencies
       shell: bash
       run: |
-        sudo apt install -y libcurl4-openssl-dev libssl-dev libaio-dev libgtest-dev libgflags-dev
+        git submodule update --init
+        sudo apt install -y pkg-config libgtest-dev libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libglib2.0-dev
         cd /usr/src/gtest
         sudo cmake CMakeLists.txt
         sudo make
         sudo cp *.a /usr/lib
-    
+
     - name: Create Build Environment
       run: cmake -E make_directory ${{github.workspace}}/build
-    
+
     - name: Configure CMake
       shell: bash
       working-directory: ${{github.workspace}}/build
       run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TESTING=1
-      
+
     - name: Build
       working-directory: ${{github.workspace}}/build
       shell: bash

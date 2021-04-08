@@ -1,21 +1,18 @@
 /*
- * image_file.h
- *
- * Copyright (C) 2021 Alibaba Group.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * See the file COPYING included with this distribution for more details.
- */
+   Copyright The Overlaybd Authors
 
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
 #pragma once
 
 #include <dirent.h>
@@ -29,17 +26,14 @@
 #include <thread>
 #include <unistd.h>
 
+#include "bk_download.h"
+#include "config.h"
+#include "image_service.h"
 #include "overlaybd/alog.h"
-#include "overlaybd/async.h"
-#include "overlaybd/fs/asyncfs.h"
-#include "overlaybd/fs/exportfs.h"
 #include "overlaybd/fs/filesystem.h"
 #include "overlaybd/fs/forwardfs.h"
 #include "overlaybd/fs/lsmt/file.h"
 #include "overlaybd/photon/thread11.h"
-#include "config.h"
-#include "bk_download.h"
-#include "get_image_file.h"
 
 class ImageFile : public FileSystem::ForwardFile {
 public:
@@ -49,12 +43,17 @@ public:
         conf.CopyFrom(_conf, conf.GetAllocator());
         m_exception = "";
         m_status = init_image_file();
-        if (m_file != NULL)
-            m_afile = FileSystem::export_as_async_file(m_file);
+        if (m_status == 1) {
+            struct stat st;
+            fstat(&st);
+            LOG_INFO("fstat bs: `, size: `", block_size, size);
+        }
     }
 
     ~ImageFile() {
-        delete m_afile; // also destory m_file
+        if (m_file != nullptr) {
+            delete m_file;
+        }
     }
 
     int close() override {
@@ -64,32 +63,47 @@ public:
         return m_file->close();
     }
 
-    void async_pread(void *buf, size_t count, off_t offset, Callback<AsyncResult<ssize_t> *> cb) {
-        m_afile->pread(buf, count, offset, cb);
+    int fstat(struct stat *buf) override {
+        int ret = m_file->fstat(buf);
+        block_size = buf->st_blksize;
+        size = buf->st_size;
+        if (block_size == 0)
+            block_size = 512;
+        num_lbas = size / block_size;
+        return ret;
     }
 
-    void async_pwrite(void *buf, size_t count, off_t offset, Callback<AsyncResult<ssize_t> *> cb) {
-        m_afile->pwrite(buf, count, offset, cb);
+    ssize_t pwritev(const struct iovec *iov, int iovcnt,
+                    off_t offset) override {
+        if (read_only) {
+            LOG_ERROR_RETURN(EROFS, -1, "writing read only file");
+        }
+        return m_file->pwritev(iov, iovcnt, offset);
     }
 
-    void async_sync(Callback<AsyncResult<int> *> cb) {
-        if (m_read_only)
-            return;
-        m_afile->fdatasync(cb);
+    ssize_t preadv(const struct iovec *iov, int iovcnt, off_t offset) override {
+        return m_file->preadv(iov, iovcnt, offset);
     }
-    void async_unmap(off_t offset, size_t len, Callback<AsyncResult<int> *> cb) {
-        m_afile->fallocate(3, offset, len, cb);
+
+    int fdatasync() override { return m_file->fdatasync(); }
+
+    int fallocate(int mode, off_t offset, off_t len) override {
+        return m_file->fallocate(mode, offset, len);
     }
 
     void set_auth_failed();
-    int open_lower_layer(FileSystem::IFile *&file, ImageConfigNS::LayerConfig &layer, int index);
+    int open_lower_layer(FileSystem::IFile *&file,
+                         ImageConfigNS::LayerConfig &layer, int index);
 
     std::string m_exception;
     int m_status = 0; // 0: not started, 1: running, -1 exit
-    bool m_read_only = false;
+
+    size_t size;
+    uint64_t num_lbas;
+    uint32_t block_size;
+    bool read_only = false;
 
 private:
-    FileSystem::IAsyncFile *m_afile = nullptr;
     struct GlobalFs &gfs;
     ImageConfigNS::GlobalConfig &gconf;
     ImageConfigNS::ImageConfig conf;
@@ -98,10 +112,11 @@ private:
 
     int init_image_file();
     void set_failed(std::string reason);
-    LSMT::IFileRO *open_lowers(std::vector<ImageConfigNS::LayerConfig> &, bool &);
+    LSMT::IFileRO *open_lowers(std::vector<ImageConfigNS::LayerConfig> &,
+                               bool &);
     LSMT::IFileRW *open_upper(ImageConfigNS::UpperConfig &);
     FileSystem::IFile *__open_ro_file(const std::string &);
-    FileSystem::IFile *__open_ro_remote(const std::string &dir, const std::string &,
-                                        const uint64_t);
+    FileSystem::IFile *__open_ro_remote(const std::string &dir,
+                                        const std::string &, const uint64_t);
     void start_bk_dl_thread();
 };

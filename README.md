@@ -2,11 +2,11 @@
 
 ## Accelerated Container Image
 
-[Accelerated Container Image](https://github.com/alibaba/accelerated-container-image) is an open-source implementation of paper ["DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba). 
+[Accelerated Container Image](https://github.com/alibaba/accelerated-container-image) is an open-source implementation of paper ["DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba).
 It is a solution of remote container image by supporting fetching image data on-demand without downloading and unpacking the whole image before a container running.
 
 At the heart of the acceleration is overlaybd, which provides a merged view of a sequence of block-based layers as an block device.
-This repository is a component of Accelerated Container Image, provides an implementation of overlaybd and as a third-party backing-store of tgt, which is an user space iSCSI target framework.
+This repository is a component of Accelerated Container Image, provides an implementation of overlaybd by iSCSI and [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
 
 The rest of this document will show you how to setup overlaybd.
 
@@ -28,6 +28,12 @@ Overlaybd provides virtual block devices through iSCSI protocol and tgt, so an i
 
 You may download our RPM/DEB packages form [Release](https://github.com/alibaba/overlaybd/releases) and install.
 
+The binaries are install to `/opt/overlaybd/bin/`.
+
+Run `/opt/overlaybd/bin/overlaybd-tcmu` and the log is stored in `/var/log/overlaybd.log`.
+
+It is better to run `overlaybd-tcmu` as a service so that it can be restarted after unexpected crashes.
+
 ### Build From Source
 
 #### Requirements
@@ -38,16 +44,17 @@ To build overlaybd from source code, the following dependencies are required:
 
 * gcc/g++ >= 7+
 
-* Libaio, libcurl and openssl runtime and development libraries.
-  * CentOS/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel`
-  * Debian/Ubuntu: `sudo apt install libcurl4-openssl-dev libssl-dev libaio-dev`
+* Libaio, libcurl, libnl3, glib2 and openssl runtime and development libraries.
+  * CentOS/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel glib2-devel`
+  * Debian/Ubuntu: `sudo apt install pkg-config libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libglib2.0-dev`
 
 #### Build
 
-You need git to checkout the source code:
+You need git to checkout the source code and submodule:
 
 ```bash
 git clone https://github.com/alibaba/overlaybd.git
+git submodule update --init
 ```
 
 The whole project is managed by CMake.
@@ -61,23 +68,23 @@ cmake ..
 make -j
 sudo make install
 
-# restart tgt service to reload backing-store
-sudo systemctl restart tgtd
+# start overlaybd tcmu backstore
+sudo /opt/overlaybd/bin/overlaybd-tcmu
 ```
 
-A `liboverlaybd.so` file is installed to `/usr/lib{64}/tgt/backing-store`, tgtd service has to be restarted to load this dynamic library as a backing-store module.
-Command-line tools are installed to `/opt/overlaybd/bin/`.
+Binaries and command-line tools are installed to `/opt/overlaybd/bin/`.
 
 During compilation, some third-party dependency libraries will be automatically downloaded, see `CMake/external<lib_name>.cmake`. If you are having problems to download, you could manually prepare these libs under `external/<lib_name>/src/`, see CMake [doc](https://cmake.org/cmake/help/latest/module/ExternalProject.html).
 
 ## Configuration
 
 ### overlaybd config
-Default configure file `tgt-overlaybd.json` is installed to `/etc/overlaybd/`.
+Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 
 ```json
 {
     "logLevel": 1,
+    "logPath": "/var/log/overlaybd.log",
     "registryCacheDir": "/opt/overlaybd/registry_cache",
     "registryCacheSizeGB": 1,
     "credentialFilePath": "/opt/overlaybd/cred.json",
@@ -94,7 +101,8 @@ Default configure file `tgt-overlaybd.json` is installed to `/etc/overlaybd/`.
 | Field               | Description                                                                                           |
 | ---                 | ---                                                                                                   |
 | logLevel            | DEBUG 0, INFO  1, WARN  2, ERROR 3                                                                    |
-| ioEngine            | IO engine used to open local files: psync 0, libaio 1, posix aio 2.                                             |
+| ioEngine            | IO engine used to open local files: psync 0, libaio 1, posix aio 2.                                   |
+| logPath             | The path for log file, `/var/log/overlaybd.log` is the default value.                                 |
 | registryCacheDir    | The cache directory for remote image data.                                                            |
 | registryCacheSizeGB | The max size of cache, in GB.                                                                         |
 | credentialFilePath  | The credential used for fetching images on registry. `/opt/overlaybd/cred.json` is the default value. |
@@ -135,4 +143,4 @@ Now we have finished the setup of overlaybd, let's go back to [Accelerated Conta
 
 ## Licenses
 
-Overlaybd is released under the General Public License, Version 2.0.
+Overlaybd is released under the Apache License, Version 2.0.

@@ -1,19 +1,17 @@
 /*
-  * zfile.cpp
-  * 
-  * Copyright (C) 2021 Alibaba Group.
-  * 
-  * This program is free software; you can redistribute it and/or
-  * modify it under the terms of the GNU General Public License
-  * as published by the Free Software Foundation; either version 2
-  * of the License, or (at your option) any later version.
-  * 
-  * This program is distributed in the hope that it will be useful,
-  * but WITHOUT ANY WARRANTY; without even the implied warranty of
-  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  * GNU General Public License for more details.
-  * 
-  * See the file COPYING included with this distribution for more details.
+   Copyright The Overlaybd Authors
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 */
 
 #include "zfile.h"
@@ -59,7 +57,7 @@ namespace ZFile
         return crc32::crc32c_extend(buf, size, NOI_WELL_KNOWN_PRIME);
     }
     /* ZFile Format:
-        | Header (512B) | dict (optional) | compressed block 0 [checksum0] | compressed block 1 [checksum1] | ... 
+        | Header (512B) | dict (optional) | compressed block 0 [checksum0] | compressed block 1 [checksum1] | ...
         | compressed block N [checksumN] | jmp_table(index) | Trailer (512 B)|
     */
     class CompressionFile : public VirtualReadOnlyFile
@@ -173,7 +171,7 @@ namespace ZFile
                     deltas.push_back(deltas[i - 1] + ibuf[i - 1] - local_min);
                     // LOG_DEBUG("idx `: `", i, this->operator[](i));
                 }
-                LOG_INFO("create jump table done. {part_count: `, deltas_count: `, size: `}",
+                LOG_DEBUG("create jump table done. {part_count: `, deltas_count: `, size: `}",
                          partial_offset.size(), deltas.size(),
                          deltas.size() * sizeof(deltas[0]) +
                              partial_offset.size() * sizeof(partial_offset[0]));
@@ -421,7 +419,7 @@ namespace ZFile
                 LOG_ERROR_RETURN(ENOMEM, -1, "block_size: ` > MAX_READ_SIZE (`)",
                                  m_ht.opt.block_size, MAX_READ_SIZE);
             }
-            if (count == 0) 
+            if (count == 0)
                 return 0;
             assert(offset + count <= m_ht.raw_data_size);
             ssize_t readn = 0; // final will equal to count
@@ -510,14 +508,14 @@ namespace ZFile
             }
 
             index_bytes = pht->index_size * sizeof(uint32_t);
-            LOG_INFO("trailer_offset: `, idx_offset: `, idx_bytes: `, dict_size: `",
+            LOG_DEBUG("trailer_offset: `, idx_offset: `, idx_bytes: `, dict_size: `",
                      trailer_offset, pht->index_offset, index_bytes, pht->opt.dict_size);
 
             if (index_bytes > trailer_offset - pht->index_offset)
                 LOG_ERROR_RETURN(0, false, "invalid index bytes or size. ");
         }
         auto ibuf = std::unique_ptr<uint32_t[]>(new uint32_t[pht->index_size]);
-        LOG_INFO("index_offset: `", pht->index_offset);
+        LOG_DEBUG("index_offset: `", pht->index_offset);
         ret = file->pread((void *)(ibuf.get()), index_bytes, pht->index_offset);
         jump_table.build(ibuf.get(), pht->index_size,
                          CompressionFile::HeaderTrailer::SPACE + pht->opt.dict_size);
@@ -543,7 +541,7 @@ namespace ZFile
         zfile->m_jump_table = std::move(jump_table);
         CompressArgs args(ht.opt);
         ht.opt.verify = ht.opt.verify && verify;
-        LOG_INFO("compress type: `, bs: `, verify_checksum: `",
+        LOG_DEBUG("compress type: `, bs: `, verify_checksum: `",
                  ht.opt.type, ht.opt.block_size, ht.opt.verify);
 
         zfile->m_compressor.reset(
@@ -702,10 +700,10 @@ namespace ZFile
         auto pht = (CompressionFile::HeaderTrailer *)buf;
         if (!pht->verify_magic() || !pht->is_header())
         {
-            LOG_INFO("file: ` is not a zfile object", file);
+            LOG_DEBUG("file: ` is not a zfile object", file);
             return 0;
         }
-        LOG_INFO("file: ` is a zfile object", file);
+        LOG_DEBUG("file: ` is a zfile object", file);
         return 1;
     }
 } // namespace ZFile

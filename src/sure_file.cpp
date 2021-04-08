@@ -1,22 +1,18 @@
-
 /*
- * sure_file.cpp
- *
- * Copyright (C) 2021 Alibaba Group.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * See the file COPYING included with this distribution for more details.
- */
+   Copyright The Overlaybd Authors
 
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
 #include <limits.h>
 #include <unistd.h>
 #include "overlaybd/alog-stdstring.h"
@@ -58,7 +54,7 @@ private:
 public:
     virtual ssize_t write(const void *buf, size_t count) override {
         size_t done_cnt = 0;
-        while (done_cnt < count) {
+        while (m_ifile && m_ifile->m_status >= 0 && done_cnt < count) {
             ssize_t ret = m_file->write((char *)buf + done_cnt, count - done_cnt);
             if (ret > 0)
                 done_cnt += ret;
@@ -86,7 +82,7 @@ public:
         uint64_t try_cnt = 0;
         size_t got_cnt = 0;
         auto time_st = photon::now;
-        while (m_ifile && m_ifile->m_status >= 0 && photon::now - time_st < 61 * 1000 * 1000) {
+        while (m_ifile && m_ifile->m_status >= 0 && photon::now - time_st < 31 * 1000 * 1000) {
             // exit on image in exit status, or timeout
             ssize_t ret = m_file->pread((char *)buf + got_cnt, count - got_cnt, offset + got_cnt);
             if (ret > 0)
