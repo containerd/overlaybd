@@ -1,0 +1,3 @@
+[submodule "src/tcmu-runner"]
+	path = src/tcmu-runner
+	url = https://github.com/open-iscsi/tcmu-runner

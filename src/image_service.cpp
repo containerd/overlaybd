@@ -1,20 +1,31 @@
 /*
- * get_image_file.cpp
- *
- * Copyright (C) 2021 Alibaba Group.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * See the file COPYING included with this distribution for more details.
- */
+   Copyright The Overlaybd Authors
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+#include "image_service.h"
+#include "config.h"
+#include "image_file.h"
+#include "overlaybd/alog-stdstring.h"
+#include "overlaybd/alog.h"
+#include "overlaybd/base64.h"
+#include "overlaybd/fs/cache/cache.h"
+#include "overlaybd/fs/filesystem.h"
+#include "overlaybd/fs/localfs.h"
+#include "overlaybd/fs/registryfs/registryfs.h"
+#include "overlaybd/fs/zfile/tar_zfile.h"
+#include "overlaybd/fs/zfile/zfile.h"
+#include "overlaybd/photon/thread.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -23,47 +34,28 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <vector>
-#include "overlaybd/alog-stdstring.h"
-#include "overlaybd/alog.h"
-#include "overlaybd/base64.h"
-#include "overlaybd/fs/cache/cache.h"
-#include "overlaybd/fs/filesystem.h"
-#include "overlaybd/fs/localfs.h"
-#include "overlaybd/fs/registryfs/registryfs.h"
-#include "overlaybd/fs/zfile/zfile.h"
-#include "overlaybd/fs/zfile/tar_zfile.h"
-#include "overlaybd/photon/thread.h"
-#include "config.h"
-#include "get_image_file.h"
-#include "image_file.h"
 
-const char *DEFAULT_CONFIG_PATH = "/etc/overlaybd/tgt-overlaybd.json";
-
-// global
-ImageConfigNS::GlobalConfig global_conf;
-struct GlobalFs global_fs;
-
-static bool read_global_config_and_set() {
-    if (!global_conf.ParseJSON(DEFAULT_CONFIG_PATH)) {
-        return false;
-    }
-    uint32_t ioengine = global_conf.ioEngine();
-    if (ioengine > 2) {
-        LOG_ERROR("unknown io_engine: `", ioengine);
-        return false;
-    }
-
-    LOG_INFO("global config: cache_dir: `, cache_size_GB: `, log_level: `",
-             global_conf.registryCacheDir(), global_conf.registryCacheSizeGB(),
-             global_conf.logLevel());
-    set_log_output_level(global_conf.logLevel());
-    LOG_INFO("set {log_level:`}", global_conf.logLevel());
-    return true;
-}
+const char *DEFAULT_CONFIG_PATH = "/etc/overlaybd/overlaybd.json";
 
 struct ImageRef {
     std::vector<std::string> seg; // cr: seg_0, ns: seg_1, repo: seg_2
 };
+
+bool create_dir(const char *dirname) {
+    auto lfs = FileSystem::new_localfs_adaptor();
+    if (lfs == nullptr) {
+        LOG_ERRNO_RETURN(0, false, "new localfs_adaptor failed");
+    }
+    DEFER(delete lfs);
+    if (lfs->access(dirname, 0) == 0) {
+        return true;
+    }
+    if (lfs->mkdir(dirname, 0644) == 0) {
+        LOG_INFO("dir ` doesn't exist. create succ.", dirname);
+        return true;
+    }
+    LOG_ERRNO_RETURN(0, false, "dir ` doesn't exist. create failed.", dirname);
+}
 
 int parse_blob_url(const std::string &url, struct ImageRef &ref) {
     for (auto prefix : std::vector<std::string>{"http://", "https://"}) {
@@ -127,7 +119,8 @@ int load_cred_from_file(const std::string path, const std::string &remote_path,
             username = token.substr(0, p);
             password = token.substr(p + 1);
             return 0;
-        } else if (iter.value.HasMember("username") && iter.value.HasMember("password")) {
+        } else if (iter.value.HasMember("username") &&
+                   iter.value.HasMember("password")) {
             username = iter.value["username"].GetString();
             password = iter.value["password"].GetString();
             return 0;
@@ -137,19 +130,48 @@ int load_cred_from_file(const std::string path, const std::string &remote_path,
     return -1;
 }
 
-std::pair<std::string, std::string> reload_auth(void *, const char *remote_path) {
+int ImageService::read_global_config_and_set() {
+    if (!global_conf.ParseJSON(DEFAULT_CONFIG_PATH)) {
+        LOG_ERROR_RETURN(0, -1, "error parse global config json: `",
+                         DEFAULT_CONFIG_PATH);
+    }
+    uint32_t ioengine = global_conf.ioEngine();
+    if (ioengine > 2) {
+        LOG_ERROR_RETURN(0, -1, "unknown io_engine: `", ioengine);
+    }
+
+    LOG_INFO("global config: cache_dir: `, cache_size_GB: `",
+             global_conf.registryCacheDir(), global_conf.registryCacheSizeGB());
+    set_log_output_level(global_conf.logLevel());
+    LOG_INFO("set log_level:`", global_conf.logLevel());
+
+    if (global_conf.logPath() != "") {
+        LOG_INFO("set log_path:`", global_conf.logPath());
+        int ret = log_output_file(global_conf.logPath().c_str(),
+                                  100 * 1024 * 1024, 5);
+        if (ret != 0) {
+            LOG_ERROR_RETURN(0, -1, "log_output_file failed, errno:`", errno);
+        }
+    }
+    return 0;
+}
+
+std::pair<std::string, std::string>
+ImageService::reload_auth(const char *remote_path) {
     LOG_INFO("Acquire credential for ", VALUE(remote_path));
     int retry = 0;
     std::string username, password;
     while (true) {
-        int res = load_cred_from_file(global_conf.credentialFilePath(), std::string(remote_path),
-                                      username, password);
+        int res =
+            load_cred_from_file(global_conf.credentialFilePath(),
+                                std::string(remote_path), username, password);
         if (res == 0) {
             LOG_INFO("auth found: `", username);
             return std::make_pair(username, password);
         }
 
-        LOG_ERROR("reload registry credential failed, token not found. {config_path:`, blob_url:`}",
+        LOG_ERROR("reload registry credential failed, token not found. "
+                  "{config_path:`, blob_url:`}",
                   global_conf.credentialFilePath(), remote_path);
         if (retry < 5) {
             retry++;
@@ -159,87 +181,14 @@ std::pair<std::string, std::string> reload_auth(void *, const char *remote_path)
     }
 }
 
-bool create_dir(const char *dirname) {
-    auto lfs = FileSystem::new_localfs_adaptor();
-    if (lfs == nullptr) {
-        LOG_ERRNO_RETURN(0, false, "new localfs_adaptor failed");
-    }
-    DEFER(delete lfs);
-    if (lfs->access(dirname, 0) == 0) {
-        return true;
-    }
-    if (lfs->mkdir(dirname, 0644) == 0) {
-        LOG_INFO("dir ` doesn't exist. create succ.", dirname);
-        return true;
-    }
-    LOG_ERRNO_RETURN(0, false, "dir ` doesn't exist. create failed.", dirname);
-}
-
-bool global_init() {
-    if (global_fs.ready) {
-        LOG_INFO("already global initialized");
-        return true;
-    }
-
-    read_global_config_and_set();
-
-    if (create_dir(global_conf.registryCacheDir().c_str()) == false)
-        return false;
-
-    if (global_fs.remote_fs == nullptr) {
-        auto cafile = "/etc/ssl/certs/ca-bundle.crt";
-        if (access(cafile, 0) != 0) {
-            cafile = "/etc/ssl/certs/ca-certificates.crt";
-            if (access(cafile, 0) != 0) {
-                LOG_ERROR_RETURN(0, false, "no certificates found.");
-            }
-        }
-
-        LOG_INFO("create registryfs with cafile:`", cafile);
-        auto registry_fs = FileSystem::new_registryfs_with_password_callback(
-            "", {nullptr, &reload_auth}, cafile, 36UL * 1000000);
-        if (registry_fs == nullptr) {
-            LOG_ERROR_RETURN(0, false, "create registryfs failed.");
-        }
-
-        auto zfile_fs = FileSystem::new_tar_zfile_fs_adaptor(registry_fs);
-        if (zfile_fs == nullptr) {
-            delete registry_fs;
-            LOG_ERROR_RETURN(0, false, "create zfile_fs failed.");
-        }
-
-        auto registry_cache_fs =
-            FileSystem::new_localfs_adaptor(global_conf.registryCacheDir().c_str());
-        if (registry_cache_fs == nullptr) {
-            delete zfile_fs;
-            LOG_ERROR_RETURN(0, false, "new_localfs_adaptor for ` failed",
-                             global_conf.registryCacheDir().c_str());
-            return false;
-        }
-
-        LOG_INFO("create cache with size: ` GB", global_conf.registryCacheSizeGB());
-        global_fs.remote_fs = FileSystem::new_full_file_cached_fs(
-            zfile_fs, registry_cache_fs, 256 * 1024 /* refill unit 256KB */,
-            global_conf.registryCacheSizeGB() /*GB*/, 10000000, (uint64_t)1048576 * 4096, nullptr);
-
-        if (global_fs.remote_fs == nullptr) {
-            delete zfile_fs;
-            delete registry_cache_fs;
-            LOG_ERROR_RETURN(0, false, "create remotefs (registryfs + cache) failed.");
-        }
-    }
-
-    global_fs.ready = true;
-    return true;
-}
-
-void set_result_file(std::string &filename, std::string &data) {
+void ImageService::set_result_file(std::string &filename, std::string &data) {
     if (filename == "") {
         LOG_WARN("no resultFile config set, ignore writing result");
         return;
     }
 
-    auto file = FileSystem::open_localfile_adaptor(filename.c_str(), O_RDWR | O_CREAT | O_TRUNC);
+    auto file = FileSystem::open_localfile_adaptor(filename.c_str(),
+                                                   O_RDWR | O_CREAT | O_TRUNC);
     if (file == nullptr) {
         LOG_ERROR("failed to open result file", filename);
         return;
@@ -247,17 +196,72 @@ void set_result_file(std::string &filename, std::string &data) {
     DEFER(delete file);
 
     if (file->write(data.c_str(), data.size()) != (ssize_t)data.size()) {
-        LOG_ERROR("write(`,`), path:`, `:`", data.c_str(), data.size(), filename.c_str(), errno,
-                  strerror(errno));
+        LOG_ERROR("write(`,`), path:`, `:`", data.c_str(), data.size(),
+                  filename.c_str(), errno, strerror(errno));
     }
-    LOG_INFO("write to result file: `, content: `", filename.c_str(), data.c_str());
+    LOG_DEBUG("write to result file: `, content: `", filename.c_str(),
+              data.c_str());
 }
 
-ImageFile *get_image_file(const char *config_path) {
-    if (global_init() == false) {
-        return nullptr;
+int ImageService::init() {
+    if (read_global_config_and_set() < 0) {
+        return -1;
     }
 
+    if (create_dir(global_conf.registryCacheDir().c_str()) == false)
+        return -1;
+
+    if (global_fs.remote_fs == nullptr) {
+        auto cafile = "/etc/ssl/certs/ca-bundle.crt";
+        if (access(cafile, 0) != 0) {
+            cafile = "/etc/ssl/certs/ca-certificates.crt";
+            if (access(cafile, 0) != 0) {
+                LOG_ERROR_RETURN(0, -1, "no certificates found.");
+            }
+        }
+
+        LOG_INFO("create registryfs with cafile:`", cafile);
+        auto registry_fs = FileSystem::new_registryfs_with_password_callback(
+            "", {this, &ImageService::reload_auth}, cafile, 36UL * 1000000);
+        if (registry_fs == nullptr) {
+            LOG_ERROR_RETURN(0, -1, "create registryfs failed.");
+        }
+
+        auto zfile_fs = FileSystem::new_tar_zfile_fs_adaptor(registry_fs);
+        if (zfile_fs == nullptr) {
+            delete registry_fs;
+            LOG_ERROR_RETURN(0, -1, "create zfile_fs failed.");
+        }
+
+        auto registry_cache_fs = FileSystem::new_localfs_adaptor(
+            global_conf.registryCacheDir().c_str());
+        if (registry_cache_fs == nullptr) {
+            delete zfile_fs;
+            LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed",
+                             global_conf.registryCacheDir().c_str());
+            return false;
+        }
+
+        LOG_INFO("create cache with size: ` GB",
+                 global_conf.registryCacheSizeGB());
+        global_fs.remote_fs = FileSystem::new_full_file_cached_fs(
+            zfile_fs, registry_cache_fs, 256 * 1024 /* refill unit 256KB */,
+            global_conf.registryCacheSizeGB() /*GB*/, 10000000,
+            (uint64_t)1048576 * 4096, nullptr);
+
+        if (global_fs.remote_fs == nullptr) {
+            delete zfile_fs;
+            delete registry_cache_fs;
+            LOG_ERROR_RETURN(0, -1,
+                             "create remotefs (registryfs + cache) failed.");
+        }
+        global_fs.cachefs = registry_cache_fs;
+        global_fs.srcfs = zfile_fs;
+    }
+    return 0;
+}
+
+ImageFile *ImageService::create_image_file(const char *config_path) {
     ImageConfigNS::GlobalConfig defaultDlCfg;
     if (!defaultDlCfg.ParseJSON(DEFAULT_CONFIG_PATH)) {
         LOG_WARN("default download config parse failed, ignore");
@@ -267,10 +271,11 @@ ImageFile *get_image_file(const char *config_path) {
         LOG_ERROR_RETURN(0, nullptr, "error parse image config");
     }
 
-    if (!cfg.HasMember("download") && !defaultDlCfg.IsNull() && defaultDlCfg.HasMember("download")) {
+    if (!cfg.HasMember("download") && !defaultDlCfg.IsNull() &&
+        defaultDlCfg.HasMember("download")) {
         cfg.AddMember("download", defaultDlCfg["download"], cfg.GetAllocator());
     }
-    
+
     auto resFile = cfg.resultFile();
     ImageFile *ret = new ImageFile(cfg, global_fs, global_conf);
     if (ret->m_status <= 0) {
@@ -281,5 +286,14 @@ ImageFile *get_image_file(const char *config_path) {
     }
     std::string data = "success";
     set_result_file(resFile, data);
+    return ret;
+}
+
+ImageService *create_image_service() {
+    ImageService *ret = new ImageService();
+    if (ret->init() < 0) {
+        delete ret;
+        return nullptr;
+    }
     return ret;
 }

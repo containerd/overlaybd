@@ -1,31 +1,30 @@
 /*
- * bk_download.cpp
- *
- * Copyright (C) 2021 Alibaba Group.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * See the file COPYING included with this distribution for more details.
- */
+   Copyright The Overlaybd Authors
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
 #include <errno.h>
 #include <list>
 #include <set>
 #include <string>
 #include <sys/file.h>
-#include "../overlaybd/alog-stdstring.h"
-#include "../overlaybd/alog.h"
-#include "../overlaybd/fs/localfs.h"
-#include "../overlaybd/fs/throttled-file.h"
-#include "../overlaybd/photon/thread.h"
+#include "overlaybd/alog-stdstring.h"
+#include "overlaybd/alog.h"
+#include "overlaybd/fs/localfs.h"
+#include "overlaybd/fs/throttled-file.h"
+#include "overlaybd/photon/thread.h"
 #include "bk_download.h"
+#include "overlaybd/event-loop.h"
 using namespace FileSystem;
 
 static constexpr size_t ALIGNMENT = 4096;
@@ -98,7 +97,7 @@ ssize_t filecopy(IFile *infile, IFile *outfile, size_t bs, int retry_limit, int 
 void BkDownload::switch_to_local_file() {
     std::string path = dir + "/" + COMMIT_FILE_NAME;
     ((ISwitchFile *)sw_file)->set_switch_file(path.c_str());
-    LOG_INFO("set switch tag done. (localpath: `)", path);
+    LOG_DEBUG("set switch tag done. (localpath: `)", path);
 }
 
 bool BkDownload::download_done() {
@@ -218,7 +217,7 @@ void bk_download_proc(std::list<BKDL::BkDownload *> &dl_list, uint64_t delay_sec
             LOG_WARN("download failed, push back to download queue and retry", dl_item->dir);
             continue;
         }
-        LOG_INFO("finish downloading or no retry any more: `, retry_cnt: `", dl_item->dir,
+        LOG_DEBUG("finish downloading or no retry any more: `, retry_cnt: `", dl_item->dir,
                  dl_item->try_cnt);
         delete dl_item;
     }
@@ -231,7 +230,7 @@ void bk_download_proc(std::list<BKDL::BkDownload *> &dl_list, uint64_t delay_sec
             delete dl_item;
         }
     }
-    LOG_INFO("BACKGROUND DOWNLOAD THREAD EXIT.");
+    LOG_DEBUG("BACKGROUND DOWNLOAD THREAD EXIT.");
 }
 
 } // namespace BKDL
