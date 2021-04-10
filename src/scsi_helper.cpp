@@ -246,7 +246,7 @@ int emulate_mode_sense(struct tcmu_device *dev, uint8_t *cdb,
 
 	// set write protect bit
 	if (readonly) {
-			if (sense_ten) {
+		if (sense_ten) {
 			orig_buf[3] |= 0x80;
 		} else {
 			orig_buf[2] |= 0x80;
