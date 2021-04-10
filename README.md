@@ -8,21 +8,17 @@ It is a solution of remote container image by supporting fetching image data on-
 At the heart of the acceleration is overlaybd, which provides a merged view of a sequence of block-based layers as an block device.
 This repository is a component of Accelerated Container Image, provides an implementation of overlaybd by iSCSI and [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
 
-The rest of this document will show you how to setup overlaybd.
-
 ## Setup
 
 ### System Requirements
 
-Overlaybd provides virtual block devices through iSCSI protocol and tgt, so an iSCSI environment is required.
+Overlaybd provides virtual block devices through iSCSI protocol and TCMU, so the TCMU kernel module is required. TCMU is implemented in the Linux kernel and supported by most Linux distributions.
 
-* [The Linux target framework (tgt)](https://github.com/fujita/tgt)
-  * CentOS/Fedora: `sudo yum install scsi-target-utils` (epel maybe required)
-  * Debian/Ubuntu: `sudo apt install tgt`
+Check and load the target_core_user module.
 
-* iscsi-initiator-utils
-  * CentOS/Fedora: `sudo yum install iscsi-initiator-utils`
-  * Debian/Ubuntu: `sudo apt install open-iscsi`
+```bash
+modprobe target_core_user
+```
 
 ### Install From RPM/DEB
 
