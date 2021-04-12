@@ -35,7 +35,7 @@
 #include "sure_file.h"
 #include "switch_file.h"
 
-#define PARALLEL_LOAD_INDEX 8
+#define PARALLEL_LOAD_INDEX 32
 
 FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
     int flags = O_RDONLY;
