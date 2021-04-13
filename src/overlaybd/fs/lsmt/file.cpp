@@ -31,7 +31,7 @@
 #include "../../utility.h"
 #include "../../photon/thread.h"
 
-#define PARALLEL_LOAD_INDEX 8
+#define PARALLEL_LOAD_INDEX 32
 
 using namespace std;
 using namespace FileSystem;
