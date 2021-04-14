@@ -84,7 +84,7 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
 }
 
 FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &digest,
-                                               const uint64_t size) {
+                                               const uint64_t size, int layer_index) {
     std::string url;
     int64_t extra_range, rand_wait;
 
@@ -107,12 +107,20 @@ FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std
             set_failed("failed to open remote file " + url);
         LOG_ERROR_RETURN(0, nullptr, "failed to open remote file `", url);
     }
-    FileSystem::ISwitchFile *switch_file = FileSystem::new_switch_file(remote_file);
+
+    FileSystem::ISwitchFile *switch_file = nullptr;
+    if (m_prefetcher != nullptr) {
+        auto prefetch_file = m_prefetcher->new_prefetch_file(remote_file, layer_index);
+        switch_file = FileSystem::new_switch_file(prefetch_file);
+    } else {
+        switch_file = FileSystem::new_switch_file(remote_file);
+    }
     if (!switch_file) {
         set_failed("failed to open switch file `" + url);
         delete remote_file;
         LOG_ERROR_RETURN(0, nullptr, "failed to open switch file `", url);
     }
+
     FileSystem::IFile *sure_file = new_sure_file(switch_file, this);
     if (!sure_file) {
         set_failed("failed to open sure file `" + url);
@@ -199,7 +207,7 @@ int ImageFile::open_lower_layer(FileSystem::IFile *&file, ImageConfigNS::LayerCo
             file = __open_ro_file(opened);
         } else {
             opened = layer.digest();
-            file = __open_ro_remote(layer.dir(), layer.digest(), layer.size());
+            file = __open_ro_remote(layer.dir(), layer.digest(), layer.size(), index);
         }
     }
     if (file != nullptr) {
@@ -248,6 +256,10 @@ LSMT::IFileRO *ImageFile::open_lowers(std::vector<ImageConfigNS::LayerConfig> &l
         goto ERROR_EXIT;
     }
     LOG_INFO("LSMT::open_files_ro(files, `) success", lowers.size());
+
+    if (m_prefetcher != nullptr) {
+        m_prefetcher->replay();
+    }
 
     return ret;
 
@@ -301,14 +313,38 @@ ERROR_EXIT:
 }
 
 int ImageFile::init_image_file() {
-    LSMT::IFileRO *lower_file = NULL;
-    LSMT::IFileRW *upper_file = NULL;
-    LSMT::IFileRW *stack_ret = NULL;
-
+    LSMT::IFileRO *lower_file = nullptr;
+    LSMT::IFileRW *upper_file = nullptr;
+    LSMT::IFileRW *stack_ret = nullptr;
+    ImageConfigNS::UpperConfig upper;
+    bool record_no_download = false;
     bool has_error = false;
     auto lowers = conf.lowers();
 
-    ImageConfigNS::UpperConfig upper;
+    if (conf.accelerationLayer() && !conf.recordTracePath().empty()) {
+        LOG_ERROR("Cannot record trace while acceleration layer exists");
+        goto ERROR_EXIT;
+
+    } else if (conf.accelerationLayer() && !lowers.empty()) {
+        std::string accel_layer = lowers.back().dir();
+        lowers.pop_back();
+        LOG_INFO("Acceleration layer found at `, ignore the last lower", accel_layer);
+
+        std::string trace_file = accel_layer + "/trace";
+        if (FileSystem::Prefetcher::detect_mode(trace_file) == FileSystem::Prefetcher::Mode::Replay) {
+            m_prefetcher = FileSystem::new_prefetcher(trace_file);
+        }
+
+    } else if (!conf.recordTracePath().empty()) {
+        if (FileSystem::Prefetcher::detect_mode(conf.recordTracePath()) !=
+            FileSystem::Prefetcher::Mode::Record) {
+            LOG_ERROR("Prefetch: incorrect mode for trace recording");
+            goto ERROR_EXIT;
+        }
+        m_prefetcher = FileSystem::new_prefetcher(conf.recordTracePath());
+        record_no_download = true;
+    }
+
     upper.CopyFrom(conf.upper(), upper.GetAllocator());
     lower_file = open_lowers(lowers, has_error);
 
@@ -339,16 +375,14 @@ int ImageFile::init_image_file() {
     read_only = false;
 
 SUCCESS_EXIT:
-    if (conf.download().enable() == true) {
+    if (conf.download().enable() && !record_no_download) {
         start_bk_dl_thread();
     }
     return 1;
 
 ERROR_EXIT:
-    if (lower_file)
-        delete lower_file;
-    if (upper_file)
-        delete upper_file;
+    delete lower_file;
+    delete upper_file;
     return -1;
 }
 
