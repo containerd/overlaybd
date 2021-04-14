@@ -1,0 +1,17 @@
+[Unit]
+Description=overlaybd-tcmu service
+After=network.target
+Before=local-fs-pre.target shutdown.target
+DefaultDependencies=no
+Conflicts=shutdown.target
+
+[Service]
+LimitNOFILE=1000000
+LimitCORE=infinity
+
+ExecStartPre=modprobe target_core_user
+
+ExecStart=/opt/overlaybd/bin/overlaybd-tcmu
+
+[Install]
+WantedBy=multi-user.target
