@@ -227,6 +227,7 @@ void *handle(void *args) {
     handle_args *obj = (handle_args *)args;
     cmd_handler(obj->dev, obj->cmd);
     delete obj;
+    return nullptr;
 }
 
 class TCMUDevLoop {
@@ -350,6 +351,8 @@ int main(int argc, char **argv) {
     Net::libcurl_init();
     DEFER(Net::libcurl_fini());
 
+    photon::block_all_signal();
+    photon::sync_signal(SIGTERM, &sigint_handler);
     photon::sync_signal(SIGINT, &sigint_handler);
 
     imgservice = create_image_service();
