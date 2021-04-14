@@ -50,7 +50,7 @@ find_package(CURL REQUIRED)
 set(OpenSSL_STATIC ON)
 find_package(OpenSSL REQUIRED)
 
-file(GLOB SOURCE_IMAGE "image_file.cpp" "image_service.cpp" "sure_file.cpp" "switch_file.cpp" "bk_download.cpp")
+file(GLOB SOURCE_IMAGE image_file.cpp image_service.cpp sure_file.cpp switch_file.cpp bk_download.cpp prefetch.cpp)
 
 add_library(image_lib STATIC
     ${SOURCE_IMAGE}

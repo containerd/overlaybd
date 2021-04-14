@@ -25,10 +25,12 @@
 #include <sys/types.h>
 #include <thread>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "bk_download.h"
 #include "config.h"
 #include "image_service.h"
+#include "prefetch.h"
 #include "overlaybd/alog.h"
 #include "overlaybd/fs/filesystem.h"
 #include "overlaybd/fs/forwardfs.h"
@@ -51,9 +53,8 @@ public:
     }
 
     ~ImageFile() {
-        if (m_file != nullptr) {
-            delete m_file;
-        }
+        delete m_file;
+        delete m_prefetcher;
     }
 
     int close() override {
@@ -105,6 +106,7 @@ public:
 
 private:
     struct GlobalFs &gfs;
+    FileSystem::Prefetcher* m_prefetcher = nullptr;
     ImageConfigNS::GlobalConfig &gconf;
     ImageConfigNS::ImageConfig conf;
     std::list<BKDL::BkDownload *> dl_list;
@@ -117,6 +119,6 @@ private:
     LSMT::IFileRW *open_upper(ImageConfigNS::UpperConfig &);
     FileSystem::IFile *__open_ro_file(const std::string &);
     FileSystem::IFile *__open_ro_remote(const std::string &dir,
-                                        const std::string &, const uint64_t);
+                                        const std::string &, const uint64_t, int);
     void start_bk_dl_thread();
 };
