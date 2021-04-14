@@ -50,27 +50,28 @@ You need git to checkout the source code and submodule:
 
 ```bash
 git clone https://github.com/alibaba/overlaybd.git
+cd overlaybd
 git submodule update --init
 ```
 
-The whole project is managed by CMake.
+The whole project is managed by CMake. Binaries and resource files will be installed to `/opt/overlaybd/`.
+
+During compilation, some third-party dependency libraries will be automatically downloaded, see `CMake/external<lib_name>.cmake`. If you are having problems to download, you could manually prepare these libs under `external/<lib_name>/src/`, see CMake [doc](https://cmake.org/cmake/help/latest/module/ExternalProject.html).
 
 ```bash
-cd overlaybd
-
 mkdir build
 cd build
 cmake ..
 make -j
 sudo make install
-
-# start overlaybd tcmu backstore
-sudo /opt/overlaybd/bin/overlaybd-tcmu
 ```
 
-Binaries and command-line tools are installed to `/opt/overlaybd/bin/`.
+Finally, setup a systemd service for overlaybd-tcmu backstore.
 
-During compilation, some third-party dependency libraries will be automatically downloaded, see `CMake/external<lib_name>.cmake`. If you are having problems to download, you could manually prepare these libs under `external/<lib_name>/src/`, see CMake [doc](https://cmake.org/cmake/help/latest/module/ExternalProject.html).
+```bash
+sudo systemctl enable /opt/overlaybd/overlaybd-tcmu.service
+sudo systemctl start overlaybd-tcmu
+```
 
 ## Configuration
 
