@@ -90,5 +90,6 @@ target_link_libraries(overlaybd-tcmu
 
 
 install(TARGETS overlaybd-tcmu DESTINATION /opt/overlaybd/bin)
+install(FILES example_config/overlaybd-tcmu.service DESTINATION /opt/overlaybd/)
 install(FILES example_config/overlaybd.json DESTINATION /etc/overlaybd/)
 install(FILES example_config/cred.json DESTINATION /opt/overlaybd/)
