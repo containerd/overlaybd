@@ -290,6 +290,7 @@ public:
 
         auto ret = file->fstat(buf);
         if (ret == 0) {
+            buf->st_blksize = ALIGNMENT;
             buf->st_size = m_vsize;
             buf->st_blocks = m_index->block_count();
         }
