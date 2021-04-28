@@ -5,8 +5,9 @@
 [Accelerated Container Image](https://github.com/alibaba/accelerated-container-image) is an open-source implementation of paper ["DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba).
 It is a solution of remote container image by supporting fetching image data on-demand without downloading and unpacking the whole image before a container running.
 
-At the heart of the acceleration is overlaybd, which provides a merged view of a sequence of block-based layers as an block device.
-This repository is a component of Accelerated Container Image, provides an implementation of overlaybd by iSCSI and [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
+At the heart of the acceleration is overlaybd, which provides a merged view of a sequence of block-based layers as a block device.
+This repository is the backstore of `Accelerated Container Image`, provides an implementation of overlaybd by iSCSI and [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
+
 
 ## Setup
 
@@ -14,7 +15,7 @@ This repository is a component of Accelerated Container Image, provides an imple
 
 Overlaybd provides virtual block devices through iSCSI protocol and TCMU, so the TCMU kernel module is required. TCMU is implemented in the Linux kernel and supported by most Linux distributions.
 
-Check and load the target_core_user module.
+Check and load the `target_core_user` module.
 
 ```bash
 modprobe target_core_user
@@ -22,13 +23,17 @@ modprobe target_core_user
 
 ### Install From RPM/DEB
 
-You may download our RPM/DEB packages form [Release](https://github.com/alibaba/overlaybd/releases) and install.
+You may download our latest RPM/DEB packages from [Releases](https://github.com/alibaba/overlaybd/releases) and install.
 
-The binaries are install to `/opt/overlaybd/bin/`.
+The binaries are installed to `/opt/overlaybd/bin/`.
 
-Run `/opt/overlaybd/bin/overlaybd-tcmu` and the log is stored in `/var/log/overlaybd.log`.
+Run the binary `/opt/overlaybd/bin/overlaybd-tcmu` and the log is stored in `/var/log/overlaybd.log`.
 
-It is better to run `overlaybd-tcmu` as a service so that it can be restarted after unexpected crashes.
+It is better to run `overlaybd-tcmu` as a service so that it can be recovered from unexpected crashes. You may enable and start the `overlaybd-tcmu service` by:
+```bash
+sudo systemctl enable /opt/overlaybd/overlaybd-tcmu.service
+sudo systemctl start overlaybd-tcmu
+```
 
 ### Build From Source
 
@@ -36,9 +41,9 @@ It is better to run `overlaybd-tcmu` as a service so that it can be restarted af
 
 To build overlaybd from source code, the following dependencies are required:
 
-* CMake >= 3.8+
+* CMake >= 3.8
 
-* gcc/g++ >= 7+
+* gcc/g++ 6,7,8
 
 * Libaio, libcurl, libnl3, glib2 and openssl runtime and development libraries.
   * CentOS/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel glib2-devel`
@@ -109,7 +114,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | download.delay      | The seconds waiting to start downloading task after the overlaybd device launched.                    |
 | download.delayExtra | A random extra delay is attached to delay, avoiding too many tasks started at the same time.          |
 | download.maxMBps    | The speed limit in MB/s for a downloading task.                                                       |
-| enableAudit         | Enable audit or not.                                                                                  |
+| enableAudit         | Enable audit or not. If enabled, I/O latency will be audited and store the result in `auditPath`      |
 | auditPath           | The path for audit file, `/var/log/overlaybd-audit.log` is the default value.                         |
 
 > NOTE: `download` is the config for background downloading. After an overlaybd device is lauched, a background task will be running to fetch the whole blobs into local directories. After downloading, I/O requests are directed to local files. Unlike other options, download config is reloaded when a device launching.
