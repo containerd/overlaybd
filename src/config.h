@@ -68,6 +68,8 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(logLevel, uint32_t, 1);
     APPCFG_PARA(logPath, std::string, "/var/log/overlaybd.log");
     APPCFG_PARA(download, DownloadConfig);
+    APPCFG_PARA(enableAudit, bool, true);
+    APPCFG_PARA(auditPath, std::string, "/var/log/overlaybd-audit.log");
 };
 
 struct AuthConfig : public ConfigUtils::Config {

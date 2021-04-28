@@ -91,7 +91,9 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
         "delay": 120,
         "delayExtra": 30,
         "maxMBps": 100
-    }
+    },
+    "enableAudit": true,
+    "auditPath": "/var/log/overlaybd-audit.log"
 }
 ```
 
@@ -106,7 +108,9 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | download.enable     | Whether background downloading is enabled or not.                                                     |
 | download.delay      | The seconds waiting to start downloading task after the overlaybd device launched.                    |
 | download.delayExtra | A random extra delay is attached to delay, avoiding too many tasks started at the same time.          |
-| download.maxMBps    | The speed limit in MB/s for a downloading task.
+| download.maxMBps    | The speed limit in MB/s for a downloading task.                                                       |
+| enableAudit         | Enable audit or not.                                                                                  |
+| auditPath           | The path for audit file, `/var/log/overlaybd-audit.log` is the default value.                         |
 
 > NOTE: `download` is the config for background downloading. After an overlaybd device is lauched, a background task will be running to fetch the whole blobs into local directories. After downloading, I/O requests are directed to local files. Unlike other options, download config is reloaded when a device launching.
 

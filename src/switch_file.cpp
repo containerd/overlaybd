@@ -42,10 +42,12 @@ public:
     IFile *m_old = nullptr;
     string m_filepath;
 
-    SwitchFile(IFile *source) : m_file(source) {
+    SwitchFile(IFile *source, bool local=false, const char* filepath=nullptr)
+        : m_file(source), local_path(local) {
         state = 0;
         io_count = 0;
-        local_path = false;
+        if (filepath != nullptr)
+            m_filepath = filepath;
     };
 
     virtual ~SwitchFile() override {
@@ -131,7 +133,7 @@ public:
     }
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
         if (local_path) {
-            SCOPE_AUDIT("file:pread", AU_FILEOP(m_filepath, offset, count));
+            SCOPE_AUDIT_THRESHOLD(1UL * 1000, "file:pread", AU_FILEOP(m_filepath, offset, count));
             FORWARD(pread(buf, count, offset));
         } else {
             FORWARD(pread(buf, count, offset));
@@ -178,7 +180,7 @@ public:
     }
 };
 
-ISwitchFile *new_switch_file(IFile *source) {
-    return new SwitchFile(source);
+ISwitchFile *new_switch_file(IFile *source, bool local, const char* file_path) {
+    return new SwitchFile(source, local, file_path);
 };
 } // namespace FileSystem

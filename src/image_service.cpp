@@ -36,6 +36,8 @@
 #include <vector>
 
 const char *DEFAULT_CONFIG_PATH = "/etc/overlaybd/overlaybd.json";
+const int LOG_SIZE_MB = 10;
+const int LOG_NUM = 3;
 
 struct ImageRef {
     std::vector<std::string> seg; // cr: seg_0, ns: seg_1, repo: seg_2
@@ -142,17 +144,30 @@ int ImageService::read_global_config_and_set() {
 
     LOG_INFO("global config: cache_dir: `, cache_size_GB: `",
              global_conf.registryCacheDir(), global_conf.registryCacheSizeGB());
+
+    if (global_conf.enableAudit()) {
+        std::string auditPath = global_conf.auditPath();
+        if (auditPath == "") {
+            LOG_WARN("empty audit path, ignore audit");
+        } else {
+            LOG_INFO("set audit_path:`", global_conf.auditPath());
+            default_audit_logger.log_output = new_log_output_file(global_conf.auditPath().c_str(), LOG_SIZE_MB, LOG_NUM);
+        }
+    } else {
+        LOG_INFO("audit disabled");
+    }
+
     set_log_output_level(global_conf.logLevel());
     LOG_INFO("set log_level:`", global_conf.logLevel());
 
     if (global_conf.logPath() != "") {
         LOG_INFO("set log_path:`", global_conf.logPath());
-        int ret = log_output_file(global_conf.logPath().c_str(),
-                                  100 * 1024 * 1024, 5);
+        int ret = log_output_file(global_conf.logPath().c_str(), LOG_SIZE_MB, LOG_NUM);
         if (ret != 0) {
             LOG_ERROR_RETURN(0, -1, "log_output_file failed, errno:`", errno);
         }
     }
+
     return 0;
 }
 

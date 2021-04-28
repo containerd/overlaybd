@@ -23,6 +23,6 @@ public:
     virtual void set_switch_file(const char *filepath) = 0;
 };
 
-extern "C" ISwitchFile *new_switch_file(IFile *source);
+extern "C" ISwitchFile *new_switch_file(IFile *source, bool local=false, const char* filepath=nullptr);
 
 } // namespace FileSystem
