@@ -14,6 +14,7 @@
    limitations under the License.
 */
 #include <curl/curl.h>
+#include <string>
 
 #include "../alog.h"
 #include "../event-loop.h"
