@@ -600,8 +600,11 @@ struct LogBuilder {
 };
 
 #define DEFINE_PROLOGUE(level, prolog)                                                             \
-    const static Prologue prolog{(uint64_t) __func__,  (uint64_t)__FILE__, sizeof(__func__) - 1,   \
-                                 sizeof(__FILE__) - 1, __LINE__,           level};
+    const static uint64_t _addr_func = (uint64_t) __func__;                                        \
+    const static size_t _len_func = sizeof(__func__) - 1;                                          \
+    const static Prologue prolog{_addr_func, (uint64_t)__FILE__,                                   \
+                                 _len_func,  sizeof(__FILE__) - 1,                                 \
+                                 __LINE__,   level};
 
 #define PARSE_FMTSTR(S, thesequence)                                                               \
     struct static_string {                                                                         \
