@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <memory>
+#include <string>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
