@@ -166,8 +166,9 @@ public:
 
     void print_info() {
         char msg[256]{};
+        char *cur = msg;
         for (auto it = level_mapping.begin(); it != level_mapping.end(); it++) {
-            sprintf(msg, "%s %zu ", msg, (*it).size());
+            cur += sprintf(cur, " %zu ", (*it).size());
         }
         LOG_INFO("create level index, depth: `, elements # per level {` `}", level_mapping.size(),
                  msg, this->size());
