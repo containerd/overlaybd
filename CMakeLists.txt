@@ -30,4 +30,4 @@ endif()
 add_subdirectory(src)
 add_subdirectory(baselayers)
 
-include(CMake/cpack.cmake)
+include(CMake/pack.cmake)
