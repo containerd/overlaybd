@@ -19,7 +19,7 @@
  *
  */
 
-// Source https://github.com/spotify/linux/blob/master/include/linux/kfifo.h
+// Source https://github.com/torvalds/linux/blob/v2.6.32/include/linux/kfifo.h
 // Modified By wujiaxu <void00@foxmail.com>
 
 #if defined (__cplusplus)

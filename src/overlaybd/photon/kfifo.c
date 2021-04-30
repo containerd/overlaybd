@@ -19,7 +19,7 @@
  *
  */
 
-// Source https://github.com/spotify/linux/blob/master/kernel/kfifo.c
+// Source https://github.com/torvalds/linux/blob/v2.6.32/kernel/kfifo.c
 // Modified By wujiaxu <void00@foxmail.com>
 
 #include "kfifo.h"
@@ -35,8 +35,7 @@ static inline unsigned int _min(unsigned int a, unsigned int b)
 
 /**
  * kfifo_alloc - allocates a new FIFO and its internal buffer
- * @size: the size of the internal buffer, this have to be a power of 2.
- * @lock: the lock to be used to protect the fifo buffer
+ * @size: the size of the internal buffer to be allocated.
  *
  * size MUST be a power of 2
  */
@@ -95,7 +94,7 @@ void kfifo_free(struct kfifo *fifo)
  * writer, you don't need extra locking to use these functions.
  */
 unsigned int __kfifo_put(struct kfifo *fifo,
-            const void *buffer, unsigned int len)
+                         const void *buffer, unsigned int len)
 {
     unsigned int l;
 
@@ -139,8 +138,7 @@ unsigned int __kfifo_put(struct kfifo *fifo,
  * Note that with only one concurrent reader and one concurrent
  * writer, you don't need extra locking to use these functions.
  */
-unsigned int __kfifo_get(struct kfifo *fifo,
-             void *buffer, unsigned int len)
+unsigned int __kfifo_get(struct kfifo *fifo, void *buffer, unsigned int len)
 {
     unsigned int l;
 
