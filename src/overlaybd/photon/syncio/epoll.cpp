@@ -23,10 +23,10 @@
 #include <utility>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
-#include <boost/lockfree/spsc_queue.hpp>
 #include <atomic>
 #include <bitset>
 #include <sched.h>
+#include "../queue.h"
 #include "../thread.h"
 #include "../../utility.h"
 #include "../../alog.h"
@@ -255,9 +255,8 @@ public:
     }
 
     std::mutex resumeq_mutex;
-    static const uint32_t RQ_MAX = 65536;
-    boost::lockfree::spsc_queue<std::pair<thread *, int>, boost::lockfree::capacity<RQ_MAX>>
-        resumeq;
+    static constexpr uint32_t RQ_MAX = 65536;
+    spsc_queue<std::pair<thread *, int>, RQ_MAX> resumeq;
     void safe_thread_interrupt(thread *th, int error_number, int mode) {
         if (mode == 1) {
             if (photon::thread_stat(th) != photon::WAITING)
