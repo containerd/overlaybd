@@ -1,0 +1,7 @@
+config HYPERBLOCK
+tristate "Hyperblock block device" 
+depends on BLK_DEV_LOOP
+default n if BLK_DEV_LOOP 
+help
+  mod loop for hyperblock.
+
