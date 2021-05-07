@@ -9,7 +9,6 @@ add_library(photon_lib STATIC
     ${SOURCE_PHOTON}
     ${SOURCE_SYNCIO}
     "switch_context.s"
-    "kfifo.c"
 )
 
 target_include_directories(photon_lib PUBLIC
