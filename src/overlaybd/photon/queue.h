@@ -140,7 +140,14 @@ public:
         if (size - in_ + out_ == 0)
             return 0;
 
-        buffer_[(in_++) & (size - 1)] = t;
+        asm volatile("mfence" ::: "memory");
+
+        buffer_[in_ & (size - 1)] = t;
+
+        asm volatile("sfence" ::: "memory");
+
+        ++in_;
+
         return 1;
     }
 
@@ -149,7 +156,14 @@ public:
         if (size - in_ + out_ == 0)
             return 0;
 
-        buffer_[(in_++) & (size - 1)] = std::move(t);
+        asm volatile("mfence" ::: "memory");
+
+        buffer_[in_ & (size - 1)] = std::move(t);
+
+        asm volatile("sfence" ::: "memory");
+
+        ++in_;
+
         return 1;
     }
 
