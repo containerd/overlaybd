@@ -9,7 +9,7 @@ Conflicts=shutdown.target
 LimitNOFILE=1000000
 LimitCORE=infinity
 
-ExecStartPre=modprobe target_core_user
+ExecStartPre=/sbin/modprobe target_core_user
 
 ExecStart=/opt/overlaybd/bin/overlaybd-tcmu
 
