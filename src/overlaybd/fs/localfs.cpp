@@ -325,9 +325,6 @@ namespace FileSystem
             switch (io_engine_type)
             {
 #ifdef __linux__
-            case ioengine_posixaio:
-                return new AioFileAdaptor<posixaio>(fd, this);
-                break;
             case ioengine_libaio:
                 return new AioFileAdaptor<libaio>(fd, this);
                 break;
@@ -502,9 +499,6 @@ namespace FileSystem
 #ifdef __linux__
         if (io_engine_type == ioengine_libaio)
             return new AioFileAdaptor<libaio>(fd, nullptr);
-
-        if (io_engine_type == ioengine_posixaio)
-            return new AioFileAdaptor<posixaio>(fd, nullptr);
 #endif
 
         return new LocalFileAdaptor(fd, nullptr);

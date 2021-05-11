@@ -96,13 +96,6 @@ public:
 };
 
 struct thread;
-// Interrupt a photon `th` from another host OS thread
-// this will also interrupt idle sleeping, if possible.
-// mode == 0: interrupt th's current or next sleeping / waiting;
-// mode == 1: requires th is currently sleeping / waiting, and interrupt it;
-// Note that it is possible that th gets interrupted
-// by a third party before this interrupt "arrives" th!
-extern "C" void safe_thread_interrupt(thread *th, int error_number = EINTR, int mode = 1);
 
 // a helper class to translate events into underlay representation
 template <uint32_t UNDERLAY_EVENT_READ_, uint32_t UNDERLAY_EVENT_WRITE_>

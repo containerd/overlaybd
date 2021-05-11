@@ -23,7 +23,6 @@
 #include <utility>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
-#include <boost/lockfree/spsc_queue.hpp>
 #include <atomic>
 #include <bitset>
 #include <sched.h>
@@ -248,55 +247,11 @@ public:
                     thread_interrupt(inflight_events[fd].reader, EOK);
                 if ((result.events[i].events & (WRITEBIT | ERRBIT)) && inflight_events[fd].writer)
                     thread_interrupt(inflight_events[fd].writer, EOK);
-            } else
-                do_safe_thread_interrupt();
+            } else {
+                LOG_WARN("no fd for thread_interrupt");
+            }
         }
         return 0;
-    }
-
-    std::mutex resumeq_mutex;
-    static const uint32_t RQ_MAX = 65536;
-    boost::lockfree::spsc_queue<std::pair<thread *, int>, boost::lockfree::capacity<RQ_MAX>>
-        resumeq;
-    void safe_thread_interrupt(thread *th, int error_number, int mode) {
-        if (mode == 1) {
-            if (photon::thread_stat(th) != photon::WAITING)
-                return;
-        } else
-            assert(mode == 0);
-
-        {
-            // TODO: Replace with spin lock
-            std::lock_guard<std::mutex> lock(resumeq_mutex);
-            while (!resumeq.push({th, error_number}))
-                sched_yield();
-        }
-
-        asm volatile("mfence" ::: "memory");
-        if (sleeping.load(std::memory_order_acquire)) {
-            sleeping.store(false, std::memory_order_release);
-            uint64_t x = 1;
-            ssize_t ret = ::write(evfd, &x, sizeof(x));
-            if (ret != sizeof(x)) {
-                ERRNO err;
-                sleeping.store(true, std::memory_order_release);
-                LOG_ERROR("write evfd ` failed, ret `, err `", evfd, ret, err);
-            }
-        }
-    }
-    void do_safe_thread_interrupt() {
-        uint64_t x;
-        ::read(evfd, &x, sizeof(x));
-        sleeping.store(true, std::memory_order_release);
-        _unused(x);
-        asm volatile("mfence" ::: "memory");
-        do {
-            std::pair<thread *, int> pops[1024];
-            int n = resumeq.pop(pops, 1024);
-            for (int i = 0; i < n; ++i) {
-                photon::thread_interrupt(pops[i].first, pops[i].second);
-            }
-        } while (resumeq.read_available() > 0);
     }
 };
 
@@ -332,10 +287,6 @@ int fd_events_epoll_fini() {
     LOG_INFO("finit event engine: epoll");
     set_idle_sleeper(nullptr);
     return master_epoll.fini();
-}
-
-void safe_thread_interrupt(thread *th, int error_number, int mode) {
-    return master_epoll.safe_thread_interrupt(th, error_number, mode);
 }
 
 FD_Poller *new_fd_poller(void *) {

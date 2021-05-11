@@ -60,7 +60,7 @@ ALIGNED_MEM4K(buf, PREAD_LEN);
 
 vector<string> args{};
 
-DEFINE_string(io_engine, "psync", "set io engine, psync|libaio|posixaio");
+DEFINE_string(io_engine, "psync", "set io engine, psync|libaio");
 DEFINE_int32(threads, 1, "number of photon threads (test in FileTest3.photon_verify)");
 DEFINE_int32(nwrites, 16384, "write times in each layer.");
 DEFINE_int32(layers, 3, "image layers.");
@@ -85,9 +85,6 @@ public:
         auto io_engine = ioengine_psync;
         if (FLAGS_io_engine == "libaio") {
             io_engine = ioengine_libaio;
-        }
-        if (FLAGS_io_engine == "posixaio") {
-            io_engine = ioengine_posixaio;
         }
         LOG_INFO("create localfs_adaptor (io_engine = `).", io_engine);
 

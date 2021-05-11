@@ -26,7 +26,6 @@ class IFileSystem;
 typedef enum {
     io_engine_psync,
     io_engine_libaio,
-    io_engine_posixaio
 } IOEngineType;
 
 struct GlobalFs {

@@ -98,7 +98,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | Field               | Description                                                                                           |
 | ---                 | ---                                                                                                   |
 | logLevel            | DEBUG 0, INFO  1, WARN  2, ERROR 3                                                                    |
-| ioEngine            | IO engine used to open local files: psync 0, libaio 1, posix aio 2.                                   |
+| ioEngine            | IO engine used to open local files: psync 0, libaio 1.                                   |
 | logPath             | The path for log file, `/var/log/overlaybd.log` is the default value.                                 |
 | registryCacheDir    | The cache directory for remote image data.                                                            |
 | registryCacheSizeGB | The max size of cache, in GB.                                                                         |

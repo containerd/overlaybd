@@ -176,60 +176,6 @@ static void *libaio_polling(void *) {
     }
     return nullptr;
 }
-
-struct posix_aiocb : public aiocb {
-    thread *th;
-    ssize_t ioret;
-    posix_aiocb(int fd) {
-        memset(this, 0, sizeof(aiocb));
-        th = CURRENT;
-        aio_fildes = fd;
-        aio_sigevent.sigev_notify = SIGEV_THREAD;
-        aio_sigevent.sigev_notify_function = &aio_completion_handler;
-        aio_sigevent.sigev_value.sival_ptr = this;
-    }
-    static void aio_completion_handler(sigval_t sigval) {
-        auto req = (struct posix_aiocb *)sigval.sival_ptr;
-        req->ioret = aio_return(req);
-        // interrupt current or next sleep in th. note that
-        // interrupt may call even before th comming into sleep
-        safe_thread_interrupt(req->th, EOK, 0);
-    }
-    template <typename F, typename... ARGS>
-    ssize_t async_perform(F iofunc, ARGS... args) {
-        int ret = iofunc(args..., this);
-        if (ret < 0)
-            return ret;
-
-    again:
-        thread_usleep(-1);
-        ERRNO e;
-        if (e.no != EOK) {
-            LOG_ERROR("unexpected wakeup!", e);
-            goto again;
-        }
-        return this->ioret;
-    }
-    void prep_io(void *buf, size_t count, off_t offset) {
-        aio_buf = buf;
-        aio_nbytes = count;
-        aio_offset = offset;
-    }
-    ssize_t pread(void *buf, size_t count, off_t offset) {
-        prep_io(buf, count, offset);
-        return async_perform(&::aio_read);
-    }
-    ssize_t pwrite(void *buf, size_t count, off_t offset) {
-        prep_io(buf, count, offset);
-        return async_perform(&::aio_write);
-    }
-    int fsync() {
-        return (int)async_perform(&::aio_fsync, O_SYNC);
-    }
-    int fdatasync() {
-        return (int)async_perform(&::aio_fsync, O_DSYNC);
-    }
-};
 class Counter {
 public:
     int &c;
@@ -259,51 +205,6 @@ ssize_t libaio_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset
     static int n;
     Counter c(n);
     return libaiocb().asyncio(&io_prep_pwritev, fd, iov, iovcnt, offset);
-}
-
-ssize_t posixaio_pread(int fd, void *buf, size_t count, off_t offset) {
-    static int n;
-    Counter c(n);
-    return posix_aiocb(fd).pread(buf, count, offset);
-}
-ssize_t posixaio_pwrite(int fd, const void *buf, size_t count, off_t offset) {
-    static int n;
-    Counter c(n);
-    return posix_aiocb(fd).pwrite((void *)buf, count, offset);
-}
-int posixaio_fsync(int fd) {
-    static int n;
-    Counter c(n);
-    return posix_aiocb(fd).fsync();
-}
-int posixaio_fdatasync(int fd) {
-    static int n;
-    Counter c(n);
-    return posix_aiocb(fd).fdatasync();
-}
-ssize_t posixaio::preadv(int fd, const struct iovec *iov, int iovcnt, off_t offset) {
-    ssize_t rst = 0;
-    for (auto &x : ptr_array(iov, iovcnt)) {
-        ssize_t ret = posixaio_pread(fd, x.iov_base, x.iov_len, offset + rst);
-        if (ret < 0)
-            LOG_ERRNO_RETURN(-1, 0, "failed to posixaio_preadv");
-        if (ret < (ssize_t)x.iov_len)
-            return rst + ret;
-        rst += ret;
-    }
-    return rst;
-}
-ssize_t posixaio::pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset) {
-    ssize_t rst = 0;
-    for (auto &x : ptr_array(iov, iovcnt)) {
-        ssize_t ret = posixaio_pwrite(fd, x.iov_base, x.iov_len, offset + rst);
-        if (ret < 0)
-            LOG_ERRNO_RETURN(-1, 0, "failed to posixaio_pwrite()");
-        if (ret < (ssize_t)x.iov_len)
-            return rst + ret;
-        rst += ret;
-    }
-    return rst;
 }
 
 int libaio_wrapper_init() {

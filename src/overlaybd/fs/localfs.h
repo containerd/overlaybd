@@ -27,8 +27,6 @@ namespace FileSystem
     const int ioengine_libaio = 1;          // libaio depends on photon::libaio_wrapper_init(),
                                             // and photon::fd-events ( fd_events_init() )
 
-    const int ioengine_posixaio = 2;        // posixaio depends on photon::fd-events ( fd_events_init() )
-
 
     extern "C" IFileSystem* new_localfs_adaptor(const char* root_path = nullptr,
                                                 int io_engine_type = 0);
@@ -42,11 +40,5 @@ namespace FileSystem
     IFile* new_libaio_file_adaptor(int fd)
     {
         return new_localfile_adaptor(fd, ioengine_libaio);
-    }
-
-    inline __attribute__((always_inline))
-    IFile* new_posixaio_file_adaptor(int fd)
-    {
-        return new_localfile_adaptor(fd, ioengine_posixaio);
     }
 }
