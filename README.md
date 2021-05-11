@@ -138,6 +138,10 @@ For the convenience of testing, we provided a public registry on Aliyun ACR, see
 
 Now we have finished the setup of overlaybd, let's go back to [Accelerated Container Image](https://github.com/alibaba/accelerated-container-image) repo and start to run our first accelerated container.
 
+## Contributing
+
+Welcome to contribute! [CONTRIBUTING](CONTRIBUTING.md)
+
 ## Licenses
 
 Overlaybd is released under the Apache License, Version 2.0.
