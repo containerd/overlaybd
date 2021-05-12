@@ -23,10 +23,10 @@
 #include <utility>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
-#include <boost/lockfree/spsc_queue.hpp>
 #include <atomic>
 #include <bitset>
 #include <sched.h>
+#include "../queue.h"
 #include "../thread.h"
 #include "../../utility.h"
 #include "../../alog.h"
@@ -254,10 +254,14 @@ public:
         return 0;
     }
 
+    struct resumeq_item
+    {
+        thread *th;
+        int error_number;
+    };
     std::mutex resumeq_mutex;
-    static const uint32_t RQ_MAX = 65536;
-    boost::lockfree::spsc_queue<std::pair<thread *, int>, boost::lockfree::capacity<RQ_MAX>>
-        resumeq;
+    static constexpr uint32_t RQ_MAX = 65536;
+    spsc_queue<resumeq_item, RQ_MAX> resumeq;
     void safe_thread_interrupt(thread *th, int error_number, int mode) {
         if (mode == 1) {
             if (photon::thread_stat(th) != photon::WAITING)
@@ -291,10 +295,10 @@ public:
         _unused(x);
         asm volatile("mfence" ::: "memory");
         do {
-            std::pair<thread *, int> pops[1024];
+            resumeq_item pops[1024];
             int n = resumeq.pop(pops, 1024);
             for (int i = 0; i < n; ++i) {
-                photon::thread_interrupt(pops[i].first, pops[i].second);
+                photon::thread_interrupt(pops[i].th, pops[i].error_number);
             }
         } while (resumeq.read_available() > 0);
     }
