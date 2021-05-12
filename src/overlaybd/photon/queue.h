@@ -14,285 +14,290 @@
   limitations under the License.
 */
 #pragma once
-#include <pthread.h>
 #include <stdlib.h>
+#include <string.h>
 #include <utility>
-#include "kfifo.h"
 
-template<typename T, unsigned int capacity, bool = std::is_pod<T>::value>
-class __spsc_queue;
-
-template<typename T, unsigned int capacity, bool = std::is_pod<T>::value>
-class __mpmc_queue;
+template <typename T, unsigned int capacity>
+class __spsc_queue; // not for user
 
 // replace boost/lockfree/spsc_queue.hpp
 template <typename T, unsigned int capacity>
 class spsc_queue
 {
 public:
-    bool push(const T& t)
-    {
-        return queue_.push(t);
-    }
+    spsc_queue()  { }
+    ~spsc_queue() { }
+    spsc_queue(const spsc_queue&) = delete;
+    spsc_queue(spsc_queue&&) = delete;
+    spsc_queue& operator=(const spsc_queue&) = delete;
+    spsc_queue& operator=(spsc_queue&&) = delete;
 
-    bool push(T&& t)
-    {
-        return queue_.push(std::move(t));
-    }
+public:
+    int read_available() const;
 
-    int pop(T* ret, int n)
-    {
-        return queue_.pop(ret, n);
-    }
+    bool push(const T& t);
+    bool push(T&& t);
+    bool pop(T& ret);
 
-    int read_available() const
-    {
-        return queue_.read_available();
-    }
+    int push(const T *ret, int n);
+    int pop(T *ret, int n);
 
 private:
     __spsc_queue<T, capacity> queue_;
 };
 
-// thread-safety multiple-producer/multiple-consumer circular-queue
+////
+// template inl, not for user
 template <typename T, unsigned int capacity>
-class mpmc_queue
+int spsc_queue<T, capacity>::read_available() const
 {
-public:
-    bool push(const T& t)
-    {
-        return queue_.push(t);
-    }
+    return queue_.read_available();
+}
 
-    bool push(T&& t)
-    {
-        return queue_.push(std::move(t));
-    }
+template <typename T, unsigned int capacity>
+bool spsc_queue<T, capacity>::push(const T& t)
+{
+    return queue_.push(t);
+}
 
-    int pop(T* ret, int n)
-    {
-        return queue_.pop(ret, n);
-    }
+template <typename T, unsigned int capacity>
+bool spsc_queue<T, capacity>::push(T&& t)
+{
+    return queue_.push(std::move(t));
+}
 
-    int read_available() const
-    {
-        return queue_.read_available();
-    }
+template <typename T, unsigned int capacity>
+bool spsc_queue<T, capacity>::pop(T& t)
+{
+    return queue_.pop(t);
+}
 
-private:
-    __mpmc_queue<T, capacity> queue_;
+template <typename T, unsigned int capacity>
+int spsc_queue<T, capacity>::push(const T *ret, int n)
+{
+    return queue_.push(ret, n);
+}
+
+template <typename T, unsigned int capacity>
+int spsc_queue<T, capacity>::pop(T *ret, int n)
+{
+    return queue_.pop(ret, n);
+}
+
+struct __fifo
+{
+    unsigned int in;
+    unsigned int out;
+    unsigned int mask;
+    unsigned int size;
+    void *buffer;
 };
 
-//// inner template
-// not for user
+template <typename T, bool is_trivial = std::is_trivial<T>::value>
+class __spsc_worker;
 
-/* T is POD. */
-template<typename T, unsigned int capacity>
-class __spsc_queue<T, capacity, true>
+#define __CHECK_POWER_OF_2(x) ((x) > 0 && ((x) & ((x) - 1)) == 0)
+
+template <typename T, unsigned int capacity>
+class __spsc_queue
 {
-protected:
-    static constexpr unsigned int sizeT = sizeof(T);
+public:
+    __spsc_queue();
+    ~__spsc_queue() { }
+    __spsc_queue(const __spsc_queue&) = delete;
+    __spsc_queue(__spsc_queue&&) = delete;
+    __spsc_queue& operator=(const __spsc_queue&) = delete;
+    __spsc_queue& operator=(__spsc_queue&&) = delete;
 
 public:
-    __spsc_queue()
-    {
-        fifo_ = kfifo_alloc(capacity * sizeT);
-        if (!fifo_)
-            abort();
-    }
+    int read_available() const;
 
-    ~__spsc_queue()
-    {
-        kfifo_free(fifo_);
-    }
+    bool push(const T& t);
+    bool push(T&& t);
+    bool pop(T& ret);
 
-    bool push(const T& t)
-    {
-        return __kfifo_put(fifo_, &t, sizeT) > 0;
-    }
-
-    bool push(T&& t)
-    {
-        return __kfifo_put(fifo_, &t, sizeT) > 0;
-    }
-
-    int pop(T* ret, int n)
-    {
-        return __kfifo_get(fifo_, ret, sizeT * n) / sizeT;
-    }
-
-    int read_available() const
-    {
-        return __kfifo_len(fifo_) / sizeT;
-    }
+    int push(const T *ret, int n);
+    int pop(T *ret, int n);
 
 private:
-    struct kfifo* fifo_;
+    __fifo fifo_;
+    T arr_[capacity];
+
+    using WORKER = __spsc_worker<T, std::is_trivial<T>::value>;
+    static_assert(__CHECK_POWER_OF_2(capacity), "Capacity MUST power of 2");
 };
 
-/* T is not POD. */
-template<typename T, unsigned int size>
-class __spsc_queue<T, size, false>
+template <typename T, unsigned int capacity>
+__spsc_queue<T, capacity>::__spsc_queue()
+{
+    fifo_.in = 0;
+    fifo_.out = 0;
+    fifo_.mask = capacity - 1;
+    fifo_.size = capacity;
+    fifo_.buffer = &arr_;
+}
+
+template <typename T, unsigned int capacity>
+int __spsc_queue<T, capacity>::read_available() const
+{
+    return fifo_.in - fifo_.out;
+}
+
+template <typename T, unsigned int capacity>
+bool __spsc_queue<T, capacity>::push(const T& t)
+{
+    if (capacity - fifo_.in + fifo_.out == 0)
+        return false;
+
+    arr_[fifo_.in & (capacity - 1)] = t;
+
+    asm volatile("sfence" ::: "memory");
+
+    ++fifo_.in;
+
+    return true;
+}
+
+template <typename T, unsigned int capacity>
+bool __spsc_queue<T, capacity>::push(T&& t)
+{
+    if (capacity - fifo_.in + fifo_.out == 0)
+        return false;
+
+    arr_[fifo_.in & (capacity - 1)] = std::move(t);
+
+    asm volatile("sfence" ::: "memory");
+
+    ++fifo_.in;
+
+    return true;
+}
+
+template <typename T, unsigned int capacity>
+bool __spsc_queue<T, capacity>::pop(T& t)
+{
+    if (fifo_.in - fifo_.out == 0)
+        return false;
+
+    t = std::move(arr_[fifo_.out & (capacity - 1)]);
+
+    asm volatile("sfence" ::: "memory");
+
+    ++fifo_.out;
+
+    return true;
+}
+
+template <typename T, unsigned int capacity>
+int __spsc_queue<T, capacity>::push(const T *ret, int n)
+{
+    return WORKER::push(&fifo_, ret, n);
+}
+
+template <typename T, unsigned int capacity>
+int __spsc_queue<T, capacity>::pop(T *ret, int n)
+{
+    return WORKER::pop(&fifo_, ret, n);
+}
+
+static inline unsigned int _min(unsigned int a, unsigned int b)
+{
+    return (a < b) ? a : b;
+}
+
+template <typename T>
+class __spsc_worker<T, true>
 {
 public:
-    bool push(const T& t)
+    static int push(__fifo *fifo, const T *ret, int n)
     {
-        if (size - in_ + out_ == 0)
+        unsigned int len = _min(n, fifo->size - fifo->in + fifo->out);
+        if (len == 0)
             return 0;
 
-        asm volatile("mfence" ::: "memory");
+        unsigned int idx_in = fifo->in & fifo->mask;
+        unsigned int l = _min(len, fifo->size - idx_in);
+        T *arr = (T *)fifo->buffer;
 
-        buffer_[in_ & (size - 1)] = t;
+        memcpy(arr + idx_in, ret, l * sizeof (T));
+        memcpy(arr, ret + l, (len - l) * sizeof (T));
 
         asm volatile("sfence" ::: "memory");
 
-        ++in_;
-
-        return 1;
-    }
-
-    bool push(T&& t)
-    {
-        if (size - in_ + out_ == 0)
-            return 0;
-
-        asm volatile("mfence" ::: "memory");
-
-        buffer_[in_ & (size - 1)] = std::move(t);
-
-        asm volatile("sfence" ::: "memory");
-
-        ++in_;
-
-        return 1;
-    }
-
-    int pop(T* ret, int n)
-    {
-        unsigned int l;
-        unsigned int len = n;
-
-        len = _min(len, in_ - out_);
-
-        asm volatile("lfence" ::: "memory");
-
-        l = _min(len, size - (out_ & (size - 1)));
-
-        for (unsigned int i = 0; i < l; i++)
-            ret[i] = std::move(buffer_[(out_ & (size - 1)) + i]);
-
-        for (unsigned int i = 0; i < len - l; i++)
-            ret[l + i] = std::move(buffer_[i]);
-
-        asm volatile("mfence" ::: "memory");
-
-        out_ += len;
+        fifo->in += len;
 
         return len;
     }
 
-    int read_available() const
+    static int pop(__fifo *fifo, T *ret, int n)
     {
-        return in_ - out_;
-    }
+        unsigned int len = _min(n, fifo->in - fifo->out);
+        if (len == 0)
+            return 0;
 
-private:
-    T buffer_[size];
-    unsigned int in_ = 0;
-    unsigned int out_ = 0;
+        unsigned int idx_out = fifo->out & fifo->mask;
+        unsigned int l = _min(len, fifo->size - idx_out);
+        T *arr = (T *)fifo->buffer;
+
+        memcpy(ret, arr + idx_out, l * sizeof (T));
+        memcpy(ret + l, arr, (len - l) * sizeof (T));
+
+        asm volatile("sfence" ::: "memory");
+
+        fifo->out += len;
+
+        return len;
+    }
 };
 
-/* T is POD. */
-template<typename T, unsigned int capacity>
-class __mpmc_queue<T, capacity, true>
-{
-protected:
-    static constexpr unsigned int sizeT = sizeof(T);
-
-public:
-    __mpmc_queue()
-    {
-        fifo_ = kfifo_alloc(capacity * sizeT);
-        if (!fifo_)
-            abort();
-    }
-
-    ~__mpmc_queue()
-    {
-        kfifo_free(fifo_);
-    }
-
-    bool push(const T& t)
-    {
-        return kfifo_put(fifo_, &t, sizeT) > 0;
-    }
-
-    bool push(T&& t)
-    {
-        return kfifo_put(fifo_, &t, sizeT) > 0;
-    }
-
-    int pop(T* ret, int n)
-    {
-        return kfifo_get(fifo_, ret, sizeT * n) / sizeT;
-    }
-
-    int read_available() const
-    {
-        return __kfifo_len(fifo_) / sizeT;
-    }
-
-private:
-    struct kfifo* fifo_;
-};
-
-/* T is not POD. */
-template<typename T, unsigned int capacity>
-class __mpmc_queue<T, capacity, false>
+template <typename T>
+class __spsc_worker<T, false>
 {
 public:
-    __mpmc_queue()
+    static int push(__fifo *fifo, const T *ret, int n)
     {
-        if (pthread_spin_init(&lock_, PTHREAD_PROCESS_PRIVATE) != 0)
-            abort();
+        unsigned int len = _min(n, fifo->size - fifo->in + fifo->out);
+        if (len == 0)
+            return 0;
+
+        unsigned int idx_in = fifo->in & fifo->mask;
+        unsigned int l = _min(len, fifo->size - idx_in);
+        T *arr = (T *)fifo->buffer;
+
+        for (unsigned int i = 0; i < l; i++)
+            arr[idx_in + i] = ret[i];
+
+        for (unsigned int i = 0; i < len - l; i++)
+            arr[i] = ret[l + i];
+
+        asm volatile("sfence" ::: "memory");
+
+        fifo->in += len;
+
+        return len;
     }
 
-    ~__mpmc_queue()
+    static int pop(__fifo *fifo, T *ret, int n)
     {
-        pthread_spin_destroy(&lock_);
-    }
+        unsigned int len = _min(n, fifo->in - fifo->out);
+        if (len == 0)
+            return 0;
 
-    bool push(const T& t)
-    {
-        pthread_spin_lock(&lock_);
-        bool res = queue_.push(t);
-        pthread_spin_unlock(&lock_);
-        return res;
-    }
+        unsigned int idx_out = fifo->out & fifo->mask;
+        unsigned int l = _min(len, fifo->size - idx_out);
+        T *arr = (T *)fifo->buffer;
 
-    bool push(T&& t)
-    {
-        pthread_spin_lock(&lock_);
-        bool res = queue_.push(std::move(t));
-        pthread_spin_unlock(&lock_);
-        return res;
-    }
+        for (unsigned int i = 0; i < l; i++)
+            ret[i] = std::move(arr[idx_out + i]);
 
-    int pop(T* ret, int n)
-    {
-        pthread_spin_lock(&lock_);
-        int res = queue_.pop(ret, n);
-        pthread_spin_unlock(&lock_);
-        return res;
-    }
+        for (unsigned int i = 0; i < len - l; i++)
+            ret[l + i] = std::move(arr[i]);
 
-    int read_available() const
-    {
-        // no need lock
-        return queue_.read_available();
-    }
+        asm volatile("sfence" ::: "memory");
 
-private:
-    pthread_spinlock_t lock_;
-    __spsc_queue<T, capacity> queue_;
+        fifo->out += len;
+
+        return len;
+    }
 };
