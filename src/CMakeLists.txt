@@ -55,12 +55,11 @@ file(GLOB SOURCE_IMAGE "image_file.cpp" "image_service.cpp" "sure_file.cpp" "swi
 add_library(image_lib STATIC
     ${SOURCE_IMAGE}
 )
-add_dependencies(image_lib Boost RapidJSON)
+add_dependencies(image_lib RapidJSON)
 
 target_include_directories(image_lib PUBLIC
     ${CURL_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIR}
-    ${BOOST_INCLUDE_DIR}
     ${RAPIDJSON_INCLUDE_DIR}
 )
 
