@@ -32,6 +32,7 @@
 #include "../overlaybd/net/curl.h"
 #include "../overlaybd/photon/thread.h"
 #include "../overlaybd/photon/syncio/fd-events.h"
+#include "../image_service.h"
 
 using namespace std;
 using namespace LSMT;
@@ -159,8 +160,6 @@ static void usage() {
         "options:\n"
         "   -u only show UUID.\n"
         "   -r <registry_blob_url> read blob from registry.\n"
-        "   -a <access_key> read from config file if not set.\n"
-        "   -s <access_secret> read from config file if not set.\n"
         "   -v show log detail.\n"
         "example:\n"
         "   ./overlaybd-info -u ./file.data ./file.index\n"
@@ -182,7 +181,7 @@ IFile *open(IFileSystem *fs, const char *fn, int flags, mode_t mode = 0) {
 IFile *findex, *fdata;
 int action = 0;
 bool is_remote = false;
-string url, user, passwd;
+string url, cred_path;
 IFileSystem *registryfs, *localfs;
 
 static void parse_args(int &argc, char **argv) {
@@ -198,14 +197,6 @@ static void parse_args(int &argc, char **argv) {
             case 'r':
                 is_remote = true;
                 url = optarg;
-                shift += 2;
-                break;
-            case 'a':
-                user = optarg;
-                shift += 2;
-                break;
-            case 's':
-                passwd = optarg;
                 shift += 2;
                 break;
             case 'v':
@@ -235,6 +226,17 @@ static void parse_args(int &argc, char **argv) {
         }
         return;
     }
+}
+
+std::pair<std::string, std::string> reload_registry_auth(void *, const char *remote_path) {
+    LOG_INFO("Acquire credential for ", VALUE(remote_path));
+    std::string username, password;
+    int res = load_cred_from_file(cred_path, std::string(remote_path), username, password);
+    if (res == 0) {
+        return std::make_pair(username, password);
+    }
+    printf("reload registry credential failed, token not found.\n");
+    return std::make_pair("", "");
 }
 
 int main(int argc, char **argv) {
@@ -269,11 +271,18 @@ int main(int argc, char **argv) {
                 exit(-1);
             }
         }
+        ImageConfigNS::GlobalConfig obd_conf;
+        if (!obd_conf.ParseJSON("/etc/overlaybd/config.json")) {
+            printf("invalid overlaybd config file.\n");
+            exit(-1);
+        }
+        cred_path = obd_conf.credentialFilePath();
+
         auto prefix = url.substr(0, p);
         auto suburl = url.substr(p);
-        LOG_INFO("blob url: {prefix:`, user:`, passwd:`, file:`}", prefix, user, passwd, suburl);
-        registryfs = FileSystem::new_registryfs_with_password(prefix.c_str(), user.c_str(),
-                                                              passwd.c_str(), cafile);
+        LOG_INFO("create registryfs with cafile:`", cafile);
+        auto registryfs = FileSystem::new_registryfs_with_credential_callback(
+            {nullptr, &reload_registry_auth}, cafile, 30UL * 1000000);
         if (registryfs == nullptr) {
             printf("connect to registry failed.\n");
             exit(-1);

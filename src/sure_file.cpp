@@ -34,14 +34,13 @@ private:
     ImageFile *m_ifile = nullptr;
 
     void io_sleep(uint64_t &try_cnt) {
-        if (try_cnt < 100)
-            photon::thread_usleep(200); // 200us
+        if (try_cnt < 10)
+            photon::thread_usleep(500); // 500us
         else
             photon::thread_usleep(2000); // 2ms
 
-        if (try_cnt > 30000)
+        if (try_cnt > 30000) // >1min
             photon::thread_sleep(1); // 1sec
-        try_cnt++;
     }
 
     void io_hand() {
@@ -103,6 +102,7 @@ public:
             }
 
             io_sleep(try_cnt);
+            try_cnt++;
 
             if (try_cnt % 300 == 0) {
                 LOG_ERROR("pread read partial data. count:`, offset:`, ret:`, got_cnt:`, errno:`",
