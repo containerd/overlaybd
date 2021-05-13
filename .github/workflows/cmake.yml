@@ -9,7 +9,7 @@ on:
     - main
 
 env:
-  BUILD_TYPE: Release
+  BUILD_TYPE: Debug
 
 jobs:
   build:
@@ -22,11 +22,13 @@ jobs:
       shell: bash
       run: |
         git submodule update --init
-        sudo apt install -y pkg-config libgtest-dev libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libglib2.0-dev
-        cd /usr/src/gtest
-        sudo cmake CMakeLists.txt
-        sudo make
-        sudo cp *.a /usr/lib
+        sudo apt install -y pkg-config libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libglib2.0-dev
+        wget https://github.com/google/googletest/archive/refs/tags/release-1.10.0.tar.gz
+        tar -zxvf release-1.10.0.tar.gz
+        cd googletest-release-1.10.0/
+        cmake CMakeLists.txt
+        make
+        sudo make install
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{github.workspace}}/build
@@ -39,9 +41,9 @@ jobs:
     - name: Build
       working-directory: ${{github.workspace}}/build
       shell: bash
-      run: cmake --build . --config $BUILD_TYPE
+      run: make -j8
 
     - name: Test
       working-directory: ${{github.workspace}}/build
       shell: bash
-      run: ctest -C $BUILD_TYPE
+      run: ctest -j8 --output-on-failure -C $BUILD_TYPE

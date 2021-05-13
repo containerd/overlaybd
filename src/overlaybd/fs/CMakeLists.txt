@@ -1,4 +1,4 @@
-file(GLOB SOURCE_FS "*.cpp") 
+file(GLOB SOURCE_FS "*.cpp")
 
 add_library(fs_lib STATIC ${SOURCE_FS})
 
@@ -13,3 +13,7 @@ target_link_libraries(fs_lib
     zfile_lib
     cache_lib
 )
+
+if(BUILD_TESTING)
+  add_subdirectory(test)
+endif()
