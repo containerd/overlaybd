@@ -23,15 +23,6 @@
 #include "../../../utility.h"
 #include "../pool_store.h"
 
-#ifdef CACHE_BENCHMARK
-#include "test/metric.h"
-
-inline uint64_t GetSteadyTimeNs() {
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
-}
-#endif
-
 namespace Cache {
 
 const off_t kMaxPrefetchSize = 16 * 1024 * 1024;
@@ -102,9 +93,6 @@ ssize_t CachedFile::prefetch(size_t count, off_t offset) {
 }
 
 ssize_t CachedFile::preadvInternal(const struct iovec *iov, int iovcnt, off_t offset) {
-#ifdef CACHE_BENCHMARK
-    auto begin = GetSteadyTimeNs();
-#endif
     if (offset < 0) {
         LOG_ERROR_RETURN(EINVAL, -1, "offset is invalid, offset : `", offset)
     }
@@ -148,10 +136,6 @@ again:
 
         return -1;
     } else if (tr.refill_size == 0 && tr.size >= 0) {
-#ifdef CACHE_BENCHMARK
-        gMetric->readHit_.Increase(1);
-        gMetric->readLatency_.Increase((GetSteadyTimeNs() - begin) / 100.0);
-#endif
         return tr.size;
     }
 
@@ -208,10 +192,6 @@ again:
             }
             return ret;
         }
-
-#ifdef CACHE_BENCHMARK
-        gMetric->writeQps_.Increase(1);
-#endif
     }
 
     IOVector refillBuf(buffer.iovec(), buffer.iovcnt());
