@@ -321,9 +321,12 @@ protected:
         rapidjson::Document d;
         if (d.Parse(jsonStr.c_str()).HasParseError())
             LOG_ERROR_RETURN(0, -1, "JSON parse failed");
-        if (!d.HasMember("token"))
-            LOG_ERROR_RETURN(0, -1, "JSON has no 'token' member");
-        *token = d["token"].GetString();
+        if (d.HasMember("token"))
+            *token = d["token"].GetString();
+        else if (d.HasMember("access_token"))
+            *token = d["access_token"].GetString();
+        else
+            LOG_ERROR_RETURN(0, -1, "JSON has no 'token' or 'access_token' member");
         LOG_DEBUG("Get token", VALUE(*token));
         return 0;
     }
