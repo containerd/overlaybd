@@ -6,12 +6,19 @@ DefaultDependencies=no
 Conflicts=shutdown.target
 
 [Service]
-LimitNOFILE=1000000
+LimitNOFILE=1048576
 LimitCORE=infinity
+Type=simple
 
 ExecStartPre=/sbin/modprobe target_core_user
 
 ExecStart=/opt/overlaybd/bin/overlaybd-tcmu
+
+GuessMainPID=no
+Restart=always
+RestartSec=1s
+KillMode=process
+OOMScoreAdjust=-999
 
 [Install]
 WantedBy=multi-user.target
