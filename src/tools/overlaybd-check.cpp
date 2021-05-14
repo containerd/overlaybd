@@ -62,7 +62,6 @@ static void parse_args(int &argc, char **argv) {
 
 std::pair<std::string, std::string> reload_registry_auth(void *, const char *remote_path) {
     LOG_INFO("Acquire credential for ", VALUE(remote_path));
-    int retry = 0;
     std::string username, password;
 
     int res = load_cred_from_file(cred_path, std::string(remote_path), username, password);
@@ -119,8 +118,8 @@ int main(int argc, char **argv) {
     }
 
     LOG_INFO("create registryfs with cafile:`", cafile);
-    auto registryfs = FileSystem::new_registryfs_with_password_callback(
-        "", {nullptr, &reload_registry_auth}, cafile, 36UL * 1000000);
+    auto registryfs = FileSystem::new_registryfs_with_credential_callback(
+        {nullptr, &reload_registry_auth}, cafile, 30UL * 1000000);
 
     if (registryfs == nullptr) {
         printf("failed to create registryfs.\n");

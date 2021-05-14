@@ -88,39 +88,12 @@ public:
         return open(pathname, flags); // ignore mode
     }
 
-    RegistryFS(PasswordCB callback, const char *user, const char *passwd, const char *baseUrl,
-               const char *token, const char *caFile, uint64_t timeout)
-        : m_callback(callback), m_user(user), m_passwd(passwd), m_baseurl(baseUrl),
-          m_caFile(caFile), m_timeout(timeout), m_meta_cache(kMinimalMetaLife),
+    RegistryFS(PasswordCB callback, const char *caFile, uint64_t timeout)
+        : m_callback(callback), m_caFile(caFile), m_timeout(timeout), m_meta_cache(kMinimalMetaLife),
           m_scope_token(kMinimalTokenLife), m_url_actual(kMinimalAUrlLife) {
-        if (!m_baseurl.empty() && m_baseurl.back() == '/') {
-            m_baseurl.pop_back();
-        }
-    }
-
-    RegistryFS(const char *user, const char *passwd, const char *baseUrl, const char *token,
-               const char *caFile, uint64_t timeout)
-        : m_user(user), m_passwd(passwd), m_baseurl(baseUrl), m_caFile(caFile), m_timeout(timeout),
-          m_meta_cache(kMinimalMetaLife), m_scope_token(kMinimalTokenLife),
-          m_url_actual(kMinimalAUrlLife) {
-        if (!m_baseurl.empty() && m_baseurl.back() == '/') {
-            m_baseurl.pop_back();
-        }
     }
 
     ~RegistryFS() {
-    }
-
-    void auth_failure() {
-        if (m_callback)
-            m_auth_failure = true;
-    }
-
-    void auth_success() {
-        if (m_callback) {
-            m_auth_failure = false;
-            m_retry_callback = 0;
-        }
     }
 
     long GET(const char *url, Net::HeaderMap *headers, off_t offset, size_t count,
@@ -136,7 +109,7 @@ public:
             return t;
         });
         if (actual_url == nullptr)
-            LOG_ERROR_RETURN(0, ret, "Failed to get actual url: ", VALUE(url));
+            return ret;
 
         {
             auto curl = get_cURL();
@@ -169,8 +142,8 @@ public:
     }
 
     int stat(const char *path, struct stat *buf) override {
-        auto ctor = [&]() -> DockerLayerMeta * {
-            auto meta = new DockerLayerMeta;
+        auto ctor = [&]() -> ImageLayerMeta * {
+            auto meta = new ImageLayerMeta;
             auto file = (RegistryFile *)open(path, 0);
             DEFER(delete file);
             int ret = file->getMeta(meta, m_timeout);
@@ -197,17 +170,17 @@ public:
         Net::HeaderMap headers;
         Net::DummyReaderWriter dummy;
         long ret = 0;
-        // m_user not empty means it is able to fetch token by request
+
         estring authurl, scope;
         estring *token = nullptr;
         if (getScopeAuth(url, &authurl, &scope, tmo.timeout()) < 0)
             return false;
+
         if (!scope.empty()) {
             token = m_scope_token.acquire(scope, [&]() -> estring * {
                 estring *token = new estring();
-                if (m_auth_failure && m_callback)
-                    refreshPassword(url);
-                if (!authenticate(authurl.c_str(), token, tmo.timeout())) {
+                auto ret = m_callback(url);
+                if (!authenticate(authurl.c_str(), ret.first, ret.second, token, tmo.timeout())) {
                     code = 401;
                     delete token;
                     return nullptr;
@@ -221,26 +194,12 @@ public:
         if (token)
             curl->append_header(kAuthHeaderKey, kBearerAuthPrefix + *token);
         // going to challenge
-        auto user = m_user;
-        auto passwd = m_passwd;
         ret = curl->GET(url, &dummy, tmo.timeout_us());
         code = ret;
         if (ret == 401 || ret == 403) {
-            if (m_user.empty() && !m_callback) {
-                // empty username means the token is preset or just no-auth
-                if (!scope.empty())
-                    m_scope_token.release(scope, true);
-                LOG_ERROR_RETURN(0, false, "Failed to authenricate");
-            }
-            // else it should be re-auth
-            LOG_ERROR("Token invalid, might be wrong username/password, will try "
-                      "refresh password next time");
-            if (user == m_user && passwd == m_passwd)
-                auth_failure();
+            LOG_WARN("Token invalid, try refresh password next time");
         }
         if (300 <= ret && ret < 400) {
-            if (m_user == user && m_passwd == passwd)
-                auth_success();
             // pass auth, redirect to source
             auto url = curl->getinfo<char *>(CURLINFO_REDIRECT_URL);
             *actual = url;
@@ -259,16 +218,11 @@ protected:
     using CURLPool = IdentityPool<Net::cURL, 4>;
     CURLPool m_curl_pool;
     PasswordCB m_callback;
-    estring m_user, m_passwd;
-    estring m_baseurl;
     estring m_caFile;
-    uint64_t m_retry_callback = 0;
     uint64_t m_timeout;
-    photon::mutex m_mutex;
-    ObjectCache<estring, DockerLayerMeta *> m_meta_cache;
+    ObjectCache<estring, ImageLayerMeta *> m_meta_cache;
     ObjectCache<estring, estring *> m_scope_token;
     ObjectCache<estring, estring *> m_url_actual;
-    bool m_auth_failure = false;
 
     Net::cURL *get_cURL() {
         auto curl = m_curl_pool.get();
@@ -281,21 +235,6 @@ protected:
         m_curl_pool.put(curl);
     };
 
-    void refreshPassword(const char *url) {
-        LOG_INFO("Refresh password by callback, sleep for ` sec", m_retry_callback);
-        photon::thread_sleep(m_retry_callback);
-        // sleep for maximal 30secs;
-        // from 0sec(instantly) increasing by 2 times till 30
-        m_retry_callback = std::min(m_retry_callback ? m_retry_callback * 2 : 1, 30UL);
-        if (!m_callback)
-            return;
-        auto ret = m_callback(url);
-        m_user = ret.first;
-        m_passwd = ret.second;
-        m_auth_failure = m_user.empty();
-        m_retry_callback = 0;
-        return;
-    }
 
     int getScopeAuth(const char *url, estring *authurl, estring *scope, uint64_t timeout) {
         // need authorize;
@@ -331,16 +270,13 @@ protected:
         return 0;
     }
 
-    bool authenticate(const char *auth_url, estring *token, uint64_t timeout) {
-        LOG_INFO("Auth by `", auth_url);
+    bool authenticate(const char *auth_url, std::string &username, std::string &password, estring *token, uint64_t timeout) {
         Timeout tmo(timeout);
         Net::cURL *req = get_cURL();
         DEFER({ release_cURL(req); });
         Net::StringWriter writer;
-        auto user = m_user;
-        auto passwd = m_passwd;
-        if (!m_user.empty()) {
-            req->set_user_passwd(m_user.c_str(), m_passwd.c_str()).set_redirect(3);
+        if (!username.empty()) {
+            req->set_user_passwd(username.c_str(), password.c_str()).set_redirect(3);
         }
         auto ret = req->GET(auth_url, &writer, tmo.timeout_us());
 
@@ -349,10 +285,6 @@ protected:
         if (ret == 200 && parseToken(writer.string, token) == 0) {
             return true;
         } else {
-            if (user == m_user && passwd == m_passwd) {
-                LOG_ERROR("Auth failure, current username & password will be expired");
-                auth_failure();
-            }
             LOG_ERROR_RETURN(0, false, "AUTH failed, response code=` ", ret, VALUE(auth_url));
         }
     }
@@ -454,7 +386,7 @@ public:
      * read meta data for the docker image layer. E.g. the content length in
      * bytes
      */
-    virtual int getMeta(DockerLayerMeta *meta, uint64_t timeout) override {
+    virtual int getMeta(ImageLayerMeta *meta, uint64_t timeout) override {
         Net::HeaderMap headers;
         Timeout tmo(timeout);
         int retry = 3;
@@ -494,13 +426,19 @@ public:
     }
 
     virtual int fstat(struct stat *buf) override {
-        if (m_filesize > 0) {
-            memset(buf, 0, sizeof(*buf));
-            buf->st_mode = S_IFREG | S_IREAD;
-            buf->st_size = m_filesize;
-            return 0;
+        if (m_filesize == 0) {
+            auto meta = new ImageLayerMeta;
+            DEFER(delete meta);
+            int ret = getMeta(meta, m_timeout);
+            if (ret < 0) {
+                return -1;
+            }
+            m_filesize = meta->contentLength;
         }
-        return m_fs->stat(m_filename.c_str(), buf);
+        memset(buf, 0, sizeof(*buf));
+        buf->st_mode = S_IFREG | S_IREAD;
+        buf->st_size = m_filesize;
+        return 0;
     }
 
     /**
@@ -520,43 +458,26 @@ public:
 };
 
 inline IFile *RegistryFS::open(const char *pathname, int) {
-    std::string url;
+    std::string url = pathname;
     std::string path = pathname;
-    if (*pathname != '/' && !m_baseurl.empty())
+    if (*pathname != '/')
         path = std::string("/") + pathname;
-    url = m_baseurl + path;
-    return new RegistryFileImpl(path.c_str(), url.c_str(), (RegistryFS *)this, m_timeout);
+
+    auto file = new RegistryFileImpl(path.c_str(), url.c_str(), (RegistryFS *)this, m_timeout);
+    struct stat buf;
+    int ret = file->fstat(&buf);
+    if (ret < 0) {
+        delete file;
+        LOG_ERROR_RETURN(0, nullptr, "failed to open and stat registry file `, ret `", pathname, ret);
+    }
+    return file;
 }
 
-IFileSystem *new_registryfs_with_password_callback(const char *baseUrl, PasswordCB callback,
+IFileSystem *new_registryfs_with_credential_callback(PasswordCB callback,
                                                    const char *caFile, uint64_t timeout) {
     if (!callback)
         LOG_ERROR_RETURN(EINVAL, nullptr, "password callback not set");
-    return new RegistryFS(callback, "", "", baseUrl, "", caFile ? caFile : "", timeout);
-}
-
-IFileSystem *new_registryfs_with_password(const char *baseUrl, const char *username,
-                                          const char *password, const char *caFile,
-                                          uint64_t timeout) {
-    if (username == nullptr || password == nullptr)
-        LOG_ERROR_RETURN(EINVAL, nullptr, "username and password cannnot be null");
-    if (strcmp(username, "") == 0 || strcmp(password, "") == 0)
-        LOG_ERROR_RETURN(EINVAL, nullptr, "username and password cannnot be empty");
-    return new RegistryFS(username, password, baseUrl, "", caFile ? caFile : "", timeout);
-};
-
-IFileSystem *new_registryfs_with_token(const char *baseUrl, const char *token, const char *caFile,
-                                       uint64_t timeout) {
-    if (token == nullptr)
-        LOG_ERROR_RETURN(EINVAL, nullptr, "token cannnot be null");
-    if (strcmp(token, "") == 0)
-        LOG_ERROR_RETURN(EINVAL, nullptr, "token cannnot be empty");
-    return new RegistryFS("", "", baseUrl, token, caFile ? caFile : "", timeout);
-}
-
-IFileSystem *new_registryfs_without_auth(const char *baseUrl, const char *caFile,
-                                         uint64_t timeout) {
-    return new RegistryFS("", "", baseUrl, "", caFile ? caFile : "", timeout);
+    return new RegistryFS(callback, caFile ? caFile : "", timeout);
 }
 
 } // namespace FileSystem

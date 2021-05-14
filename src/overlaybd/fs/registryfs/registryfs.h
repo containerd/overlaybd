@@ -25,7 +25,7 @@ namespace FileSystem {
 // https://docs.docker.com/registry/spec/auth/token/#authorization-server-endpoint-descriptions
 // static const uint64_t kMinimumTokenExpiry = 60 * 1000UL;  // 60 seconds
 
-struct DockerLayerMeta {
+struct ImageLayerMeta {
     uint64_t crc64;
     uint64_t contentLength;
     char lastModified[128];
@@ -37,7 +37,7 @@ struct DockerLayerMeta {
 // using registryfs, and not able to create directly using url
 class RegistryFile : public VirtualReadOnlyFile {
 public:
-    virtual int getMeta(DockerLayerMeta *meta, uint64_t timeout = -1) = 0;
+    virtual int getMeta(ImageLayerMeta *meta, uint64_t timeout = -1) = 0;
     virtual int getUrl(char *buf, size_t size, uint64_t timeout = -1) = 0;
     int close() override {
         return 0;
@@ -47,19 +47,10 @@ public:
 using PasswordCB = Delegate<std::pair<std::string, std::string>, const char *>;
 
 extern "C" {
-IFileSystem *new_registryfs_with_password_callback(const char *baseUrl, PasswordCB callback,
+IFileSystem *new_registryfs_with_credential_callback(PasswordCB callback,
                                                    const char *caFile = nullptr,
                                                    uint64_t timeout = -1);
 
-IFileSystem *new_registryfs_with_password(const char *baseUrl, const char *username,
-                                          const char *password, const char *caFile = nullptr,
-                                          uint64_t timeout = -1);
-
-IFileSystem *new_registryfs_with_token(const char *baseUrl, const char *token,
-                                       const char *caFile = nullptr, uint64_t timeout = -1);
-
-IFileSystem *new_registryfs_without_auth(const char *baseUrl, const char *caFile = nullptr,
-                                         uint64_t timeout = -1);
 }
 
 } // namespace FileSystem

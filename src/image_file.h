@@ -46,7 +46,7 @@ public:
         if (m_status == 1) {
             struct stat st;
             fstat(&st);
-            LOG_INFO("fstat bs: `, size: `", block_size, size);
+            LOG_INFO("new imageFile, bs: `, size: `", block_size, size);
         }
     }
 
