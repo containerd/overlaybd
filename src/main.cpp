@@ -291,6 +291,9 @@ static int dev_open(struct tcmu_device *dev) {
     if (!config)
         return -EPERM;
 
+    struct timeval start;
+    gettimeofday(&start, NULL);
+
     ImageFile *file = imgservice->create_image_file(config);
     if (file == nullptr) {
         return -EPERM;
@@ -310,6 +313,11 @@ static int dev_open(struct tcmu_device *dev) {
     odev->loop = new TCMUDevLoop(dev);
     odev->loop->run();
 
+    struct timeval end;
+    gettimeofday(&end, NULL);
+
+    uint64_t elapsed = 1000000UL * (end.tv_sec-start.tv_sec)+ end.tv_usec-start.tv_usec;
+    LOG_INFO("dev opened `, time cost ` ms", config, elapsed / 1000);
     return 0;
 }
 

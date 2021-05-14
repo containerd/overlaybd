@@ -158,27 +158,15 @@ int ImageService::read_global_config_and_set() {
 
 std::pair<std::string, std::string>
 ImageService::reload_auth(const char *remote_path) {
-    LOG_INFO("Acquire credential for ", VALUE(remote_path));
-    int retry = 0;
+    LOG_DEBUG("Acquire credential for ", VALUE(remote_path));
     std::string username, password;
-    while (true) {
-        int res =
-            load_cred_from_file(global_conf.credentialFilePath(),
-                                std::string(remote_path), username, password);
-        if (res == 0) {
-            LOG_INFO("auth found: `", username);
-            return std::make_pair(username, password);
-        }
 
-        LOG_ERROR("reload registry credential failed, token not found. "
-                  "{config_path:`, blob_url:`}",
-                  global_conf.credentialFilePath(), remote_path);
-        if (retry < 5) {
-            retry++;
-            photon::thread_sleep(1);
-        } else
-            photon::thread_sleep(10);
+    int res = load_cred_from_file(global_conf.credentialFilePath(), std::string(remote_path), username, password);
+    if (res == 0) {
+        LOG_INFO("auth found for `: `", remote_path, username);
+        return std::make_pair(username, password);
     }
+    return std::make_pair("", "");
 }
 
 void ImageService::set_result_file(std::string &filename, std::string &data) {
@@ -221,8 +209,8 @@ int ImageService::init() {
         }
 
         LOG_INFO("create registryfs with cafile:`", cafile);
-        auto registry_fs = FileSystem::new_registryfs_with_password_callback(
-            "", {this, &ImageService::reload_auth}, cafile, 36UL * 1000000);
+        auto registry_fs = FileSystem::new_registryfs_with_credential_callback(
+            {this, &ImageService::reload_auth}, cafile, 30UL * 1000000);
         if (registry_fs == nullptr) {
             LOG_ERROR_RETURN(0, -1, "create registryfs failed.");
         }
