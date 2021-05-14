@@ -47,7 +47,7 @@ ssize_t FileCacheStore::preadv(const struct iovec *iov, int iovcnt, off_t offset
     cachePool_->updateLru(iterator_);
     auto lruEntry = static_cast<FileCachePool::LruEntry *>(iterator_->second.get());
     photon::scoped_rwlock rl(lruEntry->rw_lock_, photon::RLOCK);
-    SCOPE_AUDIT_THRESHOLD(1UL * 1000, "file:read", AU_FILEOP("", offset, ret));
+    SCOPE_AUDIT_THRESHOLD(10UL * 1000, "file:read", AU_FILEOP("", offset, ret));
     ret = localFile_->preadv(iov, iovcnt, offset);
     return ret;
 }

@@ -18,11 +18,14 @@
 #include "overlaybd/fs/filesystem.h"
 
 namespace FileSystem {
+
+// switch to local file after background download finished, and audit for local file pread operations.
+// if initialized with local file, only audit for pread.
 class ISwitchFile : public IFile {
 public:
     virtual void set_switch_file(const char *filepath) = 0;
 };
 
-extern "C" ISwitchFile *new_switch_file(IFile *source);
+extern "C" ISwitchFile *new_switch_file(IFile *source, bool local=false, const char* filepath=nullptr);
 
 } // namespace FileSystem
