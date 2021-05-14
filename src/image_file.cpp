@@ -69,6 +69,16 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
         file = aligned_file;
     }
 
+    // set to local, no need to switch, for audit
+    FileSystem::ISwitchFile *switch_file = FileSystem::new_switch_file(file, true, path.c_str());
+    if (!switch_file) {
+        set_failed("failed to open switch file `" + path);
+        delete file;
+        LOG_ERROR_RETURN(0, nullptr, "new_switch_file(`) failed, `,:`", path, errno,
+                             strerror(errno));
+    }
+    file = switch_file;
+
     if (ZFile::is_zfile(file) == 1) {
         auto zf = ZFile::zfile_open_ro(file, false, true);
         if (!zf) {
