@@ -1,5 +1,7 @@
 # Overlaybd
 
+In commit [2392781](https://github.com/alibaba/overlaybd/commit/2392781246fd1a890d04ed42e2dc5d995e2c78db), the cache structure is adjusted that compressed data of Zfile is stored in cache instead of uncompressed data. The files in cache directory (default `/opt/overlaybd/registry_cache`) has to be cleaned if exists.
+
 ## Accelerated Container Image
 
 [Accelerated Container Image](https://github.com/alibaba/accelerated-container-image) is an open-source implementation of paper ["DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba).
