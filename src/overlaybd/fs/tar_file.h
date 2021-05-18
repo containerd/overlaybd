@@ -16,13 +16,18 @@
 
 #pragma once
 
+
 namespace FileSystem {
 
     class IFileSystem;
     class IFile;
-    extern "C" IFileSystem* new_tar_zfile_fs_adaptor(IFileSystem* fs);
+
+    // tarfile and tarfs are not complete implementation of tar.
+    // only for overlaybd remote blob, which stores one blob file with tar header and trailer.
+    // used to skip header for file I/O.
+
+    extern "C" IFileSystem* new_tar_fs_adaptor(IFileSystem* fs);
 
     extern "C" int is_tar_file(FileSystem::IFile *file);
-    extern "C" int is_tar_zfile(FileSystem::IFile *file);
     extern "C" IFile* new_tar_file_adaptor(FileSystem::IFile *file);
 }

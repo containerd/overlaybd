@@ -22,7 +22,7 @@ modprobe target_core_user
 
 ### Install From RPM/DEB
 
-You may download our RPM/DEB packages form [Release](https://github.com/alibaba/overlaybd/releases) and install.
+You may download our latest RPM/DEB packages form [Release](https://github.com/alibaba/overlaybd/releases) and install.
 
 The binaries are install to `/opt/overlaybd/bin/`.
 
@@ -30,15 +30,20 @@ Run `/opt/overlaybd/bin/overlaybd-tcmu` and the log is stored in `/var/log/overl
 
 It is better to run `overlaybd-tcmu` as a service so that it can be restarted after unexpected crashes.
 
+```bash
+sudo systemctl enable /opt/overlaybd/overlaybd-tcmu.service
+sudo systemctl start overlaybd-tcmu
+```
+
 ### Build From Source
 
 #### Requirements
 
 To build overlaybd from source code, the following dependencies are required:
 
-* CMake >= 3.8+
+* CMake >= 3.8
 
-* gcc/g++ >= 7+
+* gcc/g++ >= 7
 
 * Libaio, libcurl, libnl3, glib2 and openssl runtime and development libraries.
   * CentOS/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel glib2-devel`
@@ -54,7 +59,7 @@ cd overlaybd
 git submodule update --init
 ```
 
-The whole project is managed by CMake. Binaries and resource files will be installed to `/opt/overlaybd/`.
+The whole project is managed by CMake.
 
 During compilation, some third-party dependency libraries will be automatically downloaded, see `CMake/external<lib_name>.cmake`. If you are having problems to download, you could manually prepare these libs under `external/<lib_name>/src/`, see CMake [doc](https://cmake.org/cmake/help/latest/module/ExternalProject.html).
 
@@ -66,7 +71,9 @@ make -j
 sudo make install
 ```
 
-Finally, setup a systemd service for overlaybd-tcmu backstore.
+Binaries and resource files are installed to `/opt/overlaybd/`.
+
+Run `/opt/overlaybd/bin/overlaybd-tcmu` in command line tools or run as a service.
 
 ```bash
 sudo systemctl enable /opt/overlaybd/overlaybd-tcmu.service
@@ -76,7 +83,7 @@ sudo systemctl start overlaybd-tcmu
 ## Configuration
 
 ### overlaybd config
-Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
+Default configure file is installed to `/etc/overlaybd/overlaybd.json`.
 
 ```json
 {

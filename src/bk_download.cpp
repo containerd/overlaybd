@@ -117,7 +117,7 @@ bool BkDownload::download_done() {
         LOG_ERROR("rename(`,`), `:`", old_name, new_name, errno, strerror(errno));
         return false;
     }
-    LOG_INFO("rename(`,`) success", old_name, new_name);
+    LOG_INFO("download done. rename(`,`) success", old_name, new_name);
     return true;
 }
 

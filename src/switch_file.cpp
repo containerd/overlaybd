@@ -19,7 +19,6 @@
 #include "overlaybd/alog-stdstring.h"
 #include "overlaybd/alog.h"
 #include "overlaybd/fs/localfs.h"
-#include "overlaybd/fs/zfile/zfile.h"
 #include "overlaybd/photon/thread.h"
 #include "switch_file.h"
 
@@ -71,21 +70,6 @@ public:
         if (local_file == nullptr) {
             LOG_ERROR_RETURN(0, -1, "failed to open commit file, path: `, error: `(`)", m_filepath,
                              errno, strerror(errno));
-        }
-
-        int is_zf = ZFile::is_zfile(local_file);
-        if (is_zf == -1) {
-            delete local_file;
-            LOG_ERROR_RETURN(0, -1, "is_zfile(sf) path:`, error: `(`)", m_filepath, errno,
-                             strerror(errno));
-        }
-        if (is_zf == 1) {
-            auto zf = ZFile::zfile_open_ro(local_file, false, true);
-            if (!zf) {
-                delete local_file;
-                LOG_ERROR_RETURN(0, -1, "failed to open zfile. path:`, errno:`", m_filepath, errno);
-            }
-            local_file = zf;
         }
 
         LOG_INFO("switch to localfile '`' success.", m_filepath);

@@ -48,7 +48,7 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
     }
     if (ioengine == IOEngineType::io_engine_libaio) {
         flags |= O_DIRECT;
-        LOG_INFO("`: flag add O_DIRECT", path);
+        LOG_DEBUG("`: flag add O_DIRECT", path);
     }
 
     auto file = FileSystem::open_localfile_adaptor(path.c_str(), flags, 0644, ioengine);
@@ -58,7 +58,7 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
     }
 
     if (flags & O_DIRECT) {
-        LOG_INFO("create aligned file. IO_FLAGS: `", flags);
+        LOG_DEBUG("create aligned file. IO_FLAGS: `", flags);
         auto aligned_file = new_aligned_file_adaptor(file, FileSystem::ALIGNMENT_4K, true, true);
         if (!aligned_file) {
             set_failed("failed to open aligned_file_adaptor " + path);
@@ -125,16 +125,29 @@ FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std
     } else {
         switch_file = FileSystem::new_switch_file(remote_file);
     }
+
     if (!switch_file) {
         set_failed("failed to open switch file `" + url);
         delete remote_file;
         LOG_ERROR_RETURN(0, nullptr, "failed to open switch file `", url);
     }
 
-    FileSystem::IFile *sure_file = new_sure_file(switch_file, this);
+    FileSystem::IFile *file = (FileSystem::IFile*)switch_file;
+    if (ZFile::is_zfile(file) == 1) {
+        auto zf = ZFile::zfile_open_ro(file, true, true);
+        if (!zf) {
+            set_failed("failed to open zfile " + url);
+            delete file;
+            LOG_ERROR_RETURN(0, nullptr, "zfile_open_ro(`) failed, `:`", url, errno,
+                             strerror(errno));
+        }
+        file = zf;
+    }
+
+    FileSystem::IFile *sure_file = new_sure_file(file, this);
     if (!sure_file) {
         set_failed("failed to open sure file `" + url);
-        delete switch_file;
+        delete file;
         LOG_ERROR_RETURN(0, nullptr, "failed to open sure file `", url);
     }
 

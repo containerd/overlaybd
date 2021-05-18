@@ -13,12 +13,11 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
-#include "tar_zfile.h"
+#include "tar_file.h"
 
-#include "../../alog.h"
-#include "../../fs/filesystem.h"
-#include "../../fs/forwardfs.h"
-#include "../../fs/zfile/zfile.h"
+#include "../alog.h"
+#include "../fs/filesystem.h"
+#include "../fs/forwardfs.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
@@ -193,6 +192,11 @@ public:
         return m_file->pread(buf, count, offset);
     }
 
+    virtual ssize_t preadv(const struct iovec *iov, int iovcnt, off_t offset) override {
+        offset += base_offset;
+        return m_file->preadv(iov, iovcnt, offset);
+    }
+
     virtual int close() override {
         struct stat s;
         m_file->fstat(&s);
@@ -250,9 +254,9 @@ private:
     }
 }; // namespace FileSystem
 
-class TarZfileFs : public ForwardFS_Ownership {
+class TarFs : public ForwardFS_Ownership {
 public:
-    TarZfileFs(IFileSystem *fs) : ForwardFS_Ownership(fs, true) {
+    TarFs(IFileSystem *fs) : ForwardFS_Ownership(fs, true) {
     }
     IFile *open(const char *pathname, int flags, mode_t mode) {
         IFile *file = m_fs->open(pathname, flags, mode);
@@ -260,7 +264,7 @@ public:
             return nullptr;
         }
         if (flags & O_RDONLY) {
-            return open_tar_zfile(file, pathname);
+            return open_tar_file(file);
         }
         struct stat s;
         file->fstat(&s);
@@ -268,7 +272,7 @@ public:
             mark_new_tar(file);
             return new TarFile(file);
         }
-        return open_tar_zfile(file, pathname);
+        return open_tar_file(file);
     }
 
     IFile *open(const char *pathname, int flags) {
@@ -277,7 +281,7 @@ public:
             return nullptr;
         }
         if (flags & O_RDONLY) {
-            return open_tar_zfile(file, pathname);
+            return open_tar_file(file);
         }
         struct stat s;
         file->fstat(&s);
@@ -285,7 +289,7 @@ public:
             mark_new_tar(file);
             return new TarFile(file);
         }
-        return open_tar_zfile(file, pathname);
+        return open_tar_file(file);
     }
 
 private:
@@ -301,46 +305,15 @@ private:
 
     TarFile *open_tar_file(IFile *file) {
         if (is_tar_file(file) == 1) {
-            return new TarFile(file);
-        }
-        return nullptr;
-    }
-
-    IFile *open_tar_zfile(IFile *file, const char *path) {
-        if (ZFile::is_zfile(file) == 1) {
-            //a zfile without tar
-            auto zf = ZFile::zfile_open_ro(file, true, true);
-            if (!zf) {
-                delete file;
-                LOG_ERROR_RETURN(0, nullptr, "zfile_open_ro(`) failed, `:`", path, errno, strerror(errno));
-            }
-            return zf;
-        } else {
-            TarFile *tfile = open_tar_file(file);
-            if (!tfile) {
-                delete file;
-                LOG_ERROR_RETURN(0, nullptr, "open_tar_file(`) failed, `:`", path, errno, strerror(errno));
-            }
-            if (ZFile::is_zfile(tfile) == 1) {
-                // a zfile in tar
-                auto zf = ZFile::zfile_open_ro(tfile, true, true);
-                if (!zf) {
-                    delete tfile;
-                    LOG_ERROR_RETURN(0, nullptr, "zfile_open_ro(`) failed, `:`", path, errno, strerror(errno));
-                }
-                return zf;
-            } else {
-                // not a zfile in tar
-                delete tfile;
-                LOG_ERROR_RETURN(0, nullptr, "not a zfile in tar: `", path);
-            }
+            auto ret = new TarFile(file);
+            return ret;
         }
         return nullptr;
     }
 };
 
-IFileSystem *new_tar_zfile_fs_adaptor(IFileSystem *fs) {
-    return new TarZfileFs(fs);
+IFileSystem *new_tar_fs_adaptor(IFileSystem *fs) {
+    return new TarFs(fs);
 }
 
 int is_tar_file(IFile *file) {
@@ -359,12 +332,6 @@ int is_tar_file(IFile *file) {
         LOG_ERROR_RETURN(0, 0, "tar header checksum error");
     }
     return 1;
-}
-
-int is_tar_zfile(IFile *file) {
-    auto tfile = new_tar_file_adaptor(file);
-    if (!tfile) return -1;
-    return ZFile::is_zfile(tfile);
 }
 
 IFile *new_tar_file_adaptor(IFile *file) {
