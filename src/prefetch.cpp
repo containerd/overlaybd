@@ -70,7 +70,8 @@ public:
         if (m_mode == Mode::Record) {
             int lock_fd = open(m_lock_file_path.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_EXCL, 0666);
             close(lock_fd);
-            photon::thread_create11(&PrefetcherImpl::detect_lock, this);
+            auto th = photon::thread_create11(&PrefetcherImpl::detect_lock, this);
+            m_detect_thread = photon::thread_enable_join(th);
         }
 
         // Reload if going to replay
@@ -81,8 +82,14 @@ public:
     }
 
     ~PrefetcherImpl() {
-        if (m_mode == Mode::Record && !m_record_stopped) {
+        if (m_mode == Mode::Record) {
+            m_record_stopped = true;
+            if (m_detect_thread_interruptible) {
+                photon::thread_shutdown((photon::thread*) m_detect_thread);
+            }
+            photon::thread_join(m_detect_thread);
             dump();
+
         } else if (m_mode == Mode::Replay) {
             m_replay_stopped = true;
             for (auto th : m_replay_threads) {
@@ -90,6 +97,7 @@ public:
                 photon::thread_join(th);
             }
         }
+
         if (m_trace_file != nullptr) {
             m_trace_file->close();
             m_trace_file = nullptr;
@@ -174,6 +182,8 @@ private:
     queue<TraceFormat> m_replay_queue;
     map<uint32_t, IFile*> m_src_files;
     vector<photon::join_handle*> m_replay_threads;
+    photon::join_handle* m_detect_thread = nullptr;
+    bool m_detect_thread_interruptible = false;
     string m_lock_file_path;
     string m_ok_file_path;
     IFile* m_trace_file = nullptr;
@@ -182,6 +192,10 @@ private:
     bool m_buffer_released = false;
 
     int dump() {
+        if (m_trace_file == nullptr) {
+            return 0;
+        }
+
         if (access(m_ok_file_path.c_str(), F_OK) != 0) {
             unlink(m_ok_file_path.c_str());
         }
@@ -268,8 +282,13 @@ private:
     }
 
     int detect_lock() {
-        while (true) {
-            photon::thread_sleep(1);
+        while (!m_record_stopped) {
+            m_detect_thread_interruptible = true;
+            int ret = photon::thread_sleep(1);
+            m_detect_thread_interruptible = false;
+            if (ret != 0) {
+                break;
+            }
             if (access(m_lock_file_path.c_str(), F_OK) != 0) {
                 m_record_stopped = true;
                 dump();
