@@ -54,18 +54,14 @@ ALIGNED_MEM4K(buf, PREAD_LEN);
 
 #define LEN(x) (size_t)(sizeof(x) / sizeof(x[0]))
 
-//#define DISABLE_TEST true
-
-#define LAYER_SIZE 5
-
 vector<string> args{};
 
 DEFINE_string(io_engine, "psync", "set io engine, psync|libaio|posixaio");
 DEFINE_int32(threads, 1, "number of photon threads (test in FileTest3.photon_verify)");
-DEFINE_int32(nwrites, 16384, "write times in each layer.");
+DEFINE_int32(nwrites, 4096, "write times in each layer.");
 DEFINE_int32(layers, 3, "image layers.");
-DEFINE_uint64(vsize, 128, "image virtual size. (MB)");
-DEFINE_bool(verify, false, "create verify file.");
+DEFINE_uint64(vsize, 64, "image virtual size. (MB)");
+DEFINE_bool(verify, true, "create verify file.");
 DEFINE_int32(log_level, 1, "alog level.");
 
 class FileTest : public ::testing::Test {
