@@ -434,9 +434,18 @@ int main(int argc, char **argv) {
     main_loop->run();
 
     while (main_loop != nullptr) {
-        photon::thread_sleep(1);
+        photon::thread_usleep(200*1000);
     }
+    LOG_INFO("main loop exited");
 
-    tcmulib_close(tcmulib_ctx);
+    // call tcmulib_close in another thread to avoid hang of photon threads
+    auto th = photon::CURRENT;
+    std::thread close_thread([&, th](){
+        tcmulib_close(tcmulib_ctx);
+        LOG_INFO("tcmulib closed");
+        photon::safe_thread_interrupt(th, EINTR, 0);
+    });
+    close_thread.detach();
+    photon::thread_usleep(-1UL);
     return 0;
 }
