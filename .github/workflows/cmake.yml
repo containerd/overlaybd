@@ -21,7 +21,6 @@ jobs:
     - name: Install Dependencies
       shell: bash
       run: |
-        git submodule update --init
         sudo apt install -y pkg-config libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libglib2.0-dev
         wget https://github.com/google/googletest/archive/refs/tags/release-1.10.0.tar.gz
         tar -zxvf release-1.10.0.tar.gz

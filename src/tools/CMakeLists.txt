@@ -36,11 +36,10 @@ find_package(OpenSSL REQUIRED)
 
 
 add_executable(overlaybd-info overlaybd-info.cpp)
-add_dependencies(overlaybd-info RapidJSON)
 target_include_directories(overlaybd-info PUBLIC
     ${CURL_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIR}
-    ${RAPIDJSON_INCLUDE_DIR}
+    ${rapidjson_SOURCE_DIR}/include
 )
 target_link_libraries(overlaybd-info
     -Wl,--whole-archive
@@ -77,11 +76,10 @@ target_link_libraries(overlaybd-zfile
 )
 
 add_executable(overlaybd-check overlaybd-check.cpp)
-add_dependencies(overlaybd-check RapidJSON)
 target_include_directories(overlaybd-check PUBLIC
     ${CURL_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIR}
-    ${RAPIDJSON_INCLUDE_DIR}
+    ${rapidjson_SOURCE_DIR}/include
 )
 target_link_libraries(overlaybd-check
     -Wl,--whole-archive

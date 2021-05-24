@@ -32,9 +32,9 @@
 #include <endian.h>
 #include <errno.h>
 #include "scsi_helper.h"
-#include "tcmu-runner/scsi_defs.h"
-#include "tcmu-runner/libtcmu.h"
-#include "tcmu-runner/libtcmu_common.h"
+#include "scsi_defs.h"
+#include "libtcmu.h"
+#include "libtcmu_common.h"
 
 static void copy_to_response_buf(uint8_t *to_buf, size_t to_len,
 				 uint8_t *from_buf, size_t from_len)
