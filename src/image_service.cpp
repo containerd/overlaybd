@@ -23,7 +23,7 @@
 #include "overlaybd/fs/filesystem.h"
 #include "overlaybd/fs/localfs.h"
 #include "overlaybd/fs/registryfs/registryfs.h"
-#include "overlaybd/fs/zfile/tar_zfile.h"
+#include "overlaybd/fs/tar_file.h"
 #include "overlaybd/fs/zfile/zfile.h"
 #include "overlaybd/photon/thread.h"
 #include <dirent.h>
@@ -229,16 +229,16 @@ int ImageService::init() {
             LOG_ERROR_RETURN(0, -1, "create registryfs failed.");
         }
 
-        auto zfile_fs = FileSystem::new_tar_zfile_fs_adaptor(registry_fs);
-        if (zfile_fs == nullptr) {
+        auto tar_fs = FileSystem::new_tar_fs_adaptor(registry_fs);
+        if (tar_fs == nullptr) {
             delete registry_fs;
-            LOG_ERROR_RETURN(0, -1, "create zfile_fs failed.");
+            LOG_ERROR_RETURN(0, -1, "create tar_fs failed.");
         }
 
         auto registry_cache_fs = FileSystem::new_localfs_adaptor(
             global_conf.registryCacheDir().c_str());
         if (registry_cache_fs == nullptr) {
-            delete zfile_fs;
+            delete tar_fs;
             LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed",
                              global_conf.registryCacheDir().c_str());
             return false;
@@ -247,18 +247,18 @@ int ImageService::init() {
         LOG_INFO("create cache with size: ` GB",
                  global_conf.registryCacheSizeGB());
         global_fs.remote_fs = FileSystem::new_full_file_cached_fs(
-            zfile_fs, registry_cache_fs, 256 * 1024 /* refill unit 256KB */,
+            tar_fs, registry_cache_fs, 256 * 1024 /* refill unit 256KB */,
             global_conf.registryCacheSizeGB() /*GB*/, 10000000,
             (uint64_t)1048576 * 4096, nullptr);
 
         if (global_fs.remote_fs == nullptr) {
-            delete zfile_fs;
+            delete tar_fs;
             delete registry_cache_fs;
             LOG_ERROR_RETURN(0, -1,
                              "create remotefs (registryfs + cache) failed.");
         }
         global_fs.cachefs = registry_cache_fs;
-        global_fs.srcfs = zfile_fs;
+        global_fs.srcfs = registry_fs;
     }
     return 0;
 }
@@ -279,7 +279,7 @@ ImageFile *ImageService::create_image_file(const char *config_path) {
     }
 
     auto resFile = cfg.resultFile();
-    ImageFile *ret = new ImageFile(cfg, global_fs, global_conf);
+    ImageFile *ret = new ImageFile(cfg, *this);
     if (ret->m_status <= 0) {
         std::string data = "failed:" + ret->m_exception;
         set_result_file(resFile, data);

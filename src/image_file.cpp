@@ -41,14 +41,14 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
     int flags = O_RDONLY;
 
     LOG_DEBUG("open ro file: `", path);
-    int ioengine = gconf.ioEngine();
+    int ioengine = image_service.global_conf.ioEngine();
     if (ioengine > 2) {
         LOG_WARN("invalid ioengine: `, set to psync", ioengine);
         ioengine = 0;
     }
     if (ioengine == IOEngineType::io_engine_libaio) {
         flags |= O_DIRECT;
-        LOG_INFO("`: flag add O_DIRECT", path);
+        LOG_DEBUG("`: flag add O_DIRECT", path);
     }
 
     auto file = FileSystem::open_localfile_adaptor(path.c_str(), flags, 0644, ioengine);
@@ -58,7 +58,7 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
     }
 
     if (flags & O_DIRECT) {
-        LOG_INFO("create aligned file. IO_FLAGS: `", flags);
+        LOG_DEBUG("create aligned file. IO_FLAGS: `", flags);
         auto aligned_file = new_aligned_file_adaptor(file, FileSystem::ALIGNMENT_4K, true, true);
         if (!aligned_file) {
             set_failed("failed to open aligned_file_adaptor " + path);
@@ -68,8 +68,7 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
         }
         file = aligned_file;
     }
-
-    // set to local, no need to switch, for audit
+    // set to local, no need to switch, for zfile and audit
     FileSystem::ISwitchFile *switch_file = FileSystem::new_switch_file(file, true, path.c_str());
     if (!switch_file) {
         set_failed("failed to open switch file `" + path);
@@ -78,17 +77,6 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
                              strerror(errno));
     }
     file = switch_file;
-
-    if (ZFile::is_zfile(file) == 1) {
-        auto zf = ZFile::zfile_open_ro(file, false, true);
-        if (!zf) {
-            set_failed("failed to open zfile " + path);
-            delete file;
-            LOG_ERROR_RETURN(0, nullptr, "zfile_open_ro(`) failed, `:`", path, errno,
-                             strerror(errno));
-        }
-        file = zf;
-    }
 
     return file;
 }
@@ -109,7 +97,7 @@ FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std
     url += digest;
 
     LOG_DEBUG("open file from remotefs: `, size: `", url, size);
-    FileSystem::IFile *remote_file = gfs.remote_fs->open(url.c_str(), O_RDONLY);
+    FileSystem::IFile *remote_file = image_service.global_fs.remote_fs->open(url.c_str(), O_RDONLY);
     if (!remote_file) {
         if (errno == EPERM)
             set_auth_failed();
@@ -118,20 +106,20 @@ FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std
         LOG_ERROR_RETURN(0, nullptr, "failed to open remote file `", url);
     }
 
-    FileSystem::ISwitchFile *switch_file = nullptr;
-    if (m_prefetcher != nullptr) {
-        auto prefetch_file = m_prefetcher->new_prefetch_file(remote_file, layer_index);
-        switch_file = FileSystem::new_switch_file(prefetch_file);
-    } else {
-        switch_file = FileSystem::new_switch_file(remote_file);
-    }
+
+    FileSystem::ISwitchFile *switch_file = FileSystem::new_switch_file(remote_file);
     if (!switch_file) {
         set_failed("failed to open switch file `" + url);
         delete remote_file;
         LOG_ERROR_RETURN(0, nullptr, "failed to open switch file `", url);
     }
 
-    FileSystem::IFile *sure_file = new_sure_file(switch_file, this);
+    FileSystem::IFile *file = switch_file;
+    if (m_prefetcher != nullptr) {
+        file = m_prefetcher->new_prefetch_file(switch_file, layer_index);
+    }
+
+    FileSystem::IFile *sure_file = new_sure_file(file, this);
     if (!sure_file) {
         set_failed("failed to open sure file `" + url);
         delete switch_file;
@@ -139,11 +127,17 @@ FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std
     }
 
     if (conf.HasMember("download") && conf.download().enable() == 1) {
-        BKDL::BkDownload *obj =
-            new BKDL::BkDownload(switch_file, remote_file, dir, conf.download().maxMBps(),
-                                 conf.download().tryCnt(), this);
-        LOG_DEBUG("add to download list for `", dir);
-        dl_list.push_back(obj);
+        // download from registry, verify sha256 after downloaded.
+        FileSystem::IFile *srcfile = image_service.global_fs.srcfs->open(url.c_str(), O_RDONLY);
+        if (srcfile == nullptr) {
+            LOG_WARN("failed to open source file, ignore download");
+        } else {
+            BKDL::BkDownload *obj =
+                new BKDL::BkDownload(switch_file, srcfile, dir, conf.download().maxMBps(),
+                                    conf.download().tryCnt(), this, digest);
+            LOG_DEBUG("add to download list for `", dir);
+            dl_list.push_back(obj);
+        }
     }
 
     return sure_file;

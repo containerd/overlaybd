@@ -26,7 +26,7 @@
 #include <thread>
 #include <unistd.h>
 #include <sys/stat.h>
-
+#include "image_service.h"
 #include "bk_download.h"
 #include "config.h"
 #include "image_service.h"
@@ -39,9 +39,8 @@
 
 class ImageFile : public FileSystem::ForwardFile {
 public:
-    ImageFile(ImageConfigNS::ImageConfig &_conf, struct GlobalFs &_gfs,
-              ImageConfigNS::GlobalConfig &_gconf)
-        : gfs(_gfs), gconf(_gconf), ForwardFile(nullptr) {
+    ImageFile(ImageConfigNS::ImageConfig &_conf, ImageService &is)
+        : ForwardFile(nullptr), image_service(is) {
         conf.CopyFrom(_conf, conf.GetAllocator());
         m_exception = "";
         m_status = init_image_file();
@@ -105,12 +104,11 @@ public:
     bool read_only = false;
 
 private:
-    struct GlobalFs &gfs;
     FileSystem::Prefetcher* m_prefetcher = nullptr;
-    ImageConfigNS::GlobalConfig &gconf;
     ImageConfigNS::ImageConfig conf;
     std::list<BKDL::BkDownload *> dl_list;
     photon::join_handle *dl_thread_jh = nullptr;
+    ImageService &image_service;
 
     int init_image_file();
     void set_failed(std::string reason);

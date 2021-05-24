@@ -142,6 +142,7 @@ namespace FileSystem
     #endif
     int IFile::trim(off_t offset, off_t len)
     {
+        LOG_DEBUG("do trim ` `", offset, len);
         int mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE;
         return this->fallocate(mode, offset, len);
     }
