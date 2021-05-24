@@ -19,9 +19,10 @@
 #include "overlaybd/alog-stdstring.h"
 #include "overlaybd/alog.h"
 #include "overlaybd/fs/localfs.h"
-#include "overlaybd/fs/zfile/zfile.h"
 #include "overlaybd/photon/thread.h"
+#include "overlaybd/fs/tar_file.h"
 #include "switch_file.h"
+#include "overlaybd/fs/zfile/zfile.h"
 
 using namespace std;
 
@@ -67,30 +68,26 @@ public:
     int do_switch() {
         int flags = O_RDONLY;
         // TODO support libaio
-        auto local_file = open_localfile_adaptor(m_filepath.c_str(), flags, 0644, 0);
-        if (local_file == nullptr) {
+        auto file = open_localfile_adaptor(m_filepath.c_str(), flags, 0644, 0);
+        if (file == nullptr) {
             LOG_ERROR_RETURN(0, -1, "failed to open commit file, path: `, error: `(`)", m_filepath,
                              errno, strerror(errno));
         }
 
-        int is_zf = ZFile::is_zfile(local_file);
-        if (is_zf == -1) {
-            delete local_file;
-            LOG_ERROR_RETURN(0, -1, "is_zfile(sf) path:`, error: `(`)", m_filepath, errno,
-                             strerror(errno));
+        // if tar file, open tar file
+        file = FileSystem::new_tar_file_adaptor(file);
+        //open zfile
+        auto zf = ZFile::zfile_open_ro(file, false, true);
+        if (!zf) {
+            delete file;
+            LOG_ERROR_RETURN(0, -1, "zfile_open_ro failed, path: `: error: `(`)", m_filepath, errno,
+                                    strerror(errno));
         }
-        if (is_zf == 1) {
-            auto zf = ZFile::zfile_open_ro(local_file, false, true);
-            if (!zf) {
-                delete local_file;
-                LOG_ERROR_RETURN(0, -1, "failed to open zfile. path:`, errno:`", m_filepath, errno);
-            }
-            local_file = zf;
-        }
+        file = zf;
 
         LOG_INFO("switch to localfile '`' success.", m_filepath);
         m_old = m_file;
-        m_file = local_file;
+        m_file = file;
         local_path = true;
         return 0;
     }
@@ -111,8 +108,9 @@ public:
             photon::thread_usleep(1000);
         }
         // set set to 0, even do_switch failed
-        do_switch();
-        state = 0;
+        if (do_switch() == 0) {
+            state = 0;
+        }
         return 0;
     }
 
@@ -181,6 +179,15 @@ public:
 };
 
 ISwitchFile *new_switch_file(IFile *source, bool local, const char* file_path) {
-    return new SwitchFile(source, local, file_path);
+    // if tar file, open tar file
+    IFile *file = FileSystem::new_tar_file_adaptor(source);
+    // open zfile
+    auto zf = ZFile::zfile_open_ro(file, local ? false : true, true);
+    if (!zf) {
+        LOG_ERROR_RETURN(0, nullptr, "zfile_open_ro failed, path: `: error: `(`)", file_path, errno,
+                                    strerror(errno));
+    }
+    file = zf;
+    return new SwitchFile(file, local, file_path);
 };
 } // namespace FileSystem

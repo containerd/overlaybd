@@ -18,7 +18,7 @@
 #include "../overlaybd/fs/localfs.h"
 #include "../overlaybd/fs/virtual-file.h"
 #include "../overlaybd/fs/zfile/zfile.h"
-#include "../overlaybd/fs/zfile/tar_zfile.h"
+#include "../overlaybd/fs/tar_file.h"
 #include "../overlaybd/utility.h"
 #include "../overlaybd/uuid.h"
 #include <cstdio>
@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
     }
     IFileSystem *fs = lfs;
     if (tar)
-        fs = new_tar_zfile_fs_adaptor(lfs);
+        fs = new_tar_fs_adaptor(lfs);
 
     int ret = 0;
     CompressArgs args(opt);

@@ -40,11 +40,12 @@ public:
     BkDownload() = delete;
     ~BkDownload() {
         unlock_file();
+        delete src_file;
     }
     BkDownload(FileSystem::ISwitchFile *sw_file, FileSystem::IFile *src_file, const std::string dir,
-               int32_t limit_MB_ps, int32_t try_cnt, ImageFile *image_file)
+               int32_t limit_MB_ps, int32_t try_cnt, ImageFile *image_file, std::string digest)
         : sw_file(sw_file), src_file(src_file), dir(dir), limit_MB_ps(limit_MB_ps),
-          try_cnt(try_cnt), image_file(image_file) {
+          try_cnt(try_cnt), image_file(image_file), digest(digest) {
     }
 
 private:
@@ -56,6 +57,7 @@ private:
     FileSystem::IFile *src_file = nullptr;
     int32_t limit_MB_ps;
     ImageFile *image_file;
+    std::string digest;
 };
 
 void bk_download_proc(std::list<BKDL::BkDownload *> &, uint64_t, int &);
