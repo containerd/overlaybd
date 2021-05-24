@@ -24,10 +24,10 @@
 #include "overlaybd/photon/syncio/signal.h"
 #include "overlaybd/photon/thread-pool.h"
 #include "overlaybd/photon/thread.h"
-#include "tcmu-runner/libtcmu.h"
-#include "tcmu-runner/libtcmu_common.h"
-#include "tcmu-runner/scsi.h"
-#include "tcmu-runner/scsi_defs.h"
+#include "libtcmu.h"
+#include "libtcmu_common.h"
+#include "scsi.h"
+#include "scsi_defs.h"
 #include "scsi_helper.h"
 #include <fcntl.h>
 #include <scsi/scsi.h>
@@ -438,14 +438,7 @@ int main(int argc, char **argv) {
     }
     LOG_INFO("main loop exited");
 
-    // call tcmulib_close in another thread to avoid hang of photon threads
-    auto th = photon::CURRENT;
-    std::thread close_thread([&, th](){
-        tcmulib_close(tcmulib_ctx);
-        LOG_INFO("tcmulib closed");
-        photon::safe_thread_interrupt(th, EINTR, 0);
-    });
-    close_thread.detach();
-    photon::thread_usleep(-1UL);
+    tcmulib_close(tcmulib_ctx);
+    LOG_INFO("tcmulib closed");
     return 0;
 }
