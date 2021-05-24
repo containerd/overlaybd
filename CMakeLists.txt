@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.11)
 
 project(
   overlaybd
@@ -11,8 +11,6 @@ set(LIBRARY_OUTPUT_PATH "${CMAKE_SOURCE_DIR}/build/output")
 set(EXECUTABLE_OUTPUT_PATH "${CMAKE_SOURCE_DIR}/build/output")
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
-
-include(CMake/externals.cmake)
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fpic")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fpic")

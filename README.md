@@ -36,9 +36,9 @@ It is better to run `overlaybd-tcmu` as a service so that it can be restarted af
 
 To build overlaybd from source code, the following dependencies are required:
 
-* CMake >= 3.8+
+* CMake >= 3.11
 
-* gcc/g++ >= 7+
+* gcc/g++ >= 7
 
 * Libaio, libcurl, libnl3, glib2 and openssl runtime and development libraries.
   * CentOS/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel glib2-devel`
@@ -46,17 +46,14 @@ To build overlaybd from source code, the following dependencies are required:
 
 #### Build
 
-You need git to checkout the source code and submodule:
+You need git to checkout the source code:
 
 ```bash
 git clone https://github.com/alibaba/overlaybd.git
 cd overlaybd
-git submodule update --init
 ```
 
 The whole project is managed by CMake. Binaries and resource files will be installed to `/opt/overlaybd/`.
-
-During compilation, some third-party dependency libraries will be automatically downloaded, see `CMake/external<lib_name>.cmake`. If you are having problems to download, you could manually prepare these libs under `external/<lib_name>/src/`, see CMake [doc](https://cmake.org/cmake/help/latest/module/ExternalProject.html).
 
 ```bash
 mkdir build
