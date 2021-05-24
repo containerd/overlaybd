@@ -22,6 +22,7 @@
 #include "../../../iovector.h"
 #include "../../../utility.h"
 #include "../pool_store.h"
+#include "../../range-split.h"
 
 namespace Cache {
 
@@ -284,11 +285,15 @@ int CachedFile::query(off_t offset, size_t count) {
 }
 
 int CachedFile::fallocate(int mode, off_t offset, off_t len) {
-    if (offset % pageSize_ != 0 || len % pageSize_ != 0) {
-        LOG_ERROR_RETURN(EINVAL, -1, "size or offset is not aligned to 4K, size : `, offset : `",
-                         len, offset);
+    if (len == -1) {
+        return cache_store_->evict(offset, len);
     }
-    return cache_store_->evict(offset, len);
+    range_split_power2 rs(offset, len, pageSize_);
+    auto aligned_offset = rs.aligned_begin_offset();
+    auto aligned_len = rs.aligned_length();
+    LOG_DEBUG("fallocate offset: `, len: `, aligned offset: `, aligned len: `",
+                          offset, len, aligned_offset, aligned_len);
+    return cache_store_->evict(aligned_offset, aligned_len);
 }
 
 int CachedFile::fstat(struct stat *buf) {

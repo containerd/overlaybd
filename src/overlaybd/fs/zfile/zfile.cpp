@@ -230,11 +230,26 @@ namespace ZFile
                 m_begin_idx = m_offset / m_block_size;
                 m_idx = m_begin_idx;
                 m_end = m_offset + count - 1;
-                m_end_idx = (m_offset + count - 1) /
-                                m_block_size +
-                            1;
+                m_end_idx = (m_offset + count - 1) / m_block_size + 1;
                 LOG_DEBUG("[ offset: `, length: ` ], begin_blk: `, end_blk: `, enable_verify: `",
                           offset, count, m_begin_idx, m_end_idx, m_verify);
+            }
+
+            int reload(size_t idx)
+            {
+                auto read_size = get_blocks_length(idx, idx+1);
+                auto begin_offset = m_zfile->m_jump_table[idx];
+                int trim_res = m_zfile->m_file->trim(begin_offset, read_size);
+                if (trim_res < 0) {
+                    LOG_ERROR_RETURN(0, -1, "failed to trim block idx: `", idx);
+                }
+                auto readn = m_zfile->m_file->pread(m_buf + m_buf_offset, read_size, begin_offset);
+                if (readn != (ssize_t)read_size)
+                {
+                    LOG_ERRNO_RETURN(0, -1, "read compressed blocks failed. (offset: `, len: `)",
+                                     begin_offset, read_size);
+                }
+                return 0;
             }
 
             int read_blocks(size_t begin, size_t end)
@@ -382,6 +397,11 @@ namespace ZFile
                     return this->m_reader != rhs.m_reader;
                 }
 
+                const int reload() const
+                {
+                    return m_reader->reload(m_reader->m_idx);
+                }
+
                 BlockReader *m_reader = nullptr;
             };
 
@@ -429,11 +449,23 @@ namespace ZFile
             {
                 if (m_ht.opt.verify)
                 {
+                    int retry = 2;
+                again:
                     auto c = crc32c((void *)block.buffer(), block.compressed_size);
                     if (c != block.crc32_code())
                     {
-                        LOG_ERRNO_RETURN(ECHECKSUM, -1, "checksum failed {moffset: `, length: `} (expected ` but got `)",
-                                         block.m_reader->m_buf_offset, block.compressed_size, block.crc32_code(), c);
+                        if (retry--) {
+                            int reload_res = block.reload();
+                            LOG_ERROR("checksum failed {offset: `, length: `} (expected ` but got `), reload result: `",
+                                            block.m_reader->m_buf_offset, block.compressed_size, block.crc32_code(), c, reload_res);
+                            if (reload_res < 0) {
+                                LOG_ERROR_RETURN(ECHECKSUM, -1, "checksum verification and reload failed");
+                            }
+                            goto again;
+                        } else {
+                            LOG_ERROR_RETURN(ECHECKSUM, -1, "checksum verification failed after retries {offset: `, length: `}",
+                                block.m_reader->m_buf_offset, block.compressed_size);
+                        }
                     }
                 }
                 if (block.cp_len == m_ht.opt.block_size)
@@ -532,9 +564,20 @@ namespace ZFile
         }
         CompressionFile::HeaderTrailer ht;
         CompressionFile::JumpTable jump_table;
+        int retry = 2;
+    again:
         if (load_jump_table(file, &ht, jump_table, true) == false)
         {
-            LOG_ERRNO_RETURN(EIO, nullptr, "Failed to read index. (file `)", file);
+            if (verify && retry--) {
+                // verify means the source can be evicted. evict and retry
+                auto res = file->fallocate(0, 0, -1);
+                LOG_ERROR("failed load_jump_table, fallocate result: `", res);
+                if (res < 0) {
+                    LOG_ERRNO_RETURN(EIO, nullptr, "failed to read index for file: `, fallocate failed, no retry", file);
+                }
+                goto again;
+            }
+            LOG_ERRNO_RETURN(EIO, nullptr, "failed to read index for file: `", file);
         }
         auto zfile = new CompressionFile(file, ownership);
         zfile->m_ht = ht;
@@ -544,8 +587,7 @@ namespace ZFile
         LOG_DEBUG("compress type: `, bs: `, verify_checksum: `",
                  ht.opt.type, ht.opt.block_size, ht.opt.verify);
 
-        zfile->m_compressor.reset(
-            create_compressor(&args));
+        zfile->m_compressor.reset(create_compressor(&args));
         zfile->m_ownership = ownership;
         zfile->valid = true;
         return zfile;

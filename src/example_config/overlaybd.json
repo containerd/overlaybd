@@ -9,5 +9,7 @@
         "delay": 600,
         "delayExtra": 30,
         "maxMBps": 100
-    }
+    },
+    "enableAudit": true,
+    "auditPath": "/var/log/overlaybd-audit.log"
 }
