@@ -75,36 +75,10 @@ target_link_libraries(overlaybd-zfile
     -static-libgcc
 )
 
-add_executable(overlaybd-check overlaybd-check.cpp)
-target_include_directories(overlaybd-check PUBLIC
-    ${CURL_INCLUDE_DIRS}
-    ${OPENSSL_INCLUDE_DIR}
-    ${rapidjson_SOURCE_DIR}/include
-)
-target_link_libraries(overlaybd-check
-    -Wl,--whole-archive
-    base_lib
-    fs_lib
-    photon_lib
-    net_lib
-    image_lib
-    ${CURL_LIBRARY}
-    ${OPENSSL_SSL_LIBRARY}
-    ${OPENSSL_CRYPTO_LIBRARY}
-    -Wl,--no-whole-archive
-    -laio
-    -lrt
-    -lresolv
-    -lpthread
-    -ldl
-    -static-libgcc
-)
-
 install(TARGETS
     overlaybd-commit
     overlaybd-create
     overlaybd-info
     overlaybd-zfile
-    overlaybd-check
     DESTINATION /opt/overlaybd/bin
 )

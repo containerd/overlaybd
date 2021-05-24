@@ -143,7 +143,7 @@ public:
             if (trace.op == PrefetcherImpl::TraceOp::READ) {
                 ssize_t n_read = src_file->pread(buf, trace.count, trace.offset);
                 if (n_read != (ssize_t) trace.count) {
-                    LOG_ERROR("Prefetch: replay pread failed: `, `", ERRNO(), trace);
+                    LOG_ERROR("Prefetch: replay pread failed: `, `, respect: `, got: `", ERRNO(), trace, trace.count, n_read);
                     continue;
                 }
             }

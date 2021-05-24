@@ -17,19 +17,59 @@
 #include <list>
 #include <set>
 #include <string>
+#include <thread>
 #include <sys/file.h>
 #include "overlaybd/alog-stdstring.h"
 #include "overlaybd/alog.h"
 #include "overlaybd/fs/localfs.h"
 #include "overlaybd/fs/throttled-file.h"
 #include "overlaybd/photon/thread.h"
+#include "overlaybd/photon/syncio/fd-events.h"
 #include "bk_download.h"
 #include "overlaybd/event-loop.h"
+#include <openssl/sha.h>
+#include <sys/stat.h>
+#include <unistd.h>
 using namespace FileSystem;
 
 static constexpr size_t ALIGNMENT = 4096;
 
 namespace BKDL {
+
+std::string sha256sum(const char* fn) {
+    constexpr size_t BUFFERSIZE = 65536;
+    int fd = open(fn, O_RDONLY | O_DIRECT);
+    if (fd < 0) {
+        LOG_ERROR("failed to open `", fn);
+        return "";
+    }
+    struct stat stat;
+    if (::fstat(fd, &stat) < 0) {
+        LOG_ERROR("failed to stat `", fn);
+        return "";
+    }
+    SHA256_CTX ctx = {0};
+    SHA256_Init(&ctx);
+    __attribute__((aligned(ALIGNMENT))) char buffer[65536];
+    unsigned char sha[32];
+    int recv = 0;
+    for (off_t offset = 0; offset < stat.st_size; offset += BUFFERSIZE) {
+        recv = pread(fd, &buffer, BUFFERSIZE, offset);
+        if (recv < 0) {
+            LOG_ERROR("io error: `", fn);
+            return "";
+        }
+        if (SHA256_Update(&ctx, buffer, recv) < 0) {
+            LOG_ERROR("sha256 calculate error: `", fn);
+            return "";
+        }
+    }
+    SHA256_Final(sha, &ctx);
+    char res[SHA256_DIGEST_LENGTH * 2];
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
+        sprintf(res + (i * 2), "%02x", sha[i]);
+    return "sha256:" + std::string(res, SHA256_DIGEST_LENGTH*2);
+}
 
 bool check_downloaded(const std::string &dir) {
     std::string fn = dir + "/" + COMMIT_FILE_NAME;
@@ -112,12 +152,26 @@ bool BkDownload::download_done() {
     old_name = dir + "/" + DOWNLOAD_TMP_NAME;
     new_name = dir + "/" + COMMIT_FILE_NAME;
 
+    // verify sha256
+    auto th = photon::CURRENT;
+    std::string shares;
+    std::thread sha256_thread([&, th](){
+        shares = sha256sum(old_name.c_str());
+        photon::safe_thread_interrupt(th, EINTR, 0);
+    });
+    sha256_thread.detach();
+    photon::thread_usleep(-1UL);
+    if (shares != digest) {
+        LOG_ERROR("verify checksum ` failed (expect: `, got: `)", old_name, digest, shares);
+        return false;
+    }
+
     int ret = lfs->rename(old_name.c_str(), new_name.c_str());
     if (ret != 0) {
         LOG_ERROR("rename(`,`), `:`", old_name, new_name, errno, strerror(errno));
         return false;
     }
-    LOG_INFO("rename(`,`) success", old_name, new_name);
+    LOG_INFO("download done. rename(`,`) success", old_name, new_name);
     return true;
 }
 
@@ -214,7 +268,7 @@ void bk_download_proc(std::list<BKDL::BkDownload *> &dl_list, uint64_t delay_sec
 
         if (!succ && dl_item->try_cnt > 0) {
             dl_list.push_back(dl_item);
-            LOG_WARN("download failed, push back to download queue and retry", dl_item->dir);
+            LOG_WARN("download failed, push back to download queue and retry `", dl_item->dir);
             continue;
         }
         LOG_DEBUG("finish downloading or no retry any more: `, retry_cnt: `", dl_item->dir,
