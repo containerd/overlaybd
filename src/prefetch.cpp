@@ -76,7 +76,6 @@ public:
 
         // Reload if going to replay
         if (m_mode == Mode::Replay) {
-            m_replay_threads.resize(REPLAY_CONCURRENCY);
             reload(file_size);
         }
     }
@@ -126,7 +125,8 @@ public:
         LOG_INFO("Prefetch: Replay ` records from ` layers", m_replay_queue.size(), m_src_files.size());
         for (int i = 0; i < REPLAY_CONCURRENCY; ++i) {
             auto th = photon::thread_create11(&PrefetcherImpl::replay_worker_thread, this);
-            m_replay_threads[i] = photon::thread_enable_join(th);
+            auto join_handle = photon::thread_enable_join(th);
+            m_replay_threads.push_back(join_handle);
         }
     }
 
