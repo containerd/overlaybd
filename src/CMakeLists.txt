@@ -16,6 +16,7 @@ find_path(LIBNL_INCLUDE_DIR
 )
 
 include(FetchContent)
+set(FETCHCONTENT_QUIET false)
 
 FetchContent_Declare(
   rapidjson
