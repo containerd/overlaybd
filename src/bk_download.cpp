@@ -43,6 +43,8 @@ std::string sha256sum(const char* fn) {
         LOG_ERROR("failed to open `", fn);
         return "";
     }
+    DEFER(close(fd););
+
     struct stat stat;
     if (::fstat(fd, &stat) < 0) {
         LOG_ERROR("failed to stat `", fn);
