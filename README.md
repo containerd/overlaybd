@@ -143,6 +143,11 @@ Now we have finished the setup of overlaybd, let's go back to [Accelerated Conta
 
 Welcome to contribute! [CONTRIBUTING](CONTRIBUTING.md)
 
+## Kernel Support
+
+To convert DADI acclerated image format to a block device, kernel support is required.
+For further detail please refere to [KMOD](kmod/README.md)
+
 ## Licenses
 
 Overlaybd is released under the Apache License, Version 2.0.
