@@ -566,7 +566,7 @@ namespace ZFile
         CompressionFile::JumpTable jump_table;
         int retry = 2;
     again:
-        if (load_jump_table(file, &ht, jump_table, true) == false)
+        if (!load_jump_table(file, &ht, jump_table, true))
         {
             if (verify && retry--) {
                 // verify means the source can be evicted. evict and retry
