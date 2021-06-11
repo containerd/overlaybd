@@ -39,7 +39,7 @@ namespace FileSystem {
 
 class PrefetcherImpl;
 
-class PrefetchFile : public ForwardFile {
+class PrefetchFile : public ForwardFile_Ownership {
 public:
     PrefetchFile(IFile* src_file, uint32_t layer_index, Prefetcher* prefetcher);
 
@@ -307,7 +307,7 @@ LogBuffer& operator<<(LogBuffer& log, const PrefetcherImpl::TraceFormat& f) {
 }
 
 PrefetchFile::PrefetchFile(IFile* src_file, uint32_t layer_index, Prefetcher* prefetcher) :
-        ForwardFile(src_file),
+        ForwardFile_Ownership(src_file, true),
         m_layer_index(layer_index),
         m_prefetcher((PrefetcherImpl*) prefetcher) {
     if (m_prefetcher->get_mode() == PrefetcherImpl::Mode::Replay) {
