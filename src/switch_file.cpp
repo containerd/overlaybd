@@ -182,7 +182,8 @@ ISwitchFile *new_switch_file(IFile *source, bool local, const char* file_path) {
     // if tar file, open tar file
     IFile *file = FileSystem::new_tar_file_adaptor(source);
     // open zfile
-    auto zf = ZFile::zfile_open_ro(file, local ? false : true, true);
+    bool verify = !local;
+    auto zf = ZFile::zfile_open_ro(file, verify, true);
     if (!zf) {
         LOG_ERROR_RETURN(0, nullptr, "zfile_open_ro failed, path: `: error: `(`)", file_path, errno,
                                     strerror(errno));
