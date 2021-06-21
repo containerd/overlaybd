@@ -1,17 +1,17 @@
 /*
-   Copyright The Overlaybd Authors
+Copyright The Overlaybd Authors
 
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-       http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/LICENSE-2.0
 
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
 #include "file.h"
 #include <string.h>
@@ -225,8 +225,7 @@ public:
         offset += step;
         count -= step;
     }
-    template <typename T>
-    bool is_aligned(T x) {
+    template <typename T> bool is_aligned(T x) {
         static_assert(std::is_integral<T>::value, "T must be integral types");
         return (x & (ALIGNMENT - 1)) == 0;
     }
@@ -262,10 +261,10 @@ public:
                 }
                 assert(m.tag < m_files.size());
                 ssize_t size = m.length * ALIGNMENT;
-                LOG_DEBUG("offse: `, length: `", m.moffset, size);
+                LOG_DEBUG("offset: `, length: `", m.moffset, size);
                 ssize_t ret = m_files[m.tag]->pread(buf, size, m.moffset * ALIGNMENT);
                 if (ret < size) {
-                    LOG_ERROR_RETURN(0, (int)ret,
+                    LOG_ERRNO_RETURN(0, (int)ret,
                                      "failed to read from `-th file ( ` pread return: ` < size: `)",
                                      m.tag, m_files[m.tag], ret, size);
                 }
@@ -277,7 +276,7 @@ public:
         return (ret >= 0) ? nbytes : ret;
     }
 
-    IFile *front_file() {
+    virtual IFile *front_file() {
         for (auto x : m_files)
             if (x)
                 return x;
@@ -573,6 +572,8 @@ public:
     bool m_init_concurrency = false;
     uint64_t m_data_offset = HeaderTrailer::SPACE / ALIGNMENT;
 
+    uint8_t m_rw_tag = 0;
+
     Mutex m_rw_mtx;
     IFile *m_findex = nullptr;
 
@@ -588,6 +589,13 @@ public:
     ~LSMTFile() {
         LOG_DEBUG(" ~LSMTFile()");
         close();
+    }
+
+    virtual IFile *front_file() override {
+        if (m_files[m_rw_tag]) {
+            return m_files[m_rw_tag];
+        }
+        return nullptr;
     }
 
     virtual int vioctl(int request, va_list args) override {
@@ -655,15 +663,12 @@ public:
     }
 
     virtual void append_index(const SegmentMapping &m) {
-
         if (m_findex) {
             if (m_stacked_mappings.empty()) {
-                Lock lock(m_rw_mtx);
                 append(m_findex, &m, sizeof(m));
             } else {
                 m_stacked_mappings[nmapping++] = m;
                 if (nmapping == m_stacked_mappings.size() /* || TODO: timeout  */) {
-                    Lock lock(m_rw_mtx);
                     do_group_commit_mappings();
                 }
             }
@@ -677,7 +682,6 @@ public:
     virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
         LOG_DEBUG("{offset:`,length:`}", offset, count);
         CHECK_ALIGNMENT(count, offset);
-
         auto bytes = count;
         while (count > MAX_IO_SIZE) {
             auto ret = pwrite(buf, MAX_IO_SIZE, offset);
@@ -691,21 +695,25 @@ public:
         off_t moffset = -1;
         {
             Lock lock(m_rw_mtx);
-            moffset = append(m_files[0], buf, count);
+            moffset = append(m_files[m_rw_tag], buf, count);
             if (moffset == 0)
                 return -1;
+            m_vsize = max(m_vsize, count + offset);
+            if (m_vsize < count + offset) {
+                LOG_INFO("resize m_visze: `->`", m_vsize, count + offset);
+            }
+            SegmentMapping m{
+                (uint64_t)offset / (uint64_t)ALIGNMENT,
+                (uint32_t)count / (uint32_t)ALIGNMENT,
+                (uint64_t)moffset / (uint64_t)ALIGNMENT,
+            };
+            m.tag = m_rw_tag;
+            assert(m.length > (uint32_t)0);
+            m_data_offset = m.mend();
+            static_cast<IMemoryIndex0 *>(m_index)->insert(m);
+            append_index(m);
         }
-        m_vsize = max(m_vsize, count + offset);
-        if (m_vsize < count + offset) {
-            LOG_INFO("resize m_visze: `->`", m_vsize, count + offset);
-        }
-        SegmentMapping m{(uint64_t)offset / (uint64_t)ALIGNMENT,
-                         (uint32_t)count / (uint32_t)ALIGNMENT,
-                         (uint64_t)moffset / (uint64_t)ALIGNMENT};
-        assert(m.length > (uint32_t)0);
-        m_data_offset = m.mend();
-        static_cast<IMemoryIndex0 *>(m_index)->insert(m);
-        append_index(m);
+
         return bytes;
     }
 
@@ -728,16 +736,23 @@ public:
         if (((mode & FALLOC_FL_PUNCH_HOLE) == 0) || ((mode & FALLOC_FL_KEEP_SIZE) == 0)) {
             LOG_ERRNO_RETURN(ENOSYS, -1, "only support FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE");
         }
-        return this->discard(offset, len);
+        CHECK_ALIGNMENT(len, offset);
+        SegmentMapping m{
+            (uint64_t)offset / (uint64_t)ALIGNMENT,
+            (uint32_t)len / (uint32_t)ALIGNMENT,
+            0,
+        };
+        m.discard();
+        return this->discard(m);
     }
 
-    virtual int discard(off_t offset, off_t len) {
-        CHECK_ALIGNMENT(len, offset);
-        off_t pos = m_files[0]->lseek(0, SEEK_END);
-        SegmentMapping m{(uint64_t)offset / (uint64_t)ALIGNMENT,
-                         (uint32_t)len / (uint32_t)ALIGNMENT, (uint64_t)(pos / ALIGNMENT)};
-        m.discard();
+    virtual int discard(SegmentMapping &m) {
+        off_t pos = m_files[m_rw_tag]->lseek(0, SEEK_END);
+        m.moffset = (uint64_t)(pos / ALIGNMENT);
+        m.tag = m_rw_tag;
+        LOG_DEBUG(m);
         static_cast<IMemoryIndex0 *>(m_index)->insert(m);
+        Lock lock(m_rw_mtx);
         append_index(m);
         return 0;
     }
@@ -763,18 +778,18 @@ public:
     virtual int close_seal(IFileRO **reopen_as = nullptr) override {
         auto m_index0 = (IMemoryIndex0 *)m_index;
         unique_ptr<SegmentMapping[]> mapping(m_index0->dump(ALIGNMENT));
-        uint64_t index_offset = m_files[0]->lseek(0, SEEK_END);
+        uint64_t index_offset = m_files[m_rw_tag]->lseek(0, SEEK_END);
         ssize_t index_bytes = m_index0->size() * sizeof(SegmentMapping);
         index_bytes = (index_bytes + ALIGNMENT - 1) / ALIGNMENT * ALIGNMENT;
-        auto ret = m_files[0]->write(mapping.get(), index_bytes);
+        auto ret = m_files[m_rw_tag]->write(mapping.get(), index_bytes);
         if (ret < index_bytes)
             LOG_ERRNO_RETURN(0, -1, "failed to write index.");
 
         LayerInfo layer;
-        if (load_layer_info(&m_files[0], 1, layer, true) != 0)
+        if (load_layer_info(&m_files[m_rw_tag], 1, layer, true) != 0)
             return -1;
-        ret = write_header_trailer(m_files[0], false, true, true, index_offset, m_index0->size(),
-                                   layer);
+        ret = write_header_trailer(m_files[m_rw_tag], false, true, true, index_offset,
+                                   m_index0->size(), layer);
         if (ret < 0)
             LOG_ERRNO_RETURN(0, -1, "failed to write trailer.");
         if (reopen_as) {
@@ -785,10 +800,9 @@ public:
                 LOG_ERROR("create memory index of reopen file failed.");
                 return close();
             }
-            new_index->increase_tag();
             auto p = new LSMTReadOnlyFile;
             p->m_index = new_index;
-            p->m_files = {nullptr, m_files.back()};
+            p->m_files = {m_files.back()};
             p->m_vsize = m_vsize;
             p->m_file_ownership = m_file_ownership;
             m_file_ownership = false;
@@ -805,7 +819,7 @@ public:
                 return commit_ret;
             }
         }
-        m_files[0]->fsync();
+        m_files[m_rw_tag]->fsync();
         if (m_findex)
             m_findex->fsync();
         return 0;
@@ -825,11 +839,10 @@ public:
 
     virtual DataStat data_stat() const override {
         struct stat buf;
-        auto ret = m_files[0]->fstat(&buf);
+        auto ret = m_files[m_rw_tag]->fstat(&buf);
         if (ret != 0) {
             LOG_ERRNO_RETURN(0, DataStat(), "failed to fstat()");
         }
-
         DataStat data_stat;
         data_stat.total_data_size = (buf.st_size - HeaderTrailer::SPACE);
         data_stat.valid_data_size = index()->block_count() * ALIGNMENT;
@@ -934,14 +947,11 @@ static LSMTReadOnlyFile *open_file_ro(IFile *file, bool ownership, bool reserve_
         delete[] p;
         LOG_ERROR_RETURN(0, nullptr, "failed to create memory index!");
     }
-    if (reserve_tag) {
-        pi->increase_tag();
-    }
     auto rst = new LSMTReadOnlyFile;
     rst->m_index = pi;
-    rst->m_files = {nullptr, file};
-    rst->m_uuid.resize(2);
-    rst->m_uuid[1].parse(ht.uuid);
+    rst->m_files = {file};
+    rst->m_uuid.resize(1);
+    rst->m_uuid[0].parse(ht.uuid);
     rst->m_vsize = ht.virtual_size;
     rst->m_file_ownership = ownership;
     LOG_INFO("Layer Info: { UUID: `, Parent_UUID: `, Virtual size: `, Version: `.` }", ht.uuid,
@@ -1217,7 +1227,7 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
     if (pht == nullptr) {
         LOG_ERRNO_RETURN(0, nullptr, "verify upper layer's Header failed.");
     }
-    auto idx = create_combo_index((IMemoryIndex0 *)u->m_index, l->m_index, true);
+    auto idx = create_combo_index((IMemoryIndex0 *)u->m_index, l->m_index, l->m_files.size(), true);
     LSMTFile *rst = new LSMTFile;
     rst->m_index = idx;
     rst->m_findex = u->m_findex;
@@ -1236,8 +1246,9 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
     } else {
         LOG_WARN("STACK FILES WITHOUT CHECK ORDER!!!");
     }
-    rst->m_files.insert(rst->m_files.begin(), u->m_files[0]);
-    rst->m_uuid.insert(rst->m_uuid.begin(), u->m_uuid[0]);
+    rst->m_files.push_back(u->m_files[0]);
+    rst->m_uuid.push_back(u->m_uuid[0]);
+    rst->m_rw_tag = rst->m_files.size() - 1;
     u->m_index = l->m_index = nullptr;
     l->m_file_ownership = u->m_file_ownership = false;
     if (ownership) {
