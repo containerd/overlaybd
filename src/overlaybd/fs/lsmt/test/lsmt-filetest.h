@@ -72,22 +72,23 @@ public:
     uint64_t vsize = FLAGS_vsize << 20;
     uint32_t IMAGE_RO_LAYERS = FLAGS_layers;
 
+    int ut_io_engine = 0;
     int next_layer_id = 0;
     int current_layer_id = 0;
     string parent_uuid;
 
     virtual void SetUp() override {
 
-        auto io_engine = ioengine_psync;
+        // io_engine = ioengine_psync;
         if (FLAGS_io_engine == "libaio") {
-            io_engine = ioengine_libaio;
+            ut_io_engine = ioengine_libaio;
         }
         if (FLAGS_io_engine == "posixaio") {
-            io_engine = ioengine_posixaio;
+            ut_io_engine = ioengine_posixaio;
         }
-        LOG_INFO("create localfs_adaptor (io_engine = `).", io_engine);
+        LOG_INFO("create localfs_adaptor (io_engine = `).", ut_io_engine);
 
-        lfs = new_localfs_adaptor("/tmp", io_engine);
+        lfs = new_localfs_adaptor("/tmp", ut_io_engine);
 
         memset(buf, 0, PREAD_LEN);
     }
@@ -402,6 +403,9 @@ public:
             args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
         args.virtual_size = vsize;
         auto file = ::create_file_rw(args, true);
+        char uu[37]{};
+        args.uuid.to_string(uu, 37);
+        cout << "create a layer. UUID: "<< uu<<endl;
         cout << "enable group commit of index for RW file" << endl;
         file->set_index_group_commit(4096);
         randwrite(file, FLAGS_nwrites);
@@ -450,7 +454,7 @@ public:
         delete file;
         auto tmp = ::open_file_ro(as);
         UUID uuid;
-        tmp->get_uuid(uuid, 1);
+        tmp->get_uuid(uuid, 0);
         parent_uuid = UUID::String(uuid).c_str();
         LOG_INFO("reset parent_uuid: `", parent_uuid.c_str());
         if (compress) {
@@ -466,7 +470,7 @@ public:
             return dst;
         }
         return FileSystem::open_localfile_adaptor(("/tmp/" + layer_name.back()).c_str(), O_RDONLY,
-                                                  420U, ioengine_libaio);
+                                                  420U, io_engine);
     }
 
     virtual IFileRO *create_image(int total_layers) {

@@ -90,7 +90,7 @@ public:
             pbegin = pend = nullptr;
     }
 
-    virtual uint64_t block_count() override {
+    virtual uint64_t block_count() const override {
         return alloc_blk;
     }
 
@@ -354,7 +354,7 @@ public:
         return rst;
     }
 
-    virtual uint64_t block_count() override {
+    virtual uint64_t block_count() const override {
         return alloc_blk.m_alloc;
     }
 
@@ -375,8 +375,8 @@ public:
     iterator end() const {
         return mapping.end();
     }
+
     UNIMPLEMENTED(int backing_index(const IMemoryIndex *bi) override);
-    UNIMPLEMENTED(int start_gc(const IMemoryIndex *, std::size_t) override);
     UNIMPLEMENTED(int increase_tag(int) override);
 
     UNIMPLEMENTED_POINTER(IMemoryIndex *load_range_index(int, int) const override);
@@ -397,16 +397,16 @@ public:
     Index *m_backing_index{nullptr};
     bool m_ownership;
 
-    ComboIndex(Index0 *index0, const Index *index, bool ownership) {
+    ComboIndex(Index0 *index0, const Index *index, uint8_t ro_layers_count, bool ownership) {
         m_index0 = index0;
         m_backing_index = const_cast<Index *>(index);
         mapping = index0->mapping;
         m_ownership = ownership;
 
         for (auto &x : mapping)
-            ((SegmentMapping &)x).tag = 0;
-        for (auto &x : *m_backing_index)
-            ((SegmentMapping &)x).tag++;
+            ((SegmentMapping &)x).tag = ro_layers_count;
+        // for (auto &x : *m_backing_index)
+        //     ((SegmentMapping &)x).tag++;
     }
     ~ComboIndex() {
         if (m_ownership) {
@@ -489,17 +489,6 @@ public:
             return nullptr;
         }
         return new Index(std::move(range_index));
-    }
-
-    virtual int start_gc(const IMemoryIndex *gc_index, size_t files_size) override {
-        mapping.clear();
-        auto highlevel_idx = (Index *)gc_index;
-        // reserve for tmp layer.
-        ((IMemoryIndex *)m_backing_index)->increase_tag();
-        unique_ptr<Index> tmp_backing_index(rebuild_backing_index(highlevel_idx, files_size));
-        delete m_backing_index;
-        m_backing_index = tmp_backing_index.release();
-        return 0;
     }
 
     virtual Index *rebuild_backing_index(Index *highlevel_idx, size_t max_level) {
@@ -616,13 +605,13 @@ static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const 
     }
 }
 
-IComboIndex *create_combo_index(IMemoryIndex0 *index0, const IMemoryIndex *index, bool ownership) {
+IComboIndex *create_combo_index(IMemoryIndex0 *index0, const IMemoryIndex *index, uint8_t ro_index_count, bool ownership) {
     if (!index0 || !index)
         LOG_ERROR_RETURN(EINVAL, nullptr, "invalid argument(s)");
 
     auto i0 = (Index0 *)index0;
     auto i1 = (Index *)index;
-    return new ComboIndex(i0, i1, ownership);
+    return new ComboIndex(i0, i1, ro_index_count, ownership);
 }
 
 size_t compress_raw_index(SegmentMapping *mapping, size_t n) {
