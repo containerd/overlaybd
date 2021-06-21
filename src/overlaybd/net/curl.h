@@ -74,7 +74,8 @@ public:
         auto pos = st.find_first_of(':');
         if (pos != estring::npos) {
             // somehow http header is defined case insensitive
-            this->emplace(str_lower(st.substr(0, pos).trim()), st.substr(pos + 1).trim());
+            (*this)[str_lower(st.substr(0, pos).trim())] =
+                st.substr(pos + 1).trim();
         }
         return n;
     }
