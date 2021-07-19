@@ -40,7 +40,7 @@ const int LOG_SIZE_MB = 10;
 const int LOG_NUM = 3;
 
 struct ImageRef {
-    std::vector<std::string> seg; // cr: seg_0, ns: seg_1, repo: seg_2
+    std::vector<std::string> seg; // cr: seg_0, ns: seg_1, repo: seg_2, seg_3,...
 };
 
 bool create_dir(const char *dirname) {
@@ -71,10 +71,13 @@ int parse_blob_url(const std::string &url, struct ImageRef &ref) {
                 words.emplace_back(sub_url.substr(prev, idx - prev));
                 prev = idx + 1;
             }
-            if (words.size() != 5) {
+            if (words.size() < 5) {
                 LOG_ERROR_RETURN(0, -1, "invalid blob url: `", url);
             }
-            ref.seg = std::vector<std::string>{words[0], words[2], words[3]};
+            ref.seg = std::vector<std::string>{words[0]};
+            for (int i = 2; i + 1 < words.size(); i++) {
+                ref.seg.push_back(words[i]);
+            }
         }
     }
     return 0;
