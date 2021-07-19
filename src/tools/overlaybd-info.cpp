@@ -272,7 +272,7 @@ int main(int argc, char **argv) {
             }
         }
         ImageConfigNS::GlobalConfig obd_conf;
-        if (!obd_conf.ParseJSON("/etc/overlaybd/config.json")) {
+        if (!obd_conf.ParseJSON("/etc/overlaybd/overlaybd.json")) {
             printf("invalid overlaybd config file.\n");
             exit(-1);
         }
