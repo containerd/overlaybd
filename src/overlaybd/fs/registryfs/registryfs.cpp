@@ -206,6 +206,11 @@ public:
             if (!scope.empty())
                 m_scope_token.release(scope);
             return true;
+        } if (ret == 200) {
+            *actual = url;
+            if (!scope.empty())
+                m_scope_token.release(scope);
+            return true;
         } else {
             // unexpected situation
             if (!scope.empty())
