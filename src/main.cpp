@@ -162,8 +162,9 @@ void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
             if (errno == EROFS) {
                 tcmulib_command_complete(dev, cmd,
                                          TCMU_STS_WR_ERR_INCOMPAT_FRMT);
+            } else {
+                tcmulib_command_complete(dev, cmd, TCMU_STS_WR_ERR);
             }
-            tcmulib_command_complete(dev, cmd, TCMU_STS_WR_ERR);
         }
         break;
 
