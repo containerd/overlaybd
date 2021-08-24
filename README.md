@@ -139,6 +139,11 @@ For the convenience of testing, we provided a public registry on Aliyun ACR, see
 
 Now we have finished the setup of overlaybd, let's go back to [Accelerated Container Image](https://github.com/alibaba/accelerated-container-image) repo and start to run our first accelerated container.
 
+
+## Kernel module
+
+[DADI_kmod](https://github.com/zhuguoliang/DADI_kmod/) is a kernel module of overlaybd authored by Guoliang Zhu. It can lauch overlaybd devices of local layers.
+
 ## Contributing
 
 Welcome to contribute! [CONTRIBUTING](CONTRIBUTING.md)
