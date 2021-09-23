@@ -256,8 +256,25 @@ TEST_F(ZFileTest, checksum)
     }
 }
 
+TEST_F(ZFileTest, dsa) {
+    const int buf_size = 4194304; // 4M
+    const int crc_count = 3000;
+    int ret = 0;
 
 
+    for(auto i = 0; i < crc_count; i++){
+        void* buf = malloc(buf_size);
+        DEFER(free(buf));
+        uint32_t checksum_dsa = FileSystem::crc32::crc32c(buf, buf_size);
+        uint32_t checksum_sse = FileSystem::crc32::testing::crc32c_fast(buf, buf_size, 0);
+
+        if(checksum_dsa != checksum_sse){
+            ret = 1;
+        }
+    }
+
+    ASSERT_EQ(ret, 0);
+}
 
 int main(int argc, char **argv)
 {
