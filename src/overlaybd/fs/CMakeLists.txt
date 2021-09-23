@@ -6,6 +6,7 @@ add_subdirectory(registryfs)
 add_subdirectory(lsmt)
 add_subdirectory(zfile)
 add_subdirectory(cache)
+add_subdirectory(test)
 
 target_link_libraries(fs_lib
     registryfs_lib
