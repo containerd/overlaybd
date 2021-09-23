@@ -20,7 +20,11 @@
 #include <algorithm>
 #include <iostream>
 
+#include "../../../alog.h"
 #include "crc32c.h"
+#ifdef ENABLE_DSA
+#include "dsa.h"
+#endif
 
 namespace FileSystem {
 
@@ -709,6 +713,8 @@ static uint32_t multitable_crc32c(uint32_t crc32c, const unsigned char *buffer,
   return (crc32c_sb8_64_bit(crc32c, buffer, length, to_even_word));
 }
 
+
+
 static uint32_t crc32c_sw(const uint8_t *buffer, size_t nbytes, uint32_t crc) {
   if (nbytes < 4) {
     return (singletable_crc32c(crc, buffer, nbytes));
@@ -717,13 +723,66 @@ static uint32_t crc32c_sw(const uint8_t *buffer, size_t nbytes, uint32_t crc) {
   }
 }
 
+#ifdef ENABLE_DSA
+static dsa_context* dsa;
+
+static uint32_t crc32c_hw_dsa(const uint8_t* data, size_t nbytes, uint32_t crc) {
+    int rc = 0;
+    int flags = 0x1;
+    int opcode = DSA_OPCODE_CRCGEN;
+    task* tsk;
+    tsk = dsa->single_task;
+    rc = init_task(tsk, flags, opcode, data, nbytes, crc);
+    if (rc != DSA_STATUS_OK) {
+        LOG_ERROR_RETURN(0, rc, "dsa: init task failed");
+    }
+
+    rc = dsa_crcgen(dsa);
+    if (rc != DSA_STATUS_OK) {
+        errno = ENXIO;
+        LOG_ERRNO_RETURN(0, rc, "dsa: crcgen failed stat");
+    }
+
+    rc = task_result_verify(tsk, 0);
+    if (rc != DSA_STATUS_OK) {
+        LOG_ERRNO_RETURN(0, rc, "dsa: verify task failed");
+    }
+
+    clean_task(tsk);
+    return (tsk->comp->crc_val^0xFFFFFFFF);
+}
+
+static int init_dsa() {
+    dsa = dsa_init();
+    if (dsa == nullptr) {
+        LOG_ERROR_RETURN(0, -1, "failed to init dsa");
+    }
+    int rc = dsa_alloc(dsa, SHARED);
+    if (rc < 0) {
+        LOG_ERROR_RETURN(0, -1, "alloc dsa failed, rc=`", rc)
+    }
+    rc = alloc_task(dsa);
+    if (rc != DSA_STATUS_OK) {
+        LOG_ERROR_RETURN(0, -1, "alloc dsa task failed, rc=`", rc)
+    }
+
+    crc32c_func = crc32c_hw_dsa;
+    return 0;
+}
+#endif
+
 static void crc_init() {
-  __builtin_cpu_init();
-  if (__builtin_cpu_supports("sse4.2")) {
-    crc32c_func = crc32c_hw;
-  } else {
-    crc32c_func = crc32c_sw;
-  }
+#ifdef ENABLE_DSA
+    if (init_dsa() == 0) {
+        return;
+    }
+#endif
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("sse4.2")) {
+        crc32c_func = crc32c_hw;
+    } else {
+        crc32c_func = crc32c_sw;
+    }
 }
 
 static void crc_deinit() {
