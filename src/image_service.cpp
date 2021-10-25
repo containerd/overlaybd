@@ -71,9 +71,6 @@ int parse_blob_url(const std::string &url, struct ImageRef &ref) {
                 words.emplace_back(sub_url.substr(prev, idx - prev));
                 prev = idx + 1;
             }
-            if (words.size() < 5) {
-                LOG_ERROR_RETURN(0, -1, "invalid blob url: `", url);
-            }
             ref.seg = std::vector<std::string>{words[0]};
             for (int i = 2; i + 1 < words.size(); i++) {
                 ref.seg.push_back(words[i]);
