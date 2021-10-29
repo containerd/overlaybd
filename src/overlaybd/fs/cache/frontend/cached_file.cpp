@@ -108,7 +108,7 @@ ssize_t CachedFile::preadvInternal(const struct iovec *iov, int iovcnt, off_t of
         struct stat st;
         auto ok = fstat(&st);
         if (ok == 0 && st.st_size > size_) {
-            off_t last = alingn_down(size_, pageSize_);
+            off_t last = align_down(size_, pageSize_);
             if (last != size_)
                 cache_store_->evict(last, pageSize_);
             size_ = st.st_size;
@@ -351,6 +351,9 @@ ICachedFile *new_cached_file(IFile *src, ICacheStore *store, uint64_t pageSize, 
         if (-1 == ok) {
             LOG_ERRNO_RETURN(0, nullptr, "src_file fstat failed : `", ok);
         }
+    }
+    if (st.st_size > 0) {
+        store->ftruncate(st.st_size);
     }
     return new CachedFile(src, store, st.st_size, pageSize, refillUnit, allocator, fs);
 }
