@@ -6,13 +6,13 @@
 It is a solution of remote container image by supporting fetching image data on-demand without downloading and unpacking the whole image before a container running.
 
 At the heart of the acceleration is overlaybd, which provides a merged view of a sequence of block-based layers as an block device.
-This repository is a component of Accelerated Container Image, provides an implementation of overlaybd by iSCSI and [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
+This repository is a component of Accelerated Container Image, provides an implementation of overlaybd by [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
 
 ## Setup
 
 ### System Requirements
 
-Overlaybd provides virtual block devices through iSCSI protocol and TCMU, so the TCMU kernel module is required. TCMU is implemented in the Linux kernel and supported by most Linux distributions.
+Overlaybd provides virtual block devices through TCMU, so the TCMU kernel module is required. TCMU is implemented in the Linux kernel and supported by most Linux distributions.
 
 Check and load the target_core_user module.
 
@@ -142,7 +142,7 @@ Now we have finished the setup of overlaybd, let's go back to [Accelerated Conta
 
 ## Kernel module
 
-[DADI_kmod](https://github.com/zhuguoliang/DADI_kmod/) is a kernel module of overlaybd authored by Guoliang Zhu. It can lauch overlaybd devices of local layers.
+[DADI_kmod](https://github.com/data-accelerator/dadi-kernel-mod) is a kernel module of overlaybd. It can make local overlaybd-format files as a loop device or device-mapper.
 
 ## Contributing
 
