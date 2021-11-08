@@ -20,7 +20,11 @@
 #include <algorithm>
 #include <iostream>
 
+#include "../../../alog.h"
 #include "crc32c.h"
+#ifdef ENABLE_DSA
+#include "dsa.h"
+#endif
 
 namespace FileSystem {
 
@@ -30,39 +34,7 @@ static uint32_t (*crc32c_func)(const uint8_t *, size_t, uint32_t) = nullptr;
 
 static void crc_init() __attribute__((constructor));
 
-struct dsa_context *dsa;
-bool is_dsa = true;
-
-static uint32_t crc32c_hw_dsa(const uint8_t *data, size_t nbytes, uint32_t crc) {
-  int rc = 0;
-  int flags = 0x1;
-  int opcode = 0x10;
-  struct task *tsk;
-
-  tsk = dsa->single_task;
-  flags = 0x1;
-  rc = init_task(tsk, flags, opcode, data, nbytes);
-  if (rc != DSA_STATUS_OK) {
-    err("copycrc: init task failed\n");
-    return rc;
-  }
-
-  rc = dsa_crcgen(dsa);
-  if (rc != DSA_STATUS_OK) {
-    err("crcgen failed stat %d\n", rc);
-    rc = -ENXIO;
-    return rc;
-  }
-
-  rc = task_result_verify(tsk, 0);
-  if (rc != DSA_STATUS_OK)
-    return rc;
-
-  clean_task(tsk);
-  return tsk->comp->crc_val;
-}
-
-static uint32_t crc32c_hw_sse(const uint8_t *data, size_t nbytes, uint32_t crc) {
+static uint32_t crc32c_hw(const uint8_t *data, size_t nbytes, uint32_t crc) {
   uint32_t sum = crc;
   size_t offset = 0;
 
@@ -748,40 +720,67 @@ static uint32_t crc32c_sw(const uint8_t *buffer, size_t nbytes, uint32_t crc) {
   }
 }
 
-static void crc_init() {
-  int rc = 0;
-  int wq_type = SHARED;
+#ifdef ENABLE_DSA
+static dsa_context* dsa;
 
-  dsa = dsa_init();
-  if (dsa == NULL) {
-    is_dsa = false;
-  }
-  else {
-    is_dsa = true;
-  }
+static uint32_t crc32c_hw_dsa(const uint8_t* data, size_t nbytes, uint32_t crc) {
+    int rc = 0;
+    int flags = 0x1;
+    int opcode = 0x10;
+    task* tsk;
 
-  if(is_dsa) {
-    crc32c_func = crc32c_hw_dsa;
-    rc = dsa_alloc(dsa, wq_type);
-    if (rc < 0) {
-      err("copycrc: alloc dsa failed, rc=%d\n", rc);
-      return;
+    tsk = dsa->single_task;
+    rc = init_task(tsk, flags, opcode, data, nbytes);
+    if (rc != DSA_STATUS_OK) {
+        LOG_ERROR_RETURN(0, rc, "dsa: init task failed");
     }
 
+    rc = dsa_crcgen(dsa);
+    if (rc != DSA_STATUS_OK) {
+        errno = ENXIO;
+        LOG_ERRNO_RETURN(0, rc, "dsa: crcgen failed stat");
+    }
+
+    rc = task_result_verify(tsk, 0);
+    if (rc != DSA_STATUS_OK) {
+        LOG_ERRNO_RETURN(0, rc, "dsa: verify task failed");
+    }
+
+    clean_task(tsk);
+    return tsk->comp->crc_val;
+}
+
+static int init_dsa() {
+    dsa = dsa_init();
+    if (dsa == nullptr) {
+        LOG_ERROR_RETURN(0, -1, "failed to init dsa");
+    }
+    int rc = dsa_alloc(dsa, SHARED);
+    if (rc < 0) {
+        LOG_ERROR_RETURN(0, -1, "alloc dsa failed, rc=`", rc)
+    }
     rc = alloc_task(dsa);
     if (rc != DSA_STATUS_OK) {
-      err("copycrc: alloc task failed, rc=%d\n", rc);
-      return;
+        LOG_ERROR_RETURN(0, -1, "alloc dsa task failed, rc=`", rc)
     }
-  }
-  else{
+
+    crc32c_func = crc32c_hw_dsa;
+    return 0;
+}
+#endif
+
+static void crc_init() {
+#ifdef ENABLE_DSA
+    if (init_dsa() == 0) {
+        return;
+    }
+#endif
     __builtin_cpu_init();
     if (__builtin_cpu_supports("sse4.2")) {
-      crc32c_func = crc32c_hw_sse;
+        crc32c_func = crc32c_hw;
     } else {
-      crc32c_func = crc32c_sw;
+        crc32c_func = crc32c_sw;
     }
-  }
 }
 
 uint32_t crc32c_extend(const void *data, size_t nbytes, uint32_t crc) {
@@ -807,12 +806,7 @@ uint32_t crc32c_slow(const void *data, size_t nbytes, uint32_t crc) {
 }
 
 uint32_t crc32c_fast(const void *data, size_t nbytes, uint32_t crc) {
-  if(is_dsa) {
-    return crc32c_hw_dsa(reinterpret_cast<const uint8_t *>(data), nbytes, crc);
-  }
-  else {
-    return crc32c_hw_sse(reinterpret_cast<const uint8_t *>(data), nbytes, crc);
-  }
+  return crc32c_hw(reinterpret_cast<const uint8_t *>(data), nbytes, crc);
 }
 
 } // namespace testing
