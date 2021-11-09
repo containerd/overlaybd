@@ -33,6 +33,7 @@ namespace crc32 {
 static uint32_t (*crc32c_func)(const uint8_t *, size_t, uint32_t) = nullptr;
 
 static void crc_init() __attribute__((constructor));
+static void crc_deinit() __attribute__((destructor));
 
 static uint32_t crc32c_hw(const uint8_t *data, size_t nbytes, uint32_t crc) {
   uint32_t sum = crc;
@@ -782,6 +783,13 @@ static void crc_init() {
         crc32c_func = crc32c_sw;
     }
 }
+
+static void crc_deinit() {
+#ifdef ENABLE_DSA
+   dsa_free(dsa);
+#endif
+}
+
 
 uint32_t crc32c_extend(const void *data, size_t nbytes, uint32_t crc) {
   return crc32c_func(reinterpret_cast<const uint8_t *>(data), nbytes, crc);
