@@ -2,7 +2,7 @@
 
 ## Accelerated Container Image
 
-[Accelerated Container Image](https://github.com/alibaba/accelerated-container-image) is an open-source implementation of paper ["DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba).
+[Accelerated Container Image](https://github.com/containerd/accelerated-container-image) is an open-source implementation of paper ["DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba).
 It is a solution of remote container image by supporting fetching image data on-demand without downloading and unpacking the whole image before a container running.
 
 At the heart of the acceleration is overlaybd, which provides a merged view of a sequence of block-based layers as an block device.
@@ -22,7 +22,7 @@ modprobe target_core_user
 
 ### Install From RPM/DEB
 
-You may download our RPM/DEB packages form [Release](https://github.com/alibaba/overlaybd/releases) and install.
+You may download our RPM/DEB packages form [Release](https://github.com/containerd/overlaybd/releases) and install.
 
 The binaries are install to `/opt/overlaybd/bin/`.
 
@@ -49,7 +49,7 @@ To build overlaybd from source code, the following dependencies are required:
 You need git to checkout the source code:
 
 ```bash
-git clone https://github.com/alibaba/overlaybd.git
+git clone https://github.com/containerd/overlaybd.git
 cd overlaybd
 ```
 
@@ -137,7 +137,7 @@ For the convenience of testing, we provided a public registry on Aliyun ACR, see
 
 ## What's next?
 
-Now we have finished the setup of overlaybd, let's go back to [Accelerated Container Image](https://github.com/alibaba/accelerated-container-image) repo and start to run our first accelerated container.
+Now we have finished the setup of overlaybd, let's go back to [Accelerated Container Image](https://github.com/containerd/accelerated-container-image) repo and start to run our first accelerated container.
 
 
 ## Kernel module
