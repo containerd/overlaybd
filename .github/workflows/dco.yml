@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          path: src/github.com/alibaba/overlaybd
+          path: src/github.com/containerd/overlaybd
           fetch-depth: 100
 
       - name: set env
@@ -40,7 +40,7 @@ jobs:
 
       - name: DCO checker
         shell: bash
-        working-directory: src/github.com/alibaba/overlaybd
+        working-directory: src/github.com/containerd/overlaybd
         env:
           GITHUB_COMMIT_URL: ${{ github.event.pull_request.commits_url }}
           DCO_VERBOSITY: "-v"
