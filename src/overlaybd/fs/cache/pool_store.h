@@ -83,6 +83,7 @@ public:
 
     virtual int stat(CacheStat *stat) = 0;
     virtual int evict(off_t offset, size_t count = -1) = 0;
+    virtual int ftruncate(off_t length) = 0;
 
     void release() {
         ref_count--;

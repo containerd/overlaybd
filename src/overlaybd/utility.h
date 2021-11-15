@@ -154,17 +154,17 @@ xrange_t<uint64_t> xrange(T end) {
     return xrange<T>(0, end);
 }
 
-inline uint64_t alingn_down(uint64_t x, uint64_t alignment) {
+inline uint64_t align_down(uint64_t x, uint64_t alignment) {
     return x & ~(alignment - 1);
 }
 
-inline uint64_t alingn_up(uint64_t x, uint64_t alignment) {
-    return alingn_down(x + alignment - 1, alignment);
+inline uint64_t align_up(uint64_t x, uint64_t alignment) {
+    return align_down(x + alignment - 1, alignment);
 }
 
 template <typename T>
 inline T *align_ptr(T *p, uint64_t alignment) {
-    return (T *)alingn_up((uint64_t)p, alignment);
+    return (T *)align_up((uint64_t)p, alignment);
 }
 
 #define ALIGNED_MEM(name, size, alignment)                                                         \
