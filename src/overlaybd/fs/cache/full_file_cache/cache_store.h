@@ -42,6 +42,7 @@ public:
 
     int stat(CacheStat *stat) override;
     int evict(off_t offset, size_t count = -1) override;
+    int ftruncate(off_t length) override;
 
     std::pair<off_t, size_t> queryRefillRange(off_t offset, size_t size) override;
 

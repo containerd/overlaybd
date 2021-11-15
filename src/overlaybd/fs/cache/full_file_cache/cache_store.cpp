@@ -86,8 +86,8 @@ ssize_t FileCacheStore::pwritev(const struct iovec *iov, int iovcnt, off_t offse
 
 std::pair<off_t, size_t> FileCacheStore::queryRefillRange(off_t offset, size_t size) {
     ScopedRangeLock lock(rangeLock_, offset, size);
-    off_t alignLeft = alingn_down(offset, kBlockSize);
-    off_t alignRight = alingn_up(offset + size, kBlockSize);
+    off_t alignLeft = align_down(offset, kBlockSize);
+    off_t alignRight = align_up(offset + size, kBlockSize);
     ReadRequest request{alignLeft, static_cast<size_t>(alignRight - alignLeft)};
     struct fiemap_t<kFieExtentSize> fie(request.offset, request.size);
     fie.fm_mapped_extents = 0;
@@ -141,8 +141,8 @@ std::pair<off_t, size_t> FileCacheStore::queryRefillRange(off_t offset, size_t s
     if (holeStart >= holeEnd)
         return std::make_pair(0, 0);
     // CacheMiss
-    auto left = alingn_down(holeStart, refillUnit_);
-    auto right = alingn_up(holeEnd, refillUnit_);
+    auto left = align_down(holeStart, refillUnit_);
+    auto right = align_up(holeEnd, refillUnit_);
     return std::make_pair(left, right - left);
 }
 
@@ -172,6 +172,10 @@ int FileCacheStore::fstat(struct stat *buf) {
 
 bool FileCacheStore::cacheIsFull() {
     return cachePool_->isFull();
+}
+
+int FileCacheStore::ftruncate(off_t length) {
+    return localFile_->ftruncate(length);
 }
 
 } //  namespace Cache
