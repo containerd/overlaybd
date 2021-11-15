@@ -2,11 +2,12 @@
 
 ## Accelerated Container Image
 
-[Accelerated Container Image](https://github.com/containerd/accelerated-container-image) is an open-source implementation of paper ["DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba).
-It is a solution of remote container image by supporting fetching image data on-demand without downloading and unpacking the whole image before a container running.
+overlaybd is the storage backend of [Accelerated Container Image](https://github.com/containerd/accelerated-container-image), which is a solution of remote container image by fetching image data on-demand without pulling the whole image before the container starts.
 
-At the heart of the acceleration is overlaybd, which provides a merged view of a sequence of block-based layers as an block device.
-This repository is a component of Accelerated Container Image, provides an implementation of overlaybd by [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
+overlaybd provides a merged view of a sequence of block-based layers as an block device.
+This repository is a component of [Accelerated Container Image](https://github.com/containerd/accelerated-container-image), provides an implementation of overlaybd by [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
+
+overlaybd is a __non-core__ sub-project of containerd.
 
 ## Setup
 
