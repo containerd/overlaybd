@@ -22,6 +22,7 @@ jobs:
       shell: bash
       run: |
         sudo apt install -y pkg-config libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libglib2.0-dev
+        sudo apt install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool
         wget https://github.com/google/googletest/archive/refs/tags/release-1.10.0.tar.gz
         tar -zxvf release-1.10.0.tar.gz
         cd googletest-release-1.10.0/
