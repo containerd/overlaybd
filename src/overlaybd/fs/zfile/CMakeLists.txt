@@ -1,6 +1,6 @@
 file(GLOB SOURCE_ZFILE "*.cpp")
 file(GLOB SOURCE_LZ4 "lz4/lz4.c")
-file(GLOB SOURCE_CRC32 "crc32/*.cpp")
+file(GLOB SOURCE_CRC32 "crc32/crc32c.cpp")
 
 add_library(zfile_lib STATIC ${SOURCE_ZFILE} ${SOURCE_LZ4} ${SOURCE_CRC32})
 target_compile_options(zfile_lib PUBLIC -msse4.2 -mcrc32)
@@ -10,6 +10,7 @@ execute_process(COMMAND bash -c ${CHECK_DSA_CMD} OUTPUT_VARIABLE HAS_DSA)
 
 if (${HAS_DSA} STREQUAL "yes")
     add_definitions(-DENABLE_DSA=yes)
+    add_library(zfile_lib STATIC crc32/dsa.cpp)
     target_link_libraries(zfile_lib ${LIBRARY_OUTPUT_PATH}/libaccel-config.so -luuid)
     add_custom_command(TARGET zfile_lib
             PRE_BUILD
