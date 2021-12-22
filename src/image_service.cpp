@@ -36,7 +36,7 @@
 #include <vector>
 
 const char *DEFAULT_CONFIG_PATH = "/etc/overlaybd/overlaybd.json";
-const int LOG_SIZE_MB = 10;
+const int LOG_SIZE = 10 * 1024 * 1024;
 const int LOG_NUM = 3;
 
 struct ImageRef {
@@ -151,7 +151,7 @@ int ImageService::read_global_config_and_set() {
             LOG_WARN("empty audit path, ignore audit");
         } else {
             LOG_INFO("set audit_path:`", global_conf.auditPath());
-            default_audit_logger.log_output = new_log_output_file(global_conf.auditPath().c_str(), LOG_SIZE_MB, LOG_NUM);
+            default_audit_logger.log_output = new_log_output_file(global_conf.auditPath().c_str(), LOG_SIZE, LOG_NUM);
         }
     } else {
         LOG_INFO("audit disabled");
@@ -162,7 +162,7 @@ int ImageService::read_global_config_and_set() {
 
     if (global_conf.logPath() != "") {
         LOG_INFO("set log_path:`", global_conf.logPath());
-        int ret = log_output_file(global_conf.logPath().c_str(), LOG_SIZE_MB, LOG_NUM);
+        int ret = log_output_file(global_conf.logPath().c_str(), LOG_SIZE, LOG_NUM);
         if (ret != 0) {
             LOG_ERROR_RETURN(0, -1, "log_output_file failed, errno:`", errno);
         }
