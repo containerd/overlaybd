@@ -303,12 +303,11 @@ private:
         return (file->pwrite((char *)(&th_buf), TAR_HEADER_SIZE, 0) == TAR_HEADER_SIZE);
     }
 
-    TarFile *open_tar_file(IFile *file) {
+    IFile *open_tar_file(IFile *file) {
         if (is_tar_file(file) == 1) {
-            auto ret = new TarFile(file);
-            return ret;
+            return new TarFile(file);
         }
-        return nullptr;
+        return file; //open as normal file
     }
 };
 
