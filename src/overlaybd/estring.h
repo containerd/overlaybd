@@ -56,6 +56,8 @@ public:
     }
     estring_view(const char *begin, const char *end) : estring_view(begin, end - begin) {
     }
+    estring_view(std::string_view& sv) : std::string_view(sv) {
+    }
     estring_view(const std::string &v) : std::string_view(v){
     }
     size_t find_first_of(const charset &set) const {
