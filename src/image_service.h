@@ -18,6 +18,8 @@
 
 #include <string>
 #include "config.h"
+#include "overlaybd/fs/filesystem.h"
+#include "overlaybd/io-alloc.h"
 
 namespace FileSystem {
 class IFileSystem;
@@ -31,15 +33,19 @@ typedef enum {
 
 struct GlobalFs {
     FileSystem::IFileSystem *remote_fs = nullptr;
-    FileSystem::IFileSystem *cachefs = nullptr;
-    FileSystem::IFileSystem *srcfs = nullptr;
+    FileSystem::IFileSystem* srcfs = nullptr;
+
+    // ocf cache only
+    FileSystem::IFile* media_file = nullptr;
+    FileSystem::IFileSystem* namespace_fs = nullptr;
+    IOAlloc* io_alloc = nullptr;
 };
 
 struct ImageFile;
 
 class ImageService {
 public:
-    ImageService() {}
+    ~ImageService();
     int init();
     ImageFile *create_image_file(const char *config_path);
     ImageConfigNS::GlobalConfig global_conf;

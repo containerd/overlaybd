@@ -542,6 +542,28 @@ void mutex::unlock() {
     owner = nullptr;
     resume_one();
 }
+int recursive_mutex::lock(uint64_t timeout) {
+    if (owner == CURRENT || mutex::lock(timeout) == 0) {
+        recursive_count++;
+        return 0;
+    }
+    return -1;
+}
+int recursive_mutex::try_lock() {
+    if (owner == CURRENT || mutex::try_lock() == 0) {
+        recursive_count++;
+        return 0;
+    }
+    return -1;
+}
+void recursive_mutex::unlock() {
+    if (owner != CURRENT)
+        return;
+    if (--recursive_count > 0) {
+        return;
+    }
+    mutex::unlock();
+}
 int condition_variable::wait_no_lock(uint64_t timeout) {
     return waitq::wait(timeout);
 }

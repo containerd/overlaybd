@@ -52,6 +52,7 @@ You need git to checkout the source code:
 ```bash
 git clone https://github.com/containerd/overlaybd.git
 cd overlaybd
+git submodule update --init
 ```
 
 The whole project is managed by CMake. Binaries and resource files will be installed to `/opt/overlaybd/`.

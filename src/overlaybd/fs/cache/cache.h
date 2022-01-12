@@ -103,6 +103,7 @@ extern "C" {
 ICachedFileSystem *new_cached_fs(IFileSystem *src, ICachePool *pool, uint64_t pageSize,
                                  uint64_t refillUnit, IOAlloc *allocator);
 
+/** Full file cache will automatically delete its media_fs when destructed */
 ICachedFileSystem *new_full_file_cached_fs(IFileSystem *srcFs, IFileSystem *media_fs,
                                            uint64_t refillUnit, uint64_t capacityInGB,
                                            uint64_t periodInUs, uint64_t diskAvailInBytes,
@@ -117,6 +118,15 @@ ICachedFileSystem *new_mem_cached_fs(IFileSystem *src, uint64_t mem_size, uint64
 ICachedFileSystem *new_block_cached_fs(IFileSystem *srcFs, uint64_t refillUnit,
                                        uint64_t memoryCapacityInGB, uint64_t diskCapacityInGB,
                                        IOAlloc *allocator, bool shm, bool ipc = false);
+
+/**
+ * @param blk_size The proper size for cache metadata and IO efficiency.
+ *        Large writes to cache media will be split into blk_size. Reads are not affected.
+ * @param prefetch_unit Controls the expand prefetch size from src file. 0 means to disable this feature.
+ */
+IFileSystem* new_ocf_cached_fs(IFileSystem* src_fs, IFileSystem* namespace_fs, size_t blk_size,
+                               size_t prefetch_unit, IFile* media_file, bool reload_media,
+                               IOAlloc* io_alloc);
 
 IFileSystem *new_short_circuit_fs(IFileSystem *syncFs, const std::string &params);
 
