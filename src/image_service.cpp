@@ -19,6 +19,7 @@
 #include "overlaybd/alog-stdstring.h"
 #include "overlaybd/alog.h"
 #include "overlaybd/base64.h"
+#include "overlaybd/io-alloc.h"
 #include "overlaybd/fs/cache/cache.h"
 #include "overlaybd/fs/filesystem.h"
 #include "overlaybd/fs/localfs.h"
@@ -141,9 +142,9 @@ int ImageService::read_global_config_and_set() {
     if (ioengine > 2) {
         LOG_ERROR_RETURN(0, -1, "unknown io_engine: `", ioengine);
     }
-
-    LOG_INFO("global config: cache_dir: `, cache_size_GB: `",
-             global_conf.registryCacheDir(), global_conf.registryCacheSizeGB());
+    if (global_conf.cacheType() != "file" && global_conf.cacheType() != "ocf") {
+        LOG_ERROR_RETURN(0, -1, "unknown cache type `", global_conf.cacheType());
+    }
 
     if (global_conf.enableAudit()) {
         std::string auditPath = global_conf.auditPath();
@@ -167,6 +168,9 @@ int ImageService::read_global_config_and_set() {
             LOG_ERROR_RETURN(0, -1, "log_output_file failed, errno:`", errno);
         }
     }
+
+    LOG_INFO("global config: cache_dir: `, cache_size_GB: `, cache_type `",
+             global_conf.registryCacheDir(), global_conf.registryCacheSizeGB(), global_conf.cacheType());
     return 0;
 }
 
@@ -210,7 +214,7 @@ int ImageService::init() {
         return -1;
     }
 
-    if (create_dir(global_conf.registryCacheDir().c_str()) == false)
+    if (!create_dir(global_conf.registryCacheDir().c_str()))
         return -1;
 
     if (global_fs.remote_fs == nullptr) {
@@ -234,31 +238,58 @@ int ImageService::init() {
             delete registry_fs;
             LOG_ERROR_RETURN(0, -1, "create tar_fs failed.");
         }
+        global_fs.srcfs = tar_fs;
 
-        auto registry_cache_fs = FileSystem::new_localfs_adaptor(
-            global_conf.registryCacheDir().c_str());
-        if (registry_cache_fs == nullptr) {
-            delete tar_fs;
-            LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed",
-                             global_conf.registryCacheDir().c_str());
-            return false;
+        if (global_conf.cacheType() == "file") {
+            auto registry_cache_fs = FileSystem::new_localfs_adaptor(
+                global_conf.registryCacheDir().c_str());
+            if (registry_cache_fs == nullptr) {
+                delete tar_fs;
+                LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed",
+                                 global_conf.registryCacheDir().c_str());
+            }
+            // file cache will delete its src_fs automatically when destructed
+            global_fs.remote_fs = FileSystem::new_full_file_cached_fs(
+                tar_fs, registry_cache_fs, 256 * 1024 /* refill unit 256KB */,
+                global_conf.registryCacheSizeGB() /*GB*/, 10000000,
+                (uint64_t)1048576 * 4096, nullptr);
+
+        } else if (global_conf.cacheType() == "ocf") {
+            auto namespace_dir = std::string(global_conf.registryCacheDir() + "/namespace");
+            if (::access(namespace_dir.c_str(), F_OK) != 0 && ::mkdir(namespace_dir.c_str(), 0755) != 0) {
+                LOG_ERRNO_RETURN(0, -1, "failed to create namespace_dir");
+            }
+            auto namespace_fs = FileSystem::new_localfs_adaptor(namespace_dir.c_str());
+            if (namespace_fs == nullptr) {
+                LOG_ERROR_RETURN(0, -1, "failed tp create namespace_fs");
+            }
+            global_fs.namespace_fs = namespace_fs;
+
+            auto io_alloc = new IOAlloc;
+            global_fs.io_alloc = io_alloc;
+
+            bool reload_media;
+            FileSystem::IFile* media_file;
+            auto media_file_path = std::string(global_conf.registryCacheDir() + "/cache_media");
+            if (::access(media_file_path.c_str(), F_OK) != 0) {
+                reload_media = false;
+                media_file = FileSystem::open_localfile_adaptor(media_file_path.c_str(), O_RDWR | O_CREAT, 0644,
+                                                                FileSystem::ioengine_psync);
+                media_file->fallocate(0, 0, global_conf.registryCacheSizeGB() * 1024UL * 1024 * 1024);
+            } else {
+                reload_media = true;
+                media_file = FileSystem::open_localfile_adaptor(media_file_path.c_str(), O_RDWR, 0644,
+                                                                FileSystem::ioengine_psync);
+            }
+            global_fs.media_file = media_file;
+
+            global_fs.remote_fs = FileSystem::new_ocf_cached_fs(tar_fs, namespace_fs, 65536, 0,
+                                                                media_file, reload_media, io_alloc);
         }
-
-        LOG_INFO("create cache with size: ` GB",
-                 global_conf.registryCacheSizeGB());
-        global_fs.remote_fs = FileSystem::new_full_file_cached_fs(
-            tar_fs, registry_cache_fs, 256 * 1024 /* refill unit 256KB */,
-            global_conf.registryCacheSizeGB() /*GB*/, 10000000,
-            (uint64_t)1048576 * 4096, nullptr);
 
         if (global_fs.remote_fs == nullptr) {
-            delete tar_fs;
-            delete registry_cache_fs;
-            LOG_ERROR_RETURN(0, -1,
-                             "create remotefs (registryfs + cache) failed.");
+            LOG_ERROR_RETURN(0, -1, "create remotefs (registryfs + cache) failed.");
         }
-        global_fs.cachefs = registry_cache_fs;
-        global_fs.srcfs = registry_fs;
     }
     return 0;
 }
@@ -289,6 +320,15 @@ ImageFile *ImageService::create_image_file(const char *config_path) {
     std::string data = "success";
     set_result_file(resFile, data);
     return ret;
+}
+
+ImageService::~ImageService() {
+    delete global_fs.remote_fs;
+    delete global_fs.media_file;
+    delete global_fs.namespace_fs;
+    delete global_fs.srcfs;
+    delete global_fs.io_alloc;
+    LOG_INFO("image service is fully stopped");
 }
 
 ImageService *create_image_service() {

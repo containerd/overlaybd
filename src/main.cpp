@@ -441,5 +441,7 @@ int main(int argc, char **argv) {
 
     tcmulib_close(tcmulib_ctx);
     LOG_INFO("tcmulib closed");
+
+    delete imgservice;
     return 0;
 }

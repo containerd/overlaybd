@@ -72,6 +72,7 @@ namespace FileSystem
         virtual int fstat(struct stat *buf)=0;
         virtual int ftruncate(off_t length)=0;
 
+        UNIMPLEMENTED(int fadvise(off_t offset, off_t len, int advice));
         UNIMPLEMENTED(int sync_file_range(off_t offset, off_t nbytes, unsigned int flags));
         UNIMPLEMENTED(ssize_t append(const void *buf, size_t count, off_t* position));
         UNIMPLEMENTED(ssize_t appendv(const struct iovec *iov, int iovcnt, off_t* position));
