@@ -1,0 +1,4 @@
+[submodule "src/overlaybd/fs/cache/ocf_cache/ocf"]
+	path = src/overlaybd/fs/cache/ocf_cache/ocf
+	url = https://github.com/Open-CAS/ocf
+	branch = v21.6.4
