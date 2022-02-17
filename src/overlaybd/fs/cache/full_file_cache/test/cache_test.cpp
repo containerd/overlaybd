@@ -185,10 +185,10 @@ void commonTest(bool cacheIsFull, bool enableDirControl, bool dirFull) {
     EXPECT_EQ(0, memcmp(buf, src.data(), kPageSize));
 
     struct stat st1;
-    ::stat(std::string(root + prefix + "/testDir/file_1").c_str(), &st1);
+    ::stat(std::string(root + prefix + "/file_1").c_str(), &st1);
     EXPECT_EQ(0, cachedFile->evict(0, kPageSize));
     struct stat st2;
-    ::stat(std::string(root + prefix + "/testDir/file_1").c_str(), &st2);
+    ::stat(std::string(root + prefix + "/file_1").c_str(), &st2);
     EXPECT_EQ(kPageSize, st1.st_blocks * 512 - st2.st_blocks * 512);
 
     // test refill last block
