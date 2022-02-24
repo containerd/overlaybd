@@ -24,8 +24,13 @@
 #include <pwd.h>
 #include <stdio.h>
 #include <string.h>
+#include <string>
+#include "../estring.h"
 #include <sys/param.h>
 #include <sys/types.h>
+#include <stdlib.h>
+
+using namespace std;
 
 namespace FileSystem {
 
@@ -44,6 +49,9 @@ namespace FileSystem {
 
 #define int_to_oct(num, oct, octlen) \
     snprintf((oct), (octlen), "%*lo ", (octlen)-2, (unsigned long)(num))
+
+//forward declaration
+static IFile *open_tar_file(IFile *file, bool verify_type = true);
 
 struct tar_header {
     char name[100];
@@ -125,27 +133,56 @@ int th_signed_crc_calc(struct tar_header &th_buf) {
 class TarFile : public ForwardFile_Ownership {
 public:
     TarFile(IFile *file) : ForwardFile_Ownership(file, true) {
-        base_offset = TAR_HEADER_SIZE;
-        m_file->lseek(base_offset, SEEK_SET);
     }
 
     ~TarFile() {
         close();
     }
 
-    virtual int fstat(struct stat *buf) override {
+    size_t read_header() {
+
         struct tar_header th_buf;
         memset(&(th_buf), 0, sizeof(struct tar_header));
         m_file->pread(&th_buf, TAR_HEADER_SIZE, 0);
-        size_t size = oct_to_size(th_buf.size);
+        base_offset = TAR_HEADER_SIZE;
+        if (th_buf.typeflag=='x') {
+            base_offset = 3 * TAR_HEADER_SIZE;
+            auto size = oct_to_size(th_buf.size);
+            LOG_DEBUG("read PAX extended header. (size: `B)", size);
+            assert(size < TAR_HEADER_SIZE);
+            char buffer[TAR_HEADER_SIZE]{};
+            m_file->pread(buffer, size, TAR_HEADER_SIZE);
+            int prev = 0;
+            for (off_t i = 0; i < size; i++) {
+                if (buffer[i] == '\n') {
+                    estring_view attr(buffer + prev, buffer + i);
+                    if (attr.find("size=") != string::npos) {
+                        auto  p = attr.find("size=") + strlen("size=");
+                        auto str_size = attr.substr(p);
+                        m_size = strtoll(str_size.to_string().c_str(), nullptr, 10);
+                        if (m_size == 0) {
+                            LOG_ERRNO_RETURN(0, -1, "get file size error.");
+                        }
+                        LOG_DEBUG("file size: `", m_size);
+                        break;
+                    }
+                    prev = i + 1;
+                }
+            }
+        } else {
+            m_size = oct_to_size(th_buf.size);
+        }
+        m_file->lseek(base_offset, SEEK_SET);
+        return 0;
+    }
 
+    virtual int fstat(struct stat *buf) override {
+      
         int ret = m_file->fstat(buf);
-        if (ret < 0)
+        if (ret < 0) {
             return ret;
-        if (size == -1) // new tar
-            buf->st_size -= base_offset;
-        else
-            buf->st_size = size;
+        }
+        buf->st_size = m_size;
         return ret;
     }
 
@@ -212,6 +249,7 @@ public:
 
 private:
     off_t base_offset;
+    size_t m_size;
     int write_header_trailer() {
         struct stat s;
         m_file->fstat(&s);
@@ -270,7 +308,7 @@ public:
         file->fstat(&s);
         if (s.st_size == 0) {
             mark_new_tar(file);
-            return new TarFile(file);
+            return open_tar_file(file, false);
         }
         return open_tar_file(file);
     }
@@ -287,7 +325,7 @@ public:
         file->fstat(&s);
         if (s.st_size == 0) {
             mark_new_tar(file);
-            return new TarFile(file);
+            return open_tar_file(file, false);
         }
         return open_tar_file(file);
     }
@@ -303,19 +341,36 @@ private:
         return (file->pwrite((char *)(&th_buf), TAR_HEADER_SIZE, 0) == TAR_HEADER_SIZE);
     }
 
-    IFile *open_tar_file(IFile *file) {
-        if (is_tar_file(file) == 1) {
-            return new TarFile(file);
-        }
-        return file; //open as normal file
-    }
+
 };
+
+static IFile *new_tar_file(IFile *file) {
+
+    auto ret = new TarFile(file);
+    if (ret->read_header() != 0) {
+        LOG_ERRNO_RETURN(0, nullptr, "read tar header failed.");
+    }
+    return ret;
+}
+
+static IFile *open_tar_file(IFile *file, bool verify_type ) {
+    
+    if (!verify_type) {
+        return new_tar_file(file);
+    }
+    if (is_tar_file(file) == 1) {
+        return new_tar_file(file);
+    }
+    LOG_DEBUG("not tar file, open as normal file");
+    return file; //open as normal file
+}
 
 IFileSystem *new_tar_fs_adaptor(IFileSystem *fs) {
     return new TarFs(fs);
 }
 
 int is_tar_file(IFile *file) {
+
     struct tar_header th_buf;
     if (file->pread(&th_buf, TAR_HEADER_SIZE, 0) != TAR_HEADER_SIZE) {
         LOG_DEBUG("error read tar file header");
@@ -338,11 +393,7 @@ int is_tar_file(IFile *file) {
 }
 
 IFile *new_tar_file_adaptor(IFile *file) {
-    if (is_tar_file(file) == 1) {
-        return new TarFile(file);
-    }
-    LOG_DEBUG("not tar file, open as normal file");
-    return file;
+    return open_tar_file(file);
 }
 
 } // namespace FileSystem

@@ -22,6 +22,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include "../overlaybd/fs/tar_file.h"
+
 #include "../overlaybd/fs/lsmt/file.h"
 #include "../overlaybd/fs/localfs.h"
 #include "../overlaybd/utility.h"
@@ -308,6 +310,7 @@ int main(int argc, char **argv) {
             exit(-1);
         }
     } else {
+        fdata = new_tar_file_adaptor(fdata);
         if (ZFile::is_zfile(fdata) == 1) {
             auto zfile = ZFile::zfile_open_ro(fdata, false);
             fp = zfile;
@@ -369,7 +372,7 @@ int main(int argc, char **argv) {
     }
 
     if (argc <= 1) {
-        printf("Real Size: %ld\n", fdata->lseek(0, SEEK_END));
+        printf("Real Size: %lu\n", fdata->lseek(0, SEEK_END));
     } else {
         printf("Data Size: %ld\n", fdata->lseek(0, SEEK_END));
         printf("Index Size: %ld\n", findex->lseek(0, SEEK_END));
