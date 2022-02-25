@@ -93,8 +93,10 @@ int main(int argc, char **argv) {
         lfs->unlink(fn_dst);
     }
     IFileSystem *fs = lfs;
-    if (tar)
+    if (tar) {
+        LOG_INFO("create tar header.");
         fs = new_tar_fs_adaptor(lfs);
+    }
 
     int ret = 0;
     CompressArgs args(opt);
