@@ -64,16 +64,18 @@ void FileCachePool::Init() {
 }
 
 ICacheStore *FileCachePool::do_open(std::string_view pathname, int flags, mode_t mode) {
-    auto localFile = openMedia(pathname, flags, mode);
+    // use filename (sha256 in overlaybd image) as the key, it's not a universal file cache any more
+    auto filename = Path(pathname.data()).basename();
+    auto localFile = openMedia(filename, flags, mode);
     if (!localFile) {
         return nullptr;
     }
 
-    auto find = fileIndex_.find(pathname);
+    auto find = fileIndex_.find(filename);
     if (find == fileIndex_.end()) {
         auto lruIter = lru_.push_front(fileIndex_.end());
         std::unique_ptr<LruEntry> entry(new LruEntry{lruIter, 1, 0});
-        find = fileIndex_.emplace(pathname, std::move(entry)).first;
+        find = fileIndex_.emplace(filename, std::move(entry)).first;
         lru_.front() = find;
     } else {
         lru_.access(find->second->lruIter);
