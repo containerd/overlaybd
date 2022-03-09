@@ -120,6 +120,16 @@ protected:
     thread *owner = nullptr;
 };
 
+class recursive_mutex : protected mutex {
+public:
+    int lock(uint64_t timeout = -1);
+    int try_lock();
+    void unlock();
+
+protected:
+    int32_t recursive_count = 0;
+};
+
 class scoped_lock {
 public:
     // do lock() if `do_lock` > 0, and lock() can NOT fail if `do_lock` > 1
@@ -185,7 +195,7 @@ public:
 class semaphore : protected waitq // NOT TESTED YET
 {
 public:
-    explicit semaphore(uint64_t count) : m_count(count) {
+    explicit semaphore(uint64_t count = 0) : m_count(count) {
     }
     int wait(uint64_t count, uint64_t timeout = -1);
     int signal(uint64_t count);

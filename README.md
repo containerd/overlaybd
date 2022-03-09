@@ -43,7 +43,7 @@ To build overlaybd from source code, the following dependencies are required:
 
 * Libaio, libcurl, libnl3, glib2 and openssl runtime and development libraries.
   * CentOS/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel glib2-devel`
-  * Debian/Ubuntu: `sudo apt install pkg-config libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libglib2.0-dev`
+  * Debian/Ubuntu: `sudo apt install pkg-config libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libglib2.0-dev libgflags-dev`
 
 #### Build
 
@@ -52,6 +52,7 @@ You need git to checkout the source code:
 ```bash
 git clone https://github.com/containerd/overlaybd.git
 cd overlaybd
+git submodule update --init
 ```
 
 The whole project is managed by CMake. Binaries and resource files will be installed to `/opt/overlaybd/`.
