@@ -30,6 +30,16 @@
 #include "../../tar_file.cpp"
 #include <memory>
 
+#include <optional>
+#include <string>
+#include <fstream>
+#include <cstdlib>
+#include <stdio.h>
+#include <sched.h> //cpu_set_t , CPU_SET
+#include <thread>
+#include <stdio.h>
+#include <chrono>
+
 using namespace std;
 using namespace FileSystem;
 using namespace ZFile;
@@ -37,7 +47,7 @@ using namespace ZFile;
 DEFINE_int32(nwrites, 16384, "write times in each layer.");
 DEFINE_int32(log_level, 1, "log level");
 
-class ZFileTest : public ::testing::Test
+class ZFileTest : public ::testing::Test 
 {
 public:
     unique_ptr<IFileSystem> lfs;
@@ -55,10 +65,10 @@ public:
         while (write_cnt--)
         {
             int data[4096]{};
-            for (ssize_t i = 0; i < (ssize_t)(sizeof(data) / sizeof(data[0])); i+=4)
+            for (ssize_t i = 0; i < (ssize_t)(sizeof(data) / sizeof(data[0])); i += 4)
                 // data[i] = rand();
                 data[i] = rand();
-                // memset(data+i, rand(), 4);
+            // memset(data+i, rand(), 4);
             file->write(data, sizeof(data));
         }
         LOG_INFO("write done.");
@@ -94,8 +104,7 @@ public:
         int read_times = 1000;
         LOG_INFO("start randread. (` times)", read_times);
         struct stat _st;
-        if (fsrc->fstat(&_st) != 0)
-        {
+        if (fsrc->fstat(&_st) != 0) {
             LOG_ERROR("err: `(`)", errno, strerror(errno));
             return;
         }
@@ -194,7 +203,7 @@ TEST_F(ZFileTest, verify_compression)
     EXPECT_EQ(ret, 0);
     ret = zfile_decompress(fdst.get(), fdec.get());
     EXPECT_EQ(ret, 0);
-    //int read_times = 100000;
+    // int read_times = 100000;
     EXPECT_EQ(is_zfile(fdec.get()), 0);
     LOG_INFO("start seqread.");
     struct stat _st;
@@ -235,7 +244,7 @@ TEST_F(ZFileTest, checksum)
     EXPECT_EQ(ret, 0);
     ret = zfile_decompress(dst, dec);
     EXPECT_EQ(ret, 0);
-    //int read_times = 100000;
+    // int read_times = 100000;
     EXPECT_EQ(is_zfile(dec), 0);
     LOG_INFO("start seqread.");
     struct stat _st;
@@ -257,19 +266,20 @@ TEST_F(ZFileTest, checksum)
     }
 }
 
-TEST_F(ZFileTest, dsa) {
-    const int buf_size = 4194304; // 4M
+TEST_F(ZFileTest, dsa)
+{
+    const int buf_size = 1024;
     const int crc_count = 3000;
     int ret = 0;
 
-
-    for(auto i = 0; i < crc_count; i++){
-        void* buf = malloc(buf_size);
+    for (auto i = 0; i < crc_count; i++)
+    {
+        void *buf = malloc(buf_size);
         DEFER(free(buf));
         uint32_t checksum_dsa = FileSystem::crc32::crc32c(buf, buf_size);
         uint32_t checksum_sse = FileSystem::crc32::testing::crc32c_fast(buf, buf_size, 0);
-
-        if(checksum_dsa != checksum_sse){
+        if (checksum_dsa != checksum_sse)
+        {
             ret = 1;
         }
     }
@@ -301,7 +311,7 @@ int main(int argc, char **argv)
     ::gflags::ParseCommandLineFlags(&argc, &argv, true);
     log_output_level = FLAGS_log_level;
     photon::init();
-	photon::fd_events_epoll_init();
+    photon::fd_events_epoll_init();
     photon::libaio_wrapper_init();
     auto ret = RUN_ALL_TESTS();
     photon::libaio_wrapper_fini();
