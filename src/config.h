@@ -67,6 +67,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(credentialFilePath, std::string, "/opt/overlaybd/cred.json");
     APPCFG_PARA(registryCacheSizeGB, uint32_t, 4);
     APPCFG_PARA(ioEngine, uint32_t, 0);
+    APPCFG_PARA(cacheType, std::string, "file");
     APPCFG_PARA(logLevel, uint32_t, 1);
     APPCFG_PARA(logPath, std::string, "/var/log/overlaybd.log");
     APPCFG_PARA(download, DownloadConfig);

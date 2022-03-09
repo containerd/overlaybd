@@ -1,3 +1,4 @@
 external
 build
 .vscode
+.idea
