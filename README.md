@@ -103,6 +103,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | logPath             | The path for log file, `/var/log/overlaybd.log` is the default value.                                 |
 | registryCacheDir    | The cache directory for remote image data.                                                            |
 | registryCacheSizeGB | The max size of cache, in GB.                                                                         |
+| cacheType           | Cache type used, `file` and `ocf` are supported, `file` is the default.                               |
 | credentialFilePath  | The credential used for fetching images on registry. `/opt/overlaybd/cred.json` is the default value. |
 | download.enable     | Whether background downloading is enabled or not.                                                     |
 | download.delay      | The seconds waiting to start downloading task after the overlaybd device launched.                    |
