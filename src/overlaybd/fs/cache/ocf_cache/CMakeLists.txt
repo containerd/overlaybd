@@ -1,4 +1,6 @@
-add_subdirectory(test)
+if(BUILD_TESTING)
+  add_subdirectory(test)
+endif()
 
 # ocf_env_lib
 file(GLOB_RECURSE src_ocf_env ease_bindings/env/*.cpp)
