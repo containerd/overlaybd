@@ -28,7 +28,6 @@
 #include "libtcmu_common.h"
 #include "scsi.h"
 #include "scsi_defs.h"
-#include "scsi_helper.h"
 #include <fcntl.h>
 #include <scsi/scsi.h>
 #include <sys/resource.h>
@@ -124,7 +123,7 @@ void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
     case MODE_SENSE:
     case MODE_SENSE_10:
         photon::thread_yield();
-        ret = emulate_mode_sense(dev, cmd->cdb, cmd->iovec, cmd->iov_cnt, file->read_only);
+        ret = tcmu_emulate_mode_sense(dev, cmd->cdb, cmd->iovec, cmd->iov_cnt);
         tcmulib_command_complete(dev, cmd, ret);
         break;
 
@@ -311,6 +310,7 @@ static int dev_open(struct tcmu_device *dev) {
     tcmu_dev_set_num_lbas(dev, file->num_lbas);
     tcmu_dev_set_unmap_enabled(dev, true);
     tcmu_dev_set_write_cache_enabled(dev, false);
+    tcmu_dev_set_write_protect_enabled(dev, file->read_only);
 
     odev->loop = new TCMUDevLoop(dev);
     odev->loop->run();

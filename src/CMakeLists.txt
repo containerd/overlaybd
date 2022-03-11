@@ -30,8 +30,8 @@ endif()
 
 FetchContent_Declare(
   tcmu_runner
-  URL https://github.com/open-iscsi/tcmu-runner/archive/refs/tags/v1.5.4.tar.gz
-  URL_MD5 1bf8c82bd4a948e0fea915bb7c4c2e99
+  GIT_REPOSITORY https://github.com/open-iscsi/tcmu-runner.git
+  GIT_TAG 364ae611ffdd7c8fb3d1e733563b636bf3b44ba6
   PATCH_COMMAND patch -p1 < ${CMAKE_CURRENT_SOURCE_DIR}/libtcmu.c.diff
 )
 FetchContent_GetProperties(tcmu_runner)
@@ -82,7 +82,7 @@ target_include_directories(image_lib PUBLIC
     ${rapidjson_SOURCE_DIR}/include
 )
 
-add_executable(overlaybd-tcmu main.cpp scsi_helper.cpp)
+add_executable(overlaybd-tcmu main.cpp)
 target_include_directories(overlaybd-tcmu
   PUBLIC ${tcmu_runner_SOURCE_DIR}
 )
