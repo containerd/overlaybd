@@ -84,7 +84,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
     "registryCacheDir": "/opt/overlaybd/registry_cache",
     "registryCacheSizeGB": 1,
     "credentialFilePath": "/opt/overlaybd/cred.json",
-    "ioEngine": 1,
+    "ioEngine": 0,
     "download": {
         "enable": true,
         "delay": 120,
