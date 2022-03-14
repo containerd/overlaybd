@@ -423,8 +423,7 @@ public:
                 if (c != block.crc32_code()) {
                     if (retry--) {
                         int reload_res = block.reload();
-                        LOG_ERROR("checksum failed {offset: `, length: `} (expected ` but got `), "
-                                  "reload result: `",
+                        LOG_ERROR("checksum failed {offset: `, length: `} (expected ` but got `), reload result: `",
                                   block.m_reader->m_buf_offset, block.compressed_size,
                                   block.crc32_code(), c, reload_res);
                         if (reload_res < 0) {
