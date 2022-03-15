@@ -196,7 +196,8 @@ public:
 #endif
 };
 
-template <typename AIOEngine> class AioFileAdaptor final : public BaseFileAdaptor {
+template <typename AIOEngine>
+class AioFileAdaptor final : public BaseFileAdaptor {
 public:
     using BaseFileAdaptor::BaseFileAdaptor;
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override {

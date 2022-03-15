@@ -13,18 +13,18 @@
 #include "../../../fs/cache/ocf_cache/ease_bindings/provider.h"
 #include "../../../alog-stdstring.h"
 
-extern IOAlloc* g_io_alloc;
+extern IOAlloc *g_io_alloc;
 
 namespace Cache {
 
 class OcfTruncateFile : public FileSystem::ForwardFile_Ownership {
 public:
-    OcfTruncateFile(IFile* file, size_t file_size) :
-            FileSystem::ForwardFile_Ownership(file, true),
-            m_file_size(file_size) {}
+    OcfTruncateFile(IFile *file, size_t file_size)
+        : FileSystem::ForwardFile_Ownership(file, true), m_file_size(file_size) {
+    }
 
-    ssize_t pread(void* buf, size_t count, off_t offset) override {
-        if (offset > (off_t) m_file_size || count == 0) {
+    ssize_t pread(void *buf, size_t count, off_t offset) override {
+        if (offset > (off_t)m_file_size || count == 0) {
             /* Read EOF, or read nothing */
             return 0;
         } else if (offset < 0) {
@@ -36,7 +36,7 @@ public:
         return m_file->pread(buf, count, offset);
     }
 
-    ssize_t preadv(const iovec* iov, int iovcnt, off_t offset) override {
+    ssize_t preadv(const iovec *iov, int iovcnt, off_t offset) override {
         IOVector iv(iov, iovcnt);
         auto result = truncate_iov(iv, offset);
         if (result <= 0) {
@@ -46,9 +46,9 @@ public:
     }
 
 private:
-    int truncate_iov(IOVector& iv, off_t offset) const {
+    int truncate_iov(IOVector &iv, off_t offset) const {
         size_t count = iv.sum();
-        if (offset > (off_t) m_file_size || count == 0) {
+        if (offset > (off_t)m_file_size || count == 0) {
             /* Read EOF, or read nothing */
             return 0;
         } else if (offset < 0) {
@@ -68,11 +68,11 @@ class OcfCachedFs;
 
 class OcfCachedFile : public FileSystem::VirtualFile {
 public:
-    OcfCachedFile(OcfCachedFs* fs, OcfSrcFileCtx* ctx);
+    OcfCachedFile(OcfCachedFs *fs, OcfSrcFileCtx *ctx);
 
     ~OcfCachedFile();
 
-    ssize_t pread(void* buf, size_t count, off_t offset) override;
+    ssize_t pread(void *buf, size_t count, off_t offset) override;
 
     int fadvise(off_t offset, off_t len, int advice) override;
 
@@ -80,11 +80,11 @@ public:
         return m_path_name;
     };
 
-    inline void set_pathname(const estring& pathname) {
+    inline void set_pathname(const estring &pathname) {
         m_path_name = pathname;
     }
 
-    int fstat(struct stat* buf) override {
+    int fstat(struct stat *buf) override {
         return m_ctx->src_file->fstat(buf);
     }
 
@@ -92,7 +92,7 @@ public:
         return m_ctx->src_file->vioctl(request, args);
     }
 
-    UNIMPLEMENTED_POINTER(FileSystem::IFileSystem* filesystem() override);
+    UNIMPLEMENTED_POINTER(FileSystem::IFileSystem *filesystem() override);
     UNIMPLEMENTED(off_t lseek(off_t offset, int whence) override);
     UNIMPLEMENTED(int fsync() override);
     UNIMPLEMENTED(int fdatasync() override);
@@ -102,83 +102,80 @@ public:
     UNIMPLEMENTED(int close() override);
 
 private:
-    OcfCachedFs* m_fs;          // owned by external class
-    OcfSrcFileCtx* m_ctx;       // owned by external class
+    OcfCachedFs *m_fs;    // owned by external class
+    OcfSrcFileCtx *m_ctx; // owned by external class
     estring m_path_name;
 };
 
 class OcfCachedFs : public FileSystem::IFileSystem {
 public:
-    OcfCachedFs(IFileSystem* src_fs, size_t prefetch_unit,
-                OcfNamespace* ocf_ns, FileSystem::IFile* media_file,
-                bool reload_media, IOAlloc* io_alloc);
+    OcfCachedFs(IFileSystem *src_fs, size_t prefetch_unit, OcfNamespace *ocf_ns,
+                FileSystem::IFile *media_file, bool reload_media, IOAlloc *io_alloc);
 
     ~OcfCachedFs();
 
     int init();
 
-    ssize_t ocf_pread(void* buf, size_t count, off_t offset, OcfSrcFileCtx* ctx);
+    ssize_t ocf_pread(void *buf, size_t count, off_t offset, OcfSrcFileCtx *ctx);
 
-    inline void pooled_release(OcfCachedFile* file) {
+    inline void pooled_release(OcfCachedFile *file) {
         m_src_file_pool.release(file->get_pathname());
     }
 
-    inline IOAlloc* get_io_alloc() const {
+    inline IOAlloc *get_io_alloc() const {
         return m_io_alloc;
     }
 
-    FileSystem::IFile* open(const char* pathname, int flags, mode_t mode) override;
+    FileSystem::IFile *open(const char *pathname, int flags, mode_t mode) override;
 
-    FileSystem::IFile* open(const char* pathname, int flags) override {
+    FileSystem::IFile *open(const char *pathname, int flags) override {
         return open(pathname, flags, 0644);
     }
 
-    UNIMPLEMENTED(int stat(const char* pathname, struct stat* buf) override);
-    UNIMPLEMENTED(int lstat(const char* path, struct stat* buf) override);
-    UNIMPLEMENTED_POINTER(FileSystem::IFile* creat(const char*, mode_t) override);
-    UNIMPLEMENTED(int mkdir(const char*, mode_t) override);
-    UNIMPLEMENTED(int rmdir(const char*) override);
-    UNIMPLEMENTED(int link(const char*, const char*) override);
-    UNIMPLEMENTED(int symlink(const char*, const char*) override);
-    UNIMPLEMENTED(ssize_t readlink(const char*, char*, size_t) override);
-    UNIMPLEMENTED(int rename(const char*, const char*) override);
-    UNIMPLEMENTED(int chmod(const char*, mode_t) override);
-    UNIMPLEMENTED(int chown(const char*, uid_t, gid_t) override);
-    UNIMPLEMENTED(int statfs(const char* path, struct statfs* buf) override);
-    UNIMPLEMENTED(int statvfs(const char* path, struct statvfs* buf) override);
-    UNIMPLEMENTED(int access(const char* pathname, int mode) override);
-    UNIMPLEMENTED(int truncate(const char* path, off_t length) override);
+    UNIMPLEMENTED(int stat(const char *pathname, struct stat *buf) override);
+    UNIMPLEMENTED(int lstat(const char *path, struct stat *buf) override);
+    UNIMPLEMENTED_POINTER(FileSystem::IFile *creat(const char *, mode_t) override);
+    UNIMPLEMENTED(int mkdir(const char *, mode_t) override);
+    UNIMPLEMENTED(int rmdir(const char *) override);
+    UNIMPLEMENTED(int link(const char *, const char *) override);
+    UNIMPLEMENTED(int symlink(const char *, const char *) override);
+    UNIMPLEMENTED(ssize_t readlink(const char *, char *, size_t) override);
+    UNIMPLEMENTED(int rename(const char *, const char *) override);
+    UNIMPLEMENTED(int chmod(const char *, mode_t) override);
+    UNIMPLEMENTED(int chown(const char *, uid_t, gid_t) override);
+    UNIMPLEMENTED(int statfs(const char *path, struct statfs *buf) override);
+    UNIMPLEMENTED(int statvfs(const char *path, struct statvfs *buf) override);
+    UNIMPLEMENTED(int access(const char *pathname, int mode) override);
+    UNIMPLEMENTED(int truncate(const char *path, off_t length) override);
     UNIMPLEMENTED(int syncfs() override);
-    UNIMPLEMENTED(int unlink(const char* filename) override);
-    UNIMPLEMENTED(int lchown(const char* pathname, uid_t owner, gid_t group) override);
-    UNIMPLEMENTED_POINTER(FileSystem::DIR* opendir(const char*) override);
+    UNIMPLEMENTED(int unlink(const char *filename) override);
+    UNIMPLEMENTED(int lchown(const char *pathname, uid_t owner, gid_t group) override);
+    UNIMPLEMENTED_POINTER(FileSystem::DIR *opendir(const char *) override);
 
 private:
-    FileSystem::IFileSystem* m_src_fs;                      // owned by external class
+    FileSystem::IFileSystem *m_src_fs; // owned by external class
     size_t m_prefetch_unit;
-    OcfNamespace* m_ocf_ns;                                 // owned by self
-    FileSystem::IFile* m_media_file;                        // owned by external class
+    OcfNamespace *m_ocf_ns;          // owned by self
+    FileSystem::IFile *m_media_file; // owned by external class
     bool m_reload_media;
-    IOAlloc* m_io_alloc;                                    // owned by external class
+    IOAlloc *m_io_alloc; // owned by external class
 
-    ObjectCache<std::string, OcfSrcFileCtx*> m_src_file_pool;
+    ObjectCache<std::string, OcfSrcFileCtx *> m_src_file_pool;
 
-    ease_ocf_volume_params* m_volume_params = nullptr;      // owned by self
-    ease_ocf_provider* m_provider = nullptr;                // owned by self
+    ease_ocf_volume_params *m_volume_params = nullptr; // owned by self
+    ease_ocf_provider *m_provider = nullptr;           // owned by self
 };
 
-OcfCachedFile::OcfCachedFile(Cache::OcfCachedFs* fs, OcfSrcFileCtx* ctx) :
-        m_fs(fs),
-        m_ctx(ctx) {
+OcfCachedFile::OcfCachedFile(Cache::OcfCachedFs *fs, OcfSrcFileCtx *ctx) : m_fs(fs), m_ctx(ctx) {
 }
 
 OcfCachedFile::~OcfCachedFile() {
     m_fs->pooled_release(this);
 }
 
-ssize_t OcfCachedFile::pread(void* buf, size_t count, off_t offset) {
+ssize_t OcfCachedFile::pread(void *buf, size_t count, off_t offset) {
     auto ret = m_fs->ocf_pread(buf, count, offset, m_ctx);
-    if (ret != (ssize_t) count) {
+    if (ret != (ssize_t)count) {
         LOG_ERRNO_RETURN(0, ret, "OcfCachedFile pread failed");
     }
     return count;
@@ -186,7 +183,7 @@ ssize_t OcfCachedFile::pread(void* buf, size_t count, off_t offset) {
 
 int OcfCachedFile::fadvise(off_t offset, off_t len, int advice) {
     if (advice == POSIX_FADV_WILLNEED) {
-        void* buf = m_fs->get_io_alloc()->alloc(len);
+        void *buf = m_fs->get_io_alloc()->alloc(len);
         DEFER(m_fs->get_io_alloc()->dealloc(buf));
         int ret = pread(buf, len, offset);
         if (ret < 0) {
@@ -197,16 +194,11 @@ int OcfCachedFile::fadvise(off_t offset, off_t len, int advice) {
     LOG_ERRNO_RETURN(ENOSYS, -1, "advice ` is not implemented", advice);
 }
 
-OcfCachedFs::OcfCachedFs(FileSystem::IFileSystem* src_fs, size_t prefetch_unit,
-                         OcfNamespace* ocf_ns, FileSystem::IFile* media_file,
-                         bool reload_media, IOAlloc* io_alloc) :
-        m_src_fs(src_fs),
-        m_prefetch_unit(prefetch_unit),
-        m_ocf_ns(ocf_ns),
-        m_media_file(media_file),
-        m_reload_media(reload_media),
-        m_io_alloc(io_alloc),
-        m_src_file_pool(1 * 1000 * 1000) {
+OcfCachedFs::OcfCachedFs(FileSystem::IFileSystem *src_fs, size_t prefetch_unit,
+                         OcfNamespace *ocf_ns, FileSystem::IFile *media_file, bool reload_media,
+                         IOAlloc *io_alloc)
+    : m_src_fs(src_fs), m_prefetch_unit(prefetch_unit), m_ocf_ns(ocf_ns), m_media_file(media_file),
+      m_reload_media(reload_media), m_io_alloc(io_alloc), m_src_file_pool(1 * 1000 * 1000) {
 }
 
 OcfCachedFs::~OcfCachedFs() {
@@ -222,30 +214,31 @@ int OcfCachedFs::init() {
     }
     g_io_alloc = m_io_alloc;
 
-    struct stat buf{};
+    struct stat buf {};
     if (m_media_file->fstat(&buf) != 0) {
         LOG_ERROR_RETURN(0, -1, "OCF: failed to get media file size");
     }
     size_t media_size = buf.st_size;
-    m_volume_params = new ease_ocf_volume_params{m_ocf_ns->block_size(), media_size, m_media_file, false};
+    m_volume_params =
+        new ease_ocf_volume_params{m_ocf_ns->block_size(), media_size, m_media_file, false};
     m_provider = new ease_ocf_provider(m_volume_params, m_prefetch_unit);
 
     return m_provider->start(m_reload_media);
 }
 
-ssize_t OcfCachedFs::ocf_pread(void* buf, size_t count, off_t offset, OcfSrcFileCtx* ctx) {
+ssize_t OcfCachedFs::ocf_pread(void *buf, size_t count, off_t offset, OcfSrcFileCtx *ctx) {
     size_t blk_addr = ctx->ns_info.blk_idx * m_volume_params->blk_size;
     bool prefetch = (m_prefetch_unit != 0);
     return m_provider->ocf_pread(buf, count, offset, blk_addr, ctx, prefetch);
 }
 
-FileSystem::IFile* OcfCachedFs::open(const char* pathname, int flags, mode_t mode) {
+FileSystem::IFile *OcfCachedFs::open(const char *pathname, int flags, mode_t mode) {
     estring path_str(pathname);
     if (path_str.ends_with("/")) {
         LOG_ERROR_RETURN(0, nullptr, "OCF: cannot open a directory `", path_str.c_str());
     }
 
-    auto ctor = [&]() -> OcfSrcFileCtx* {
+    auto ctor = [&]() -> OcfSrcFileCtx * {
         // Open src file first
         auto src_file = m_src_fs->open(path_str.c_str(), flags, mode);
         if (src_file == nullptr) {
@@ -254,7 +247,8 @@ FileSystem::IFile* OcfCachedFs::open(const char* pathname, int flags, mode_t mod
 
         OcfNamespace::NsInfo info{};
         if (m_ocf_ns->locate_file(path_str, src_file, info) != 0) {
-            LOG_ERROR_RETURN(0, nullptr, "OCF: failed to locate src_file in namespace, path `", path_str);
+            LOG_ERROR_RETURN(0, nullptr, "OCF: failed to locate src_file in namespace, path `",
+                             path_str);
         }
         return new OcfSrcFileCtx(src_file, info, m_provider);
     };
@@ -274,15 +268,17 @@ FileSystem::IFile* OcfCachedFs::open(const char* pathname, int flags, mode_t mod
 
 namespace FileSystem {
 
-IFileSystem* new_ocf_cached_fs(IFileSystem* src_fs, IFileSystem* namespace_fs, size_t blk_size,
-                               size_t prefetch_unit, IFile* media_file, bool reload_media, IOAlloc* io_alloc) {
+IFileSystem *new_ocf_cached_fs(IFileSystem *src_fs, IFileSystem *namespace_fs, size_t blk_size,
+                               size_t prefetch_unit, IFile *media_file, bool reload_media,
+                               IOAlloc *io_alloc) {
     auto ocf_ns = new_ocf_namespace_on_fs(blk_size, namespace_fs);
     if (ocf_ns->init() != 0) {
         delete ocf_ns;
         LOG_ERROR_RETURN(0, nullptr, "OCF: init namespace failed");
     }
 
-    auto fs = new Cache::OcfCachedFs(src_fs, prefetch_unit, ocf_ns, media_file, reload_media, io_alloc);
+    auto fs =
+        new Cache::OcfCachedFs(src_fs, prefetch_unit, ocf_ns, media_file, reload_media, io_alloc);
     if (fs->init() != 0) {
         delete fs;
         LOG_ERROR_RETURN(0, nullptr, "OCF: init cache fs failed");

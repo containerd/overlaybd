@@ -25,20 +25,16 @@ namespace FileSystem {
 class IFileSystem;
 }
 
-typedef enum {
-    io_engine_psync,
-    io_engine_libaio,
-    io_engine_posixaio
-} IOEngineType;
+typedef enum { io_engine_psync, io_engine_libaio, io_engine_posixaio } IOEngineType;
 
 struct GlobalFs {
     FileSystem::IFileSystem *remote_fs = nullptr;
-    FileSystem::IFileSystem* srcfs = nullptr;
+    FileSystem::IFileSystem *srcfs = nullptr;
 
     // ocf cache only
-    FileSystem::IFile* media_file = nullptr;
-    FileSystem::IFileSystem* namespace_fs = nullptr;
-    IOAlloc* io_alloc = nullptr;
+    FileSystem::IFile *media_file = nullptr;
+    FileSystem::IFileSystem *namespace_fs = nullptr;
+    IOAlloc *io_alloc = nullptr;
 };
 
 struct ImageFile;

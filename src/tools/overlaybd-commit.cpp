@@ -65,25 +65,25 @@ static void parse_args(int argc, char **argv) {
     bool log = false;
     while ((ch = getopt(argc, argv, "vm:p:")) != -1) {
         switch (ch) {
-            case 'v':
-                log = true;
-                shift++;
-                break;
-            case 'm':
-                commit_msg = optarg;
-                shift += 2;
-                break;
-            case 'p':
-                if (!UUID::String::is_valid(optarg)) {
-                    fprintf(stderr, "invalid UUID format.\n");
-                    exit(-1);
-                }
-                parent_uuid = string(optarg);
-                shift += 2;
-                break;
-            default:
-                usage();
+        case 'v':
+            log = true;
+            shift++;
+            break;
+        case 'm':
+            commit_msg = optarg;
+            shift += 2;
+            break;
+        case 'p':
+            if (!UUID::String::is_valid(optarg)) {
+                fprintf(stderr, "invalid UUID format.\n");
                 exit(-1);
+            }
+            parent_uuid = string(optarg);
+            shift += 2;
+            break;
+        default:
+            usage();
+            exit(-1);
         }
     }
     if (argc - shift < 1 || argc - shift > 3)
