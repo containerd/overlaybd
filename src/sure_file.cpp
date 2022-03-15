@@ -39,7 +39,7 @@ private:
         else
             photon::thread_usleep(2000); // 2ms
 
-        if (try_cnt > 30000) // >1min
+        if (try_cnt > 30000)         // >1min
             photon::thread_sleep(1); // 1sec
     }
 

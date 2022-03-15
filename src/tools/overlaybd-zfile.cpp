@@ -64,26 +64,26 @@ int main(int argc, char **argv) {
     opt.verify = 1;
     while ((ch = getopt(argc, argv, "tfxd:")) != -1) {
         switch (ch) {
-            case 'd':
-                printf("set log output level: %d\n", log_output_level);
-                log_output_level = 0;
-                parse_idx++;
-                break;
-            case 'x':
-                op = 1;
-                parse_idx++;
-                break;
-            case 'f':
-                parse_idx++;
-                rm_old = true;
-                break;
-            case 't':
-                parse_idx++;
-                tar = true;
-                break;
-            default:
-                usage();
-                exit(-1);
+        case 'd':
+            printf("set log output level: %d\n", log_output_level);
+            log_output_level = 0;
+            parse_idx++;
+            break;
+        case 'x':
+            op = 1;
+            parse_idx++;
+            break;
+        case 'f':
+            parse_idx++;
+            rm_old = true;
+            break;
+        case 't':
+            parse_idx++;
+            tar = true;
+            break;
+        default:
+            usage();
+            exit(-1);
         }
     }
     lfs = new_localfs_adaptor();

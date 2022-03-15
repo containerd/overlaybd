@@ -291,8 +291,8 @@ int CachedFile::fallocate(int mode, off_t offset, off_t len) {
     range_split_power2 rs(offset, len, pageSize_);
     auto aligned_offset = rs.aligned_begin_offset();
     auto aligned_len = rs.aligned_length();
-    LOG_DEBUG("fallocate offset: `, len: `, aligned offset: `, aligned len: `",
-                          offset, len, aligned_offset, aligned_len);
+    LOG_DEBUG("fallocate offset: `, len: `, aligned offset: `, aligned len: `", offset, len,
+              aligned_offset, aligned_len);
     return cache_store_->evict(aligned_offset, aligned_len);
 }
 

@@ -192,24 +192,24 @@ static void parse_args(int &argc, char **argv) {
     bool log = false;
     while ((ch = getopt(argc, argv, "vur:a:s:")) != -1) {
         switch (ch) {
-            case 'u':
-                action = 1;
-                shift += 1;
-                break;
-            case 'r':
-                is_remote = true;
-                url = optarg;
-                shift += 2;
-                break;
-            case 'v':
-                log = true;
-                log_output_level = 0;
-                shift += 1;
-                break;
-            default:
-                printf("invalid option: %c\n", char(ch));
-                usage();
-                exit(-1);
+        case 'u':
+            action = 1;
+            shift += 1;
+            break;
+        case 'r':
+            is_remote = true;
+            url = optarg;
+            shift += 2;
+            break;
+        case 'v':
+            log = true;
+            log_output_level = 0;
+            shift += 1;
+            break;
+        default:
+            printf("invalid option: %c\n", char(ch));
+            usage();
+            exit(-1);
         }
     }
     if (!log) {

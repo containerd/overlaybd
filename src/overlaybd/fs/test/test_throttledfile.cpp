@@ -23,7 +23,6 @@
 #define protected public
 #define private public
 
-
 #include "../throttled-file.h"
 #include "../throttled-file.cpp"
 #include "../../alog.h"
@@ -43,14 +42,14 @@ void push_in_another_thread(StatisticsQueue &queue) {
 
 void pop_in_another_thread(StatisticsQueue &queue) {
     photon::thread_sleep(2);
-    queue.try_pop(); //it should pop out two items.
+    queue.try_pop(); // it should pop out two items.
     LOG_DEBUG("POPED");
 }
 
 TEST(ThrottledFile, statistics_queue) {
     using namespace FileSystem;
     photon::init();
-    StatisticsQueue queue(50*4096, 128);
+    StatisticsQueue queue(50 * 4096, 128);
     EXPECT_EQ(0UL, queue.sum());
 
     queue.push_back(32);
@@ -62,12 +61,12 @@ TEST(ThrottledFile, statistics_queue) {
     photon::thread_sleep(2);
     queue.try_pop();
     EXPECT_EQ(0UL, queue.sum());
-    for (int i=0;i<51;i++) {
+    for (int i = 0; i < 51; i++) {
         queue.push_back(4096);
-    } //4096*100 400k
+    } // 4096*100 400k
 
-    EXPECT_EQ(4096*50UL, queue.limit());
-    EXPECT_EQ(4096*50U, queue.rate());
+    EXPECT_EQ(4096 * 50UL, queue.limit());
+    EXPECT_EQ(4096 * 50U, queue.rate());
 }
 
 TEST(ThrottledFile, scoped_queue) {
@@ -81,7 +80,7 @@ TEST(ThrottledFile, scoped_queue) {
         scoped_queue sq(queue, 4096);
         EXPECT_EQ(4096UL, queue.sum());
     }
-    EXPECT_GT(photon::now, start + 1000*1000);
+    EXPECT_GT(photon::now, start + 1000 * 1000);
     photon::thread_sleep(2);
     queue.try_pop();
     EXPECT_EQ(0UL, queue.sum());
@@ -100,12 +99,12 @@ TEST(ThrottledFile, scoped_semaphore) {
 TEST(ThrottledFile, split_iovector_view) {
     using namespace FileSystem;
     iovec iov[10];
-    for (int i=0;i < 10; i++) {
-        iov[i].iov_base = (void*)(i * 4096UL);
+    for (int i = 0; i < 10; i++) {
+        iov[i].iov_base = (void *)(i * 4096UL);
         iov[i].iov_len = 4096;
     }
     split_iovector_view siv(iov, 10, 1024); // should become 40 blocks;
-    for (int i=0;i<40;i++) {
+    for (int i = 0; i < 40; i++) {
         iovec *v = siv.iov;
         EXPECT_EQ(1024UL, v->iov_len);
         EXPECT_EQ(i * 1024UL, (uint64_t)(v->iov_base));
@@ -113,9 +112,9 @@ TEST(ThrottledFile, split_iovector_view) {
     }
 }
 
-ssize_t count_iov_size(const iovec* v, int n) {
+ssize_t count_iov_size(const iovec *v, int n) {
     ssize_t ret = 0;
-    for (auto p = v; p != v+n; p++) {
+    for (auto p = v; p != v + n; p++) {
         ret += p->iov_len;
     }
     return ret;
@@ -126,25 +125,29 @@ TEST(ThrottledFile, basic_throttled) {
     ThrottleLimits limit;
     limit.R.block_size = 1024;
     limit.R.concurent_ops = 1024;
-    limit.R.IOPS = 1024*128;
-    limit.R.throughput = 4*1024*1024;
+    limit.R.IOPS = 1024 * 128;
+    limit.R.throughput = 4 * 1024 * 1024;
     limit.W = limit.R;
     limit.RW = limit.R;
     Mock::MockNullFile mock;
-    IFile * pmock = &mock;
-    IFile * tf = new_throttled_file(pmock, limit);
+    IFile *pmock = &mock;
+    IFile *tf = new_throttled_file(pmock, limit);
     iovec iov[10];
-    for (int i=0;i < 10; i++) {
-        iov[i].iov_base = (void*)(i * 4000UL);
+    for (int i = 0; i < 10; i++) {
+        iov[i].iov_base = (void *)(i * 4000UL);
         iov[i].iov_len = 4000;
     }
-    const struct iovec* c_nulliov = iov;
-    struct iovec* nulliov = iov;
+    const struct iovec *c_nulliov = iov;
+    struct iovec *nulliov = iov;
     char buff[4096];
     EXPECT_CALL(mock, pread(_, _, _)).Times(AtLeast(1)).WillRepeatedly(ReturnArg<1>());
-    EXPECT_CALL(mock, preadv(_, _, _)).Times(AtLeast(1)).WillRepeatedly(WithArgs<0, 1>(Invoke(count_iov_size)));
+    EXPECT_CALL(mock, preadv(_, _, _))
+        .Times(AtLeast(1))
+        .WillRepeatedly(WithArgs<0, 1>(Invoke(count_iov_size)));
     EXPECT_CALL(mock, pwrite(_, _, _)).Times(AtLeast(1)).WillRepeatedly(ReturnArg<1>());
-    EXPECT_CALL(mock, pwritev(_, _, _)).Times(AtLeast(1)).WillRepeatedly(WithArgs<0, 1>(Invoke(count_iov_size)));
+    EXPECT_CALL(mock, pwritev(_, _, _))
+        .Times(AtLeast(1))
+        .WillRepeatedly(WithArgs<0, 1>(Invoke(count_iov_size)));
     EXPECT_CALL(mock, read(_, _)).Times(AtLeast(1)).WillRepeatedly(ReturnArg<1>());
     EXPECT_CALL(mock, readv(_, _)).Times(AtLeast(1)).WillRepeatedly(Invoke(count_iov_size));
     EXPECT_CALL(mock, write(_, _)).Times(AtLeast(1)).WillRepeatedly(ReturnArg<1>());
@@ -172,7 +175,7 @@ TEST(ThrottledFile, huge_enque) {
     using namespace FileSystem;
     StatisticsQueue q(1024, 128);
     q.push_back(4096);
-    EXPECT_EQ(3UL*1024*1024, q.min_duration());
+    EXPECT_EQ(3UL * 1024 * 1024, q.min_duration());
 }
 
 void enq_thread(StatisticsQueue &q) {
@@ -184,10 +187,13 @@ TEST(ThrottledFile, huge_scope_que) {
     StatisticsQueue q(1024, 128);
     auto start = photon::now;
     photon::thread_create11(enq_thread, q);
-    do { photon::thread_yield_to(nullptr); q.try_pop(); } while (q.sum()>0);
+    do {
+        photon::thread_yield_to(nullptr);
+        q.try_pop();
+    } while (q.sum() > 0);
     EXPECT_EQ(0UL, q.sum());
-    EXPECT_GE(photon::now - start, 4UL*1000*1000);
-    EXPECT_LE(photon::now - start, 5UL*1000*1000);
+    EXPECT_GE(photon::now - start, 4UL * 1000 * 1000);
+    EXPECT_LE(photon::now - start, 5UL * 1000 * 1000);
 }
 
 TEST(ThrottledFile, split_io) {
@@ -195,29 +201,29 @@ TEST(ThrottledFile, split_io) {
     auto _o_output = log_output;
     log_output = log_output_null;
     DEFER({ log_output = _o_output; });
-    auto ret = split_io("testio", 2000, 1024,
-        [](size_t len){
-            if (len == 1024) return 1024;
+    auto ret = split_io(
+        "testio", 2000, 1024,
+        [](size_t len) {
+            if (len == 1024)
+                return 1024;
             return 11;
         },
-        [](size_t len){
-        }
-    );
-    EXPECT_EQ(1024+11, ret);
-    ret = split_io("testio", 2000, 1024,
-        [](size_t len){
-            if (len == 1024) return 1024;
+        [](size_t len) {});
+    EXPECT_EQ(1024 + 11, ret);
+    ret = split_io(
+        "testio", 2000, 1024,
+        [](size_t len) {
+            if (len == 1024)
+                return 1024;
             return -1;
         },
-        [](size_t len){
-        }
-    );
+        [](size_t len) {});
     EXPECT_EQ(-1, ret);
 }
 
-void large_pulse_write(IFile* tf, uint64_t slt) {
-    photon::thread_usleep(slt+100); // skip time_window
-    tf->write(nullptr, 2048); //twice of time_window
+void large_pulse_write(IFile *tf, uint64_t slt) {
+    photon::thread_usleep(slt + 100); // skip time_window
+    tf->write(nullptr, 2048);         // twice of time_window
 }
 
 TEST(ThrottledFile, large_pulse) {
@@ -233,18 +239,19 @@ TEST(ThrottledFile, large_pulse) {
     Mock::MockNullFile *mock = new Mock::MockNullFile();
     DEFER({ delete mock; });
     EXPECT_CALL(*mock, write(_, _)).WillRepeatedly(ReturnArg<1>());
-    IFile * pmock = mock;
-    IFile * tf = new_throttled_file(pmock, limit);
-    photon::thread_yield(); // update now
+    IFile *pmock = mock;
+    IFile *tf = new_throttled_file(pmock, limit);
+    photon::thread_yield();   // update now
     auto start = photon::now; // take now as start time
-    vector<photon::join_handle*> jhs;
-    for (int i=0;i<3;i++) {
-        jhs.emplace_back(photon::thread_enable_join(photon::thread_create11(large_pulse_write, tf, i*1024*1024)));
+    vector<photon::join_handle *> jhs;
+    for (int i = 0; i < 3; i++) {
+        jhs.emplace_back(photon::thread_enable_join(
+            photon::thread_create11(large_pulse_write, tf, i * 1024 * 1024)));
     }
     for (auto p : jhs) {
         photon::thread_join(p);
     }
-    EXPECT_GE(photon::now - start, 4UL*1000*1000);
+    EXPECT_GE(photon::now - start, 4UL * 1000 * 1000);
 }
 
 TEST(ThrottledFile, limit_cover) {
@@ -258,18 +265,19 @@ TEST(ThrottledFile, limit_cover) {
     Mock::MockNullFile *mock = new Mock::MockNullFile();
     DEFER({ delete mock; });
     EXPECT_CALL(*mock, write(_, _)).WillRepeatedly(ReturnArg<1>());
-    IFile * pmock = mock;
-    IFile * tf = new_throttled_file(pmock, limit);
-    photon::thread_yield(); // update now
+    IFile *pmock = mock;
+    IFile *tf = new_throttled_file(pmock, limit);
+    photon::thread_yield();   // update now
     auto start = photon::now; // take now as start time
-    vector<photon::join_handle*> jhs;
-    for (int i=0;i<3;i++) {
-        jhs.emplace_back(photon::thread_enable_join(photon::thread_create11(large_pulse_write, tf, i*1024*1024)));
+    vector<photon::join_handle *> jhs;
+    for (int i = 0; i < 3; i++) {
+        jhs.emplace_back(photon::thread_enable_join(
+            photon::thread_create11(large_pulse_write, tf, i * 1024 * 1024)));
     }
     for (auto p : jhs) {
         photon::thread_join(p);
     }
-    EXPECT_GE(photon::now - start, 4UL*1000*1000);
+    EXPECT_GE(photon::now - start, 4UL * 1000 * 1000);
 }
 
 TEST(ThrottledFile, timestamp) {
@@ -285,15 +293,13 @@ TEST(ThrottledFile, timebase_overflow) {
     auto now = photon::now / 1024;
     q.push_back(1);
     EXPECT_EQ(now, q._get_time(q.m_events.front().time_stamp));
-    q.m_events.front().time_stamp = (1<<30); //q.m_timestamp_base + 1<<30
+    q.m_events.front().time_stamp = (1 << 30); // q.m_timestamp_base + 1<<30
     auto t = q._get_time(q.m_events.front().time_stamp);
-    q._update_timestamp_base(q.m_timestamp_base + ((1<<30)));
+    q._update_timestamp_base(q.m_timestamp_base + ((1 << 30)));
     EXPECT_EQ(t, q._get_time(q.m_events.front().time_stamp));
 }
 
-
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     int ret = RUN_ALL_TESTS();
     LOG_ERROR_RETURN(0, ret, VALUE(ret));

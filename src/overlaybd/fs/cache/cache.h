@@ -122,11 +122,12 @@ ICachedFileSystem *new_block_cached_fs(IFileSystem *srcFs, uint64_t refillUnit,
 /**
  * @param blk_size The proper size for cache metadata and IO efficiency.
  *        Large writes to cache media will be split into blk_size. Reads are not affected.
- * @param prefetch_unit Controls the expand prefetch size from src file. 0 means to disable this feature.
+ * @param prefetch_unit Controls the expand prefetch size from src file. 0 means to disable this
+ * feature.
  */
-IFileSystem* new_ocf_cached_fs(IFileSystem* src_fs, IFileSystem* namespace_fs, size_t blk_size,
-                               size_t prefetch_unit, IFile* media_file, bool reload_media,
-                               IOAlloc* io_alloc);
+IFileSystem *new_ocf_cached_fs(IFileSystem *src_fs, IFileSystem *namespace_fs, size_t blk_size,
+                               size_t prefetch_unit, IFile *media_file, bool reload_media,
+                               IOAlloc *io_alloc);
 
 IFileSystem *new_short_circuit_fs(IFileSystem *syncFs, const std::string &params);
 

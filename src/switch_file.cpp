@@ -43,7 +43,7 @@ public:
     IFile *m_old = nullptr;
     string m_filepath;
 
-    SwitchFile(IFile *source, bool local=false, const char* filepath=nullptr)
+    SwitchFile(IFile *source, bool local = false, const char *filepath = nullptr)
         : m_file(source), local_path(local) {
         state = 0;
         io_count = 0;
@@ -76,12 +76,12 @@ public:
 
         // if tar file, open tar file
         file = FileSystem::new_tar_file_adaptor(file);
-        //open zfile
+        // open zfile
         auto zf = ZFile::zfile_open_ro(file, false, true);
         if (!zf) {
             delete file;
             LOG_ERROR_RETURN(0, -1, "zfile_open_ro failed, path: `: error: `(`)", m_filepath, errno,
-                                    strerror(errno));
+                             strerror(errno));
         }
         file = zf;
 
@@ -178,7 +178,7 @@ public:
     }
 };
 
-ISwitchFile *new_switch_file(IFile *source, bool local, const char* file_path) {
+ISwitchFile *new_switch_file(IFile *source, bool local, const char *file_path) {
     // if tar file, open tar file
     IFile *file = FileSystem::new_tar_file_adaptor(source);
     // open zfile
@@ -186,7 +186,7 @@ ISwitchFile *new_switch_file(IFile *source, bool local, const char* file_path) {
     auto zf = ZFile::zfile_open_ro(file, verify, true);
     if (!zf) {
         LOG_ERROR_RETURN(0, nullptr, "zfile_open_ro failed, path: `: error: `(`)", file_path, errno,
-                                    strerror(errno));
+                         strerror(errno));
     }
     file = zf;
     return new SwitchFile(file, local, file_path);

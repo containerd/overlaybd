@@ -48,9 +48,8 @@ using PasswordCB = Delegate<std::pair<std::string, std::string>, const char *>;
 
 extern "C" {
 IFileSystem *new_registryfs_with_credential_callback(PasswordCB callback,
-                                                   const char *caFile = nullptr,
-                                                   uint64_t timeout = -1);
-
+                                                     const char *caFile = nullptr,
+                                                     uint64_t timeout = -1);
 }
 
 } // namespace FileSystem
