@@ -5,3 +5,5 @@ AccessModifierOffset: -4
 SortIncludes: false
 ColumnLimit: 100
 AllowShortFunctionsOnASingleLine: None
+AlwaysBreakTemplateDeclarations: true
+BreakStringLiterals: false

@@ -61,13 +61,13 @@ static void parse_args(int argc, char **argv) {
     int ch;
     while ((ch = getopt(argc, argv, "u:")) != -1) {
         switch (ch) {
-            case 'u':
-                parent_uuid = optarg;
-                shift += 2;
-                break;
-            default:
-                usage();
-                exit(-1);
+        case 'u':
+            parent_uuid = optarg;
+            shift += 2;
+            break;
+        default:
+            usage();
+            exit(-1);
         }
     }
     if (argc - shift < 2)

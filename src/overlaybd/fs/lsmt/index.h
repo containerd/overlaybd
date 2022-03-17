@@ -139,7 +139,6 @@ public:
     // and then clear the original index0.
     // virtual IMemoryIndex0* gc_index() = 0;
     virtual IMemoryIndex *load_range_index(int, int) const = 0;
-
 };
 
 // create writable level 0 memory index from an array of mappings;

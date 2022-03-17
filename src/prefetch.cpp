@@ -41,18 +41,18 @@ class PrefetcherImpl;
 
 class PrefetchFile : public ForwardFile_Ownership {
 public:
-    PrefetchFile(IFile* src_file, uint32_t layer_index, Prefetcher* prefetcher);
+    PrefetchFile(IFile *src_file, uint32_t layer_index, Prefetcher *prefetcher);
 
-    ssize_t pread(void* buf, size_t count, off_t offset) override;
+    ssize_t pread(void *buf, size_t count, off_t offset) override;
 
 private:
     uint32_t m_layer_index;
-    PrefetcherImpl* m_prefetcher;
+    PrefetcherImpl *m_prefetcher;
 };
 
 class PrefetcherImpl : public Prefetcher {
 public:
-    explicit PrefetcherImpl(const string& trace_file_path) {
+    explicit PrefetcherImpl(const string &trace_file_path) {
         // Detect mode
         size_t file_size = 0;
         m_mode = detect_mode(trace_file_path, &file_size);
@@ -63,7 +63,8 @@ public:
         // Open trace file
         if (m_mode != Mode::Disabled) {
             int flags = m_mode == Mode::Record ? O_WRONLY : O_RDONLY;
-            m_trace_file = FileSystem::open_localfile_adaptor(trace_file_path.c_str(), flags, 0666, 2);
+            m_trace_file =
+                FileSystem::open_localfile_adaptor(trace_file_path.c_str(), flags, 0666, 2);
         }
 
         // Loop detect lock file if going to record
@@ -84,7 +85,7 @@ public:
         if (m_mode == Mode::Record) {
             m_record_stopped = true;
             if (m_detect_thread_interruptible) {
-                photon::thread_shutdown((photon::thread*) m_detect_thread);
+                photon::thread_shutdown((photon::thread *)m_detect_thread);
             }
             photon::thread_join(m_detect_thread);
             dump();
@@ -92,7 +93,7 @@ public:
         } else if (m_mode == Mode::Replay) {
             m_replay_stopped = true;
             for (auto th : m_replay_threads) {
-                photon::thread_shutdown((photon::thread*) th);
+                photon::thread_shutdown((photon::thread *)th);
                 photon::thread_join(th);
             }
         }
@@ -103,7 +104,7 @@ public:
         }
     }
 
-    IFile* new_prefetch_file(IFile* src_file, uint32_t layer_index) override {
+    IFile *new_prefetch_file(IFile *src_file, uint32_t layer_index) override {
         return new PrefetchFile(src_file, layer_index, this);
     }
 
@@ -122,7 +123,8 @@ public:
         if (m_replay_queue.empty() || m_src_files.empty()) {
             return;
         }
-        LOG_INFO("Prefetch: Replay ` records from ` layers", m_replay_queue.size(), m_src_files.size());
+        LOG_INFO("Prefetch: Replay ` records from ` layers", m_replay_queue.size(),
+                 m_src_files.size());
         for (int i = 0; i < REPLAY_CONCURRENCY; ++i) {
             auto th = photon::thread_create11(&PrefetcherImpl::replay_worker_thread, this);
             auto join_handle = photon::thread_enable_join(th);
@@ -131,7 +133,7 @@ public:
     }
 
     int replay_worker_thread() {
-        static char buf[MAX_IO_SIZE];       // multi threads reuse one buffer
+        static char buf[MAX_IO_SIZE]; // multi threads reuse one buffer
         while (!m_replay_queue.empty() && !m_replay_stopped) {
             auto trace = m_replay_queue.front();
             m_replay_queue.pop();
@@ -142,8 +144,9 @@ public:
             auto src_file = iter->second;
             if (trace.op == PrefetcherImpl::TraceOp::READ) {
                 ssize_t n_read = src_file->pread(buf, trace.count, trace.offset);
-                if (n_read != (ssize_t) trace.count) {
-                    LOG_ERROR("Prefetch: replay pread failed: `, `, respect: `, got: `", ERRNO(), trace, trace.count, n_read);
+                if (n_read != (ssize_t)trace.count) {
+                    LOG_ERROR("Prefetch: replay pread failed: `, `, respect: `, got: `", ERRNO(),
+                              trace, trace.count, n_read);
                     continue;
                 }
             }
@@ -156,7 +159,7 @@ public:
         return 0;
     }
 
-    void register_src_file(uint32_t layer_index, IFile* src_file) {
+    void register_src_file(uint32_t layer_index, IFile *src_file) {
         m_src_files[layer_index] = src_file;
     }
 
@@ -180,13 +183,13 @@ private:
 
     vector<TraceFormat> m_record_array;
     queue<TraceFormat> m_replay_queue;
-    map<uint32_t, IFile*> m_src_files;
-    vector<photon::join_handle*> m_replay_threads;
-    photon::join_handle* m_detect_thread = nullptr;
+    map<uint32_t, IFile *> m_src_files;
+    vector<photon::join_handle *> m_replay_threads;
+    photon::join_handle *m_detect_thread = nullptr;
     bool m_detect_thread_interruptible = false;
     string m_lock_file_path;
     string m_ok_file_path;
-    IFile* m_trace_file = nullptr;
+    IFile *m_trace_file = nullptr;
     bool m_replay_stopped = false;
     bool m_record_stopped = false;
     bool m_buffer_released = false;
@@ -210,7 +213,7 @@ private:
 
         TraceHeader hdr = {};
         hdr.magic = TRACE_MAGIC;
-        hdr.checksum = 0;       // calculate and re-write checksum later
+        hdr.checksum = 0; // calculate and re-write checksum later
         hdr.data_size = sizeof(TraceFormat) * m_record_array.size();
 
         ssize_t n_written = m_trace_file->write(&hdr, sizeof(TraceHeader));
@@ -219,7 +222,7 @@ private:
             LOG_ERRNO_RETURN(0, -1, "Prefetch: dump write header failed");
         }
 
-        for (auto& each : m_record_array) {
+        for (auto &each : m_record_array) {
             hdr.checksum = crc32::crc32c_extend(&each, sizeof(TraceFormat), hdr.checksum);
             n_written = m_trace_file->write(&each, sizeof(TraceFormat));
             if (n_written != sizeof(TraceFormat)) {
@@ -298,36 +301,35 @@ private:
         return 0;
     }
 
-    friend LogBuffer& operator<<(LogBuffer& log, const PrefetcherImpl::TraceFormat& f);
+    friend LogBuffer &operator<<(LogBuffer &log, const PrefetcherImpl::TraceFormat &f);
 };
 
-LogBuffer& operator<<(LogBuffer& log, const PrefetcherImpl::TraceFormat& f) {
-    return log << "Op " << char(f.op) << ", Count " << f.count << ", Offset " << f.offset << ", Layer_index "
-               << f.layer_index;
+LogBuffer &operator<<(LogBuffer &log, const PrefetcherImpl::TraceFormat &f) {
+    return log << "Op " << char(f.op) << ", Count " << f.count << ", Offset " << f.offset
+               << ", Layer_index " << f.layer_index;
 }
 
-PrefetchFile::PrefetchFile(IFile* src_file, uint32_t layer_index, Prefetcher* prefetcher) :
-        ForwardFile_Ownership(src_file, true),
-        m_layer_index(layer_index),
-        m_prefetcher((PrefetcherImpl*) prefetcher) {
+PrefetchFile::PrefetchFile(IFile *src_file, uint32_t layer_index, Prefetcher *prefetcher)
+    : ForwardFile_Ownership(src_file, true), m_layer_index(layer_index),
+      m_prefetcher((PrefetcherImpl *)prefetcher) {
     if (m_prefetcher->get_mode() == PrefetcherImpl::Mode::Replay) {
         m_prefetcher->register_src_file(layer_index, src_file);
     }
 }
 
-ssize_t PrefetchFile::pread(void* buf, size_t count, off_t offset) {
+ssize_t PrefetchFile::pread(void *buf, size_t count, off_t offset) {
     ssize_t n_read = m_file->pread(buf, count, offset);
-    if (n_read == (ssize_t) count && m_prefetcher->get_mode() == PrefetcherImpl::Mode::Record) {
+    if (n_read == (ssize_t)count && m_prefetcher->get_mode() == PrefetcherImpl::Mode::Record) {
         m_prefetcher->record(PrefetcherImpl::TraceOp::READ, m_layer_index, count, offset);
     }
     return n_read;
 }
 
-Prefetcher* new_prefetcher(const string& trace_file_path) {
+Prefetcher *new_prefetcher(const string &trace_file_path) {
     return new PrefetcherImpl(trace_file_path);
 }
 
-Prefetcher::Mode Prefetcher::detect_mode(const string& trace_file_path, size_t* file_size) {
+Prefetcher::Mode Prefetcher::detect_mode(const string &trace_file_path, size_t *file_size) {
     struct stat buf = {};
     int ret = stat(trace_file_path.c_str(), &buf);
     if (file_size != nullptr) {
@@ -342,4 +344,4 @@ Prefetcher::Mode Prefetcher::detect_mode(const string& trace_file_path, size_t* 
     }
 }
 
-}
+} // namespace FileSystem

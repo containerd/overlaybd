@@ -1,39 +1,23 @@
-add_executable(overlaybd-commit overlaybd-commit.cpp)
+find_package(CURL REQUIRED)
+find_package(OpenSSL REQUIRED)
 
+add_executable(overlaybd-commit overlaybd-commit.cpp)
 target_link_libraries(overlaybd-commit
     -Wl,--whole-archive
     base_lib
     fs_lib
     photon_lib
     -Wl,--no-whole-archive
-    -laio
-    -lrt
-    -lresolv
-    -lpthread
-    -static-libgcc
 )
 
 add_executable(overlaybd-create overlaybd-create.cpp)
-
 target_link_libraries(overlaybd-create
     -Wl,--whole-archive
     base_lib
     fs_lib
     photon_lib
     -Wl,--no-whole-archive
-    -laio
-    -lrt
-    -lresolv
-    -lpthread
-    -static-libgcc
 )
-
-set(CURL_STATIC ON)
-find_package(CURL REQUIRED)
-
-set(CURL_STATIC ON)
-find_package(OpenSSL REQUIRED)
-
 
 add_executable(overlaybd-info overlaybd-info.cpp)
 target_include_directories(overlaybd-info PUBLIC
@@ -52,27 +36,15 @@ target_link_libraries(overlaybd-info
     ${OPENSSL_SSL_LIBRARY}
     ${OPENSSL_CRYPTO_LIBRARY}
     -Wl,--no-whole-archive
-    -laio
-    -lrt
-    -lresolv
-    -lpthread
-    -ldl
-    -static-libgcc
 )
 
 add_executable(overlaybd-zfile overlaybd-zfile.cpp)
-
 target_link_libraries(overlaybd-zfile
     -Wl,--whole-archive
     base_lib
     fs_lib
     photon_lib
     -Wl,--no-whole-archive
-    -laio
-    -lrt
-    -lresolv
-    -lpthread
-    -static-libgcc
 )
 
 install(TARGETS

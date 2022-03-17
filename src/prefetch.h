@@ -47,10 +47,7 @@ public:
         Record,
         Replay,
     };
-    enum class TraceOp : char {
-        READ = 'R',
-        WRITE = 'W'
-    };
+    enum class TraceOp : char { READ = 'R', WRITE = 'W' };
 
     virtual void record(TraceOp op, uint32_t layer_index, size_t count, off_t offset) = 0;
 
@@ -58,9 +55,9 @@ public:
 
     // Prefetch file inherits ForwardFile, and it is the actual caller of `record` method.
     // The source file is supposed to have cache.
-    virtual IFile* new_prefetch_file(IFile* src_file, uint32_t layer_index) = 0;
+    virtual IFile *new_prefetch_file(IFile *src_file, uint32_t layer_index) = 0;
 
-    static Mode detect_mode(const std::string& trace_file_path, size_t* file_size = nullptr);
+    static Mode detect_mode(const std::string &trace_file_path, size_t *file_size = nullptr);
 
     Mode get_mode() const {
         return m_mode;
@@ -70,6 +67,6 @@ protected:
     Mode m_mode;
 };
 
-Prefetcher* new_prefetcher(const std::string& trace_file_path);
+Prefetcher *new_prefetcher(const std::string &trace_file_path);
 
-}
+} // namespace FileSystem

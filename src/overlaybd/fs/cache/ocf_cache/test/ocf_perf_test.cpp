@@ -33,8 +33,9 @@ DEFINE_uint64(ocf_prefetch_unit, 0, "prefetch unit in bytes");
 // Single file test params
 DEFINE_bool(random_read, true, "random read or sequential read");
 DEFINE_string(src_file, "src", "src file path. Should be fully written before testing");
-DEFINE_string(dst_file, "", "dst file path. Could be empty if writing is not needed. "
-                            "Verify its checksum manually after test");
+DEFINE_string(dst_file, "",
+              "dst file path. Could be empty if writing is not needed. "
+              "Verify its checksum manually after test");
 DEFINE_uint64(total_requests, 0, "when to stop test");
 
 // Multi files test params
@@ -73,8 +74,8 @@ static void show_qps_loop() {
 
 /* Single file test */
 
-template<typename T>
-static int random_read(T* file, void* buf, size_t num_pages, FileSystem::IFile* dst_file) {
+template <typename T>
+static int random_read(T *file, void *buf, size_t num_pages, FileSystem::IFile *dst_file) {
     int ret;
     IOVector iov;
     iov.push_back(buf, FLAGS_page_size);
@@ -83,13 +84,13 @@ static int random_read(T* file, void* buf, size_t num_pages, FileSystem::IFile* 
         int index = rand() % num_pages;
         off_t offset = FLAGS_page_size * index;
         ret = file->preadv(iov.iovec(), iov.iovcnt(), offset);
-        if (ret != (int) FLAGS_page_size) {
+        if (ret != (int)FLAGS_page_size) {
             stop_test = true;
             LOG_ERRNO_RETURN(0, -1, "read failed, offset `, ret `", offset, ret);
         }
         if (dst_file) {
             ret = dst_file->pwritev(iov.iovec(), iov.iovcnt(), offset);
-            if (ret != (int) FLAGS_page_size) {
+            if (ret != (int)FLAGS_page_size) {
                 stop_test = true;
                 LOG_ERRNO_RETURN(0, -1, "write dst failed, offset `, ret `", offset, ret);
             }
@@ -99,8 +100,9 @@ static int random_read(T* file, void* buf, size_t num_pages, FileSystem::IFile* 
     return 0;
 }
 
-template<typename T>
-static int sequential_read(T* file, void* buf, size_t start_index, size_t num_pages, FileSystem::IFile* dst_file) {
+template <typename T>
+static int sequential_read(T *file, void *buf, size_t start_index, size_t num_pages,
+                           FileSystem::IFile *dst_file) {
     int ret;
     size_t index = start_index;
     LOG_DEBUG("sequential_read: start_index = `, num_pages = `", start_index, num_pages);
@@ -109,13 +111,13 @@ static int sequential_read(T* file, void* buf, size_t start_index, size_t num_pa
     while (!stop_test) {
         off_t offset = FLAGS_page_size * index;
         ret = file->preadv(iov.iovec(), iov.iovcnt(), offset);
-        if (ret != (int) FLAGS_page_size) {
+        if (ret != (int)FLAGS_page_size) {
             stop_test = true;
             LOG_ERRNO_RETURN(0, -1, "read failed, offset `, ret `", offset, ret);
         }
         if (dst_file) {
             ret = dst_file->pwritev(iov.iovec(), iov.iovcnt(), offset);
-            if (ret != (int) FLAGS_page_size) {
+            if (ret != (int)FLAGS_page_size) {
                 stop_test = true;
                 LOG_ERRNO_RETURN(0, -1, "write dst failed, offset `, ret `", offset, ret);
             }
@@ -128,17 +130,17 @@ static int sequential_read(T* file, void* buf, size_t start_index, size_t num_pa
     return 0;
 }
 
-template<typename T>
-static int work(T* cache_file, IOAlloc* io_alloc) {
-    struct stat st_buf{};
+template <typename T>
+static int work(T *cache_file, IOAlloc *io_alloc) {
+    struct stat st_buf {};
     if (cache_file->fstat(&st_buf)) {
         LOG_ERROR_RETURN(0, -1, "failed to get size");
     }
 
-    FileSystem::IFile* dst_file = nullptr;
+    FileSystem::IFile *dst_file = nullptr;
     if (!FLAGS_dst_file.empty()) {
-        dst_file = FileSystem::open_localfile_adaptor(FLAGS_dst_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644,
-                                                      FLAGS_io_engine);
+        dst_file = FileSystem::open_localfile_adaptor(
+            FLAGS_dst_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644, FLAGS_io_engine);
         if (!dst_file) {
             LOG_ERROR_RETURN(0, -1, "failed to open dst file");
         }
@@ -147,9 +149,9 @@ static int work(T* cache_file, IOAlloc* io_alloc) {
     }
 
     size_t num_pages = st_buf.st_size / FLAGS_page_size;
-    std::vector<photon::join_handle*> join_hdls;
+    std::vector<photon::join_handle *> join_hdls;
 
-    void* buf = io_alloc->alloc(FLAGS_page_size);
+    void *buf = io_alloc->alloc(FLAGS_page_size);
     DEFER(io_alloc->dealloc(buf));
 
     if (FLAGS_random_read) {
@@ -160,18 +162,20 @@ static int work(T* cache_file, IOAlloc* io_alloc) {
     } else {
         for (uint64_t i = 0; i < FLAGS_concurrency; i++) {
             ssize_t start_index = num_pages / FLAGS_concurrency * i;
-            auto th = photon::thread_create11(sequential_read<T>, cache_file, buf, start_index, num_pages, dst_file);
+            auto th = photon::thread_create11(sequential_read<T>, cache_file, buf, start_index,
+                                              num_pages, dst_file);
             join_hdls.push_back(photon::thread_enable_join(th));
         }
     }
 
-    for (auto join_hdl: join_hdls) {
+    for (auto join_hdl : join_hdls) {
         photon::thread_join(join_hdl);
     }
     return 0;
 }
 
-static int single_file_ocf_cache(IOAlloc* io_alloc, FileSystem::IFileSystem* src_fs, const std::string& root_dir) {
+static int single_file_ocf_cache(IOAlloc *io_alloc, FileSystem::IFileSystem *src_fs,
+                                 const std::string &root_dir) {
     LOG_INFO("Start single file ocf cache test");
     auto namespace_dir = root_dir + "/namespace/";
     if (::access(namespace_dir.c_str(), F_OK) != 0 && ::mkdir(namespace_dir.c_str(), 0755) != 0) {
@@ -184,20 +188,22 @@ static int single_file_ocf_cache(IOAlloc* io_alloc, FileSystem::IFileSystem* src
     DEFER(delete namespace_fs);
 
     bool reload_media;
-    FileSystem::IFile* media_file;
+    FileSystem::IFile *media_file;
     if (::access(FLAGS_media_file.c_str(), F_OK) != 0) {
         reload_media = false;
-        media_file = FileSystem::open_localfile_adaptor(FLAGS_media_file.c_str(), O_RDWR | O_CREAT, 0644,
-                                                        FLAGS_io_engine);
+        media_file = FileSystem::open_localfile_adaptor(FLAGS_media_file.c_str(), O_RDWR | O_CREAT,
+                                                        0644, FLAGS_io_engine);
         media_file->fallocate(0, 0, FLAGS_media_file_size_gb * 1024 * 1024 * 1024);
     } else {
         reload_media = true;
-        media_file = FileSystem::open_localfile_adaptor(FLAGS_media_file.c_str(), O_RDWR, 0644, FLAGS_io_engine);
+        media_file = FileSystem::open_localfile_adaptor(FLAGS_media_file.c_str(), O_RDWR, 0644,
+                                                        FLAGS_io_engine);
     }
     DEFER(delete media_file);
 
-    auto ocf_cached_fs = FileSystem::new_ocf_cached_fs(src_fs, namespace_fs, FLAGS_page_size, FLAGS_ocf_prefetch_unit,
-                                                       media_file, reload_media, io_alloc);
+    auto ocf_cached_fs =
+        FileSystem::new_ocf_cached_fs(src_fs, namespace_fs, FLAGS_page_size,
+                                      FLAGS_ocf_prefetch_unit, media_file, reload_media, io_alloc);
     if (ocf_cached_fs == nullptr) {
         LOG_ERROR_RETURN(0, -1, "new_ocf_cached_fs error");
     }
@@ -213,16 +219,16 @@ static int single_file_ocf_cache(IOAlloc* io_alloc, FileSystem::IFileSystem* src
     return 0;
 }
 
-static int single_file_file_cache(IOAlloc* io_alloc, FileSystem::IFileSystem* src_fs, const std::string& root_dir) {
+static int single_file_file_cache(IOAlloc *io_alloc, FileSystem::IFileSystem *src_fs,
+                                  const std::string &root_dir) {
     LOG_INFO("Start single file full file cache test");
     auto media_fs = FileSystem::new_localfs_adaptor(root_dir.c_str(), FLAGS_io_engine);
     if (media_fs == nullptr) {
         LOG_ERROR_RETURN(0, -1, "failed to create media fs");
     }
-    auto cached_fs = FileSystem::new_full_file_cached_fs(src_fs, media_fs, FLAGS_page_size, FLAGS_media_file_size_gb,
-                                                         1000 * 1000,
-                                                         2UL * FLAGS_media_file_size_gb * 1024 * 1024 * 1024,
-                                                         io_alloc);
+    auto cached_fs = FileSystem::new_full_file_cached_fs(
+        src_fs, media_fs, FLAGS_page_size, FLAGS_media_file_size_gb, 1000 * 1000,
+        2UL * FLAGS_media_file_size_gb * 1024 * 1024 * 1024, io_alloc);
     if (cached_fs == nullptr) {
         LOG_ERROR_RETURN(0, -1, "new_ocf_cached_fs error");
     }
@@ -243,7 +249,7 @@ static int single_file_file_cache(IOAlloc* io_alloc, FileSystem::IFileSystem* sr
     return 0;
 }
 
-static int single_file_test(IOAlloc* io_alloc) {
+static int single_file_test(IOAlloc *io_alloc) {
     if (!FLAGS_dst_file.empty() && FLAGS_concurrency != 1) {
         LOG_ERROR_RETURN(0, -1, "Doesn't make sense to do concurrent writes on the same file")
     }
@@ -275,16 +281,16 @@ static int single_file_test(IOAlloc* io_alloc) {
 /* Multiple files test */
 
 struct fill_data_args {
-    int64_t& num_files;
-    FileSystem::IFileSystem* copied_fs;
-    FileSystem::IFile* urandom_file;
-    IOAlloc* io_alloc;
+    int64_t &num_files;
+    FileSystem::IFileSystem *copied_fs;
+    FileSystem::IFile *urandom_file;
+    IOAlloc *io_alloc;
 };
 
-static void* fill_random_data(void* args_) {
-    auto args = (fill_data_args*) args_;
+static void *fill_random_data(void *args_) {
+    auto args = (fill_data_args *)args_;
 
-    void* buf = args->io_alloc->alloc(FLAGS_page_size);
+    void *buf = args->io_alloc->alloc(FLAGS_page_size);
     DEFER(args->io_alloc->dealloc(buf));
 
     while (true) {
@@ -294,7 +300,8 @@ static void* fill_random_data(void* args_) {
         uint64_t file_index = args->num_files;
 
         LOG_INFO("generate random test file ` in copied_fs", file_index);
-        auto file = args->copied_fs->open(std::to_string(file_index).c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+        auto file = args->copied_fs->open(std::to_string(file_index).c_str(),
+                                          O_RDWR | O_CREAT | O_TRUNC, 0644);
         if (file == nullptr) {
             LOG_ERRNO_RETURN(0, nullptr, "error open file `", file_index);
         }
@@ -302,10 +309,10 @@ static void* fill_random_data(void* args_) {
 
         auto num_pages = FLAGS_file_size_mb * 1024 * 1024 / FLAGS_page_size;
         for (size_t j = 0; j < num_pages; ++j) {
-            if (args->urandom_file->read(buf, FLAGS_page_size) != (ssize_t) FLAGS_page_size) {
+            if (args->urandom_file->read(buf, FLAGS_page_size) != (ssize_t)FLAGS_page_size) {
                 LOG_ERRNO_RETURN(0, nullptr, "error read urandom");
             }
-            if (file->write(buf, FLAGS_page_size) != (ssize_t) FLAGS_page_size) {
+            if (file->write(buf, FLAGS_page_size) != (ssize_t)FLAGS_page_size) {
                 LOG_ERRNO_RETURN(0, nullptr, "error write file");
             }
         }
@@ -313,7 +320,7 @@ static void* fill_random_data(void* args_) {
     return nullptr;
 }
 
-static FileSystem::IFileSystem* prepare_copied_fs(IOAlloc* io_alloc, const std::string& root_dir) {
+static FileSystem::IFileSystem *prepare_copied_fs(IOAlloc *io_alloc, const std::string &root_dir) {
     // Prepare test files in copied_fs, and fill with random data
     bool need_init = true;
     if (access((root_dir + "/copied_fs").c_str(), F_OK) == 0) {
@@ -322,7 +329,8 @@ static FileSystem::IFileSystem* prepare_copied_fs(IOAlloc* io_alloc, const std::
         system(("mkdir -p " + root_dir + "/copied_fs").c_str());
     }
 
-    auto copied_fs = FileSystem::new_localfs_adaptor((root_dir + "/copied_fs").c_str(), FileSystem::ioengine_libaio);
+    auto copied_fs = FileSystem::new_localfs_adaptor((root_dir + "/copied_fs").c_str(),
+                                                     FileSystem::ioengine_libaio);
     if (copied_fs == nullptr) {
         LOG_ERROR_RETURN(0, nullptr, "error create copied_fs");
     }
@@ -350,9 +358,9 @@ static FileSystem::IFileSystem* prepare_copied_fs(IOAlloc* io_alloc, const std::
     return copied_fs;
 }
 
-static int crc_read(std::vector<FileSystem::IFile*>& cached_files, std::vector<FileSystem::IFile*>& copied_files,
-                    IOAlloc* io_alloc) {
-    void* buf = io_alloc->alloc(FLAGS_page_size);
+static int crc_read(std::vector<FileSystem::IFile *> &cached_files,
+                    std::vector<FileSystem::IFile *> &copied_files, IOAlloc *io_alloc) {
+    void *buf = io_alloc->alloc(FLAGS_page_size);
     DEFER(io_alloc->dealloc(buf));
     auto num_pages = FLAGS_file_size_mb * 1024 * 1024 / FLAGS_page_size;
 
@@ -360,11 +368,13 @@ static int crc_read(std::vector<FileSystem::IFile*>& cached_files, std::vector<F
         auto file_index = rand() % FLAGS_num_files;
         auto page_index = rand() % num_pages;
 
-        if (cached_files[file_index]->pread(buf, FLAGS_page_size, page_index * FLAGS_page_size) < 0) {
+        if (cached_files[file_index]->pread(buf, FLAGS_page_size, page_index * FLAGS_page_size) <
+            0) {
             LOG_ERRNO_RETURN(0, -1, "error read cached_file");
         }
         auto cached_crc = FileSystem::crc32::crc32c(buf, FLAGS_page_size);
-        if (copied_files[file_index]->pread(buf, FLAGS_page_size, page_index * FLAGS_page_size) < 0) {
+        if (copied_files[file_index]->pread(buf, FLAGS_page_size, page_index * FLAGS_page_size) <
+            0) {
             LOG_ERRNO_RETURN(0, -1, "error read copied_file");
         }
         auto copied_crc = FileSystem::crc32::crc32c(buf, FLAGS_page_size);
@@ -378,7 +388,7 @@ static int crc_read(std::vector<FileSystem::IFile*>& cached_files, std::vector<F
     return 0;
 }
 
-static int multiple_files_test(IOAlloc* io_alloc) {
+static int multiple_files_test(IOAlloc *io_alloc) {
     LOG_INFO("Start multiple files test");
     auto root_dir = FLAGS_media_file.substr(0, FLAGS_media_file.rfind('/') + 1);
 
@@ -407,34 +417,36 @@ static int multiple_files_test(IOAlloc* io_alloc) {
     DEFER(delete namespace_fs);
 
     bool reload_media;
-    FileSystem::IFile* media_file;
+    FileSystem::IFile *media_file;
     if (::access(FLAGS_media_file.c_str(), F_OK) != 0) {
         reload_media = false;
-        media_file = FileSystem::open_localfile_adaptor(FLAGS_media_file.c_str(), O_RDWR | O_CREAT, 0644,
-                                                        FLAGS_io_engine);
+        media_file = FileSystem::open_localfile_adaptor(FLAGS_media_file.c_str(), O_RDWR | O_CREAT,
+                                                        0644, FLAGS_io_engine);
         media_file->fallocate(0, 0, FLAGS_media_file_size_gb * 1024 * 1024 * 1024);
     } else {
         reload_media = true;
-        media_file = FileSystem::open_localfile_adaptor(FLAGS_media_file.c_str(), O_RDWR, 0644, FLAGS_io_engine);
+        media_file = FileSystem::open_localfile_adaptor(FLAGS_media_file.c_str(), O_RDWR, 0644,
+                                                        FLAGS_io_engine);
     }
     DEFER(delete media_file);
 
-    auto ocf_fs = FileSystem::new_ocf_cached_fs(src_fs, namespace_fs, FLAGS_page_size, FLAGS_ocf_prefetch_unit,
-                                                media_file, reload_media, io_alloc);
+    auto ocf_fs =
+        FileSystem::new_ocf_cached_fs(src_fs, namespace_fs, FLAGS_page_size,
+                                      FLAGS_ocf_prefetch_unit, media_file, reload_media, io_alloc);
     if (ocf_fs == nullptr) {
         LOG_ERROR_RETURN(0, -1, "error create ocf_fs");
     }
     DEFER(delete ocf_fs);
 
-    std::vector<FileSystem::IFile*> cached_files;
-    std::vector<FileSystem::IFile*> copied_files;
+    std::vector<FileSystem::IFile *> cached_files;
+    std::vector<FileSystem::IFile *> copied_files;
 
     // DEFER close all files
     auto release_resource = [&] {
-        for (auto& f: cached_files) {
+        for (auto &f : cached_files) {
             delete f;
         }
-        for (auto& f: copied_files) {
+        for (auto &f : copied_files) {
             delete f;
         }
     };
@@ -459,21 +471,21 @@ static int multiple_files_test(IOAlloc* io_alloc) {
     auto qps_join_hdl = photon::thread_enable_join(qps_th);
 
     // Concurrently run crc_read
-    std::vector<photon::join_handle*> join_hdls;
+    std::vector<photon::join_handle *> join_hdls;
 
     for (uint64_t i = 0; i < FLAGS_concurrency; i++) {
         auto th = photon::thread_create11(crc_read, cached_files, copied_files, io_alloc);
         join_hdls.push_back(photon::thread_enable_join(th));
     }
 
-    for (auto join_hdl: join_hdls) {
+    for (auto join_hdl : join_hdls) {
         photon::thread_join(join_hdl);
     }
     photon::thread_join(qps_join_hdl);
     return 0;
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     gflags::ParseCommandLineFlags(&argc, &argv, true);
 
     log_output_level = ALOG_INFO;

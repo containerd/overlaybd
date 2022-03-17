@@ -36,7 +36,7 @@ static constexpr size_t ALIGNMENT = 4096;
 
 namespace BKDL {
 
-std::string sha256sum(const char* fn) {
+std::string sha256sum(const char *fn) {
     constexpr size_t BUFFERSIZE = 65536;
     int fd = open(fn, O_RDONLY | O_DIRECT);
     if (fd < 0) {
@@ -70,7 +70,7 @@ std::string sha256sum(const char* fn) {
     char res[SHA256_DIGEST_LENGTH * 2];
     for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
         sprintf(res + (i * 2), "%02x", sha[i]);
-    return "sha256:" + std::string(res, SHA256_DIGEST_LENGTH*2);
+    return "sha256:" + std::string(res, SHA256_DIGEST_LENGTH * 2);
 }
 
 bool check_downloaded(const std::string &dir) {
@@ -157,7 +157,7 @@ bool BkDownload::download_done() {
     // verify sha256
     auto th = photon::CURRENT;
     std::string shares;
-    std::thread sha256_thread([&, th](){
+    std::thread sha256_thread([&, th]() {
         shares = sha256sum(old_name.c_str());
         photon::safe_thread_interrupt(th, EINTR, 0);
     });
@@ -274,7 +274,7 @@ void bk_download_proc(std::list<BKDL::BkDownload *> &dl_list, uint64_t delay_sec
             continue;
         }
         LOG_DEBUG("finish downloading or no retry any more: `, retry_cnt: `", dl_item->dir,
-                 dl_item->try_cnt);
+                  dl_item->try_cnt);
         delete dl_item;
     }
 

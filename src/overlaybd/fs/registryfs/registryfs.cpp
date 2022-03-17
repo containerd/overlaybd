@@ -89,8 +89,9 @@ public:
     }
 
     RegistryFS(PasswordCB callback, const char *caFile, uint64_t timeout)
-        : m_callback(callback), m_caFile(caFile), m_timeout(timeout), m_meta_cache(kMinimalMetaLife),
-          m_scope_token(kMinimalTokenLife), m_url_actual(kMinimalAUrlLife) {
+        : m_callback(callback), m_caFile(caFile), m_timeout(timeout),
+          m_meta_cache(kMinimalMetaLife), m_scope_token(kMinimalTokenLife),
+          m_url_actual(kMinimalAUrlLife) {
     }
 
     ~RegistryFS() {
@@ -206,7 +207,8 @@ public:
             if (!scope.empty())
                 m_scope_token.release(scope);
             return true;
-        } if (ret == 200) {
+        }
+        if (ret == 200) {
             *actual = url;
             if (!scope.empty())
                 m_scope_token.release(scope);
@@ -239,7 +241,6 @@ protected:
     void release_cURL(Net::cURL *curl) {
         m_curl_pool.put(curl);
     };
-
 
     int getScopeAuth(const char *url, estring *authurl, estring *scope, uint64_t timeout) {
         // need authorize;
@@ -275,7 +276,8 @@ protected:
         return 0;
     }
 
-    bool authenticate(const char *auth_url, std::string &username, std::string &password, estring *token, uint64_t timeout) {
+    bool authenticate(const char *auth_url, std::string &username, std::string &password,
+                      estring *token, uint64_t timeout) {
         Timeout tmo(timeout);
         Net::cURL *req = get_cURL();
         DEFER({ release_cURL(req); });
@@ -473,13 +475,14 @@ inline IFile *RegistryFS::open(const char *pathname, int) {
     int ret = file->fstat(&buf);
     if (ret < 0) {
         delete file;
-        LOG_ERROR_RETURN(0, nullptr, "failed to open and stat registry file `, ret `", pathname, ret);
+        LOG_ERROR_RETURN(0, nullptr, "failed to open and stat registry file `, ret `", pathname,
+                         ret);
     }
     return file;
 }
 
-IFileSystem *new_registryfs_with_credential_callback(PasswordCB callback,
-                                                   const char *caFile, uint64_t timeout) {
+IFileSystem *new_registryfs_with_credential_callback(PasswordCB callback, const char *caFile,
+                                                     uint64_t timeout) {
     if (!callback)
         LOG_ERROR_RETURN(EINVAL, nullptr, "password callback not set");
     return new RegistryFS(callback, caFile ? caFile : "", timeout);

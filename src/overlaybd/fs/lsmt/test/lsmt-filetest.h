@@ -405,7 +405,7 @@ public:
         auto file = ::create_file_rw(args, true);
         char uu[37]{};
         args.uuid.to_string(uu, 37);
-        cout << "create a layer. UUID: "<< uu<<endl;
+        cout << "create a layer. UUID: " << uu << endl;
         cout << "enable group commit of index for RW file" << endl;
         file->set_index_group_commit(4096);
         randwrite(file, FLAGS_nwrites);

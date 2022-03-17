@@ -2,8 +2,7 @@
 
 #include "../../../../fs/filesystem.h"
 
-extern "C"
-{
+extern "C" {
 #include <ocf/ocf.h>
 }
 
@@ -12,7 +11,7 @@ extern "C"
 struct ease_ocf_volume_params {
     size_t blk_size;
     size_t media_size;
-    FileSystem::IFile* media_file;
+    FileSystem::IFile *media_file;
     bool enable_logging;
 };
 

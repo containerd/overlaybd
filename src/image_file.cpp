@@ -74,7 +74,7 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
         set_failed("failed to open switch file `" + path);
         delete file;
         LOG_ERROR_RETURN(0, nullptr, "new_switch_file(`) failed, `,:`", path, errno,
-                             strerror(errno));
+                         strerror(errno));
     }
     file = switch_file;
 
@@ -106,7 +106,6 @@ FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std
         LOG_ERROR_RETURN(0, nullptr, "failed to open remote file `", url);
     }
 
-
     FileSystem::ISwitchFile *switch_file = FileSystem::new_switch_file(remote_file);
     if (!switch_file) {
         set_failed("failed to open switch file `" + url);
@@ -134,7 +133,7 @@ FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std
         } else {
             BKDL::BkDownload *obj =
                 new BKDL::BkDownload(switch_file, srcfile, dir, conf.download().maxMBps(),
-                                    conf.download().tryCnt(), this, digest);
+                                     conf.download().tryCnt(), this, digest);
             LOG_DEBUG("add to download list for `", dir);
             dl_list.push_back(obj);
         }
@@ -335,7 +334,8 @@ int ImageFile::init_image_file() {
         LOG_INFO("Acceleration layer found at `, ignore the last lower", accel_layer);
 
         std::string trace_file = accel_layer + "/trace";
-        if (FileSystem::Prefetcher::detect_mode(trace_file) == FileSystem::Prefetcher::Mode::Replay) {
+        if (FileSystem::Prefetcher::detect_mode(trace_file) ==
+            FileSystem::Prefetcher::Mode::Replay) {
             m_prefetcher = FileSystem::new_prefetcher(trace_file);
         }
 
