@@ -73,8 +73,7 @@ public:
         return ret;
     }
 
-    ssize_t pwritev(const struct iovec *iov, int iovcnt,
-                    off_t offset) override {
+    ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override {
         if (read_only) {
             LOG_ERROR_RETURN(EROFS, -1, "writing read only file");
         }
@@ -85,15 +84,16 @@ public:
         return m_file->preadv(iov, iovcnt, offset);
     }
 
-    int fdatasync() override { return m_file->fdatasync(); }
+    int fdatasync() override {
+        return m_file->fdatasync();
+    }
 
     int fallocate(int mode, off_t offset, off_t len) override {
         return m_file->fallocate(mode, offset, len);
     }
 
     void set_auth_failed();
-    int open_lower_layer(FileSystem::IFile *&file,
-                         ImageConfigNS::LayerConfig &layer, int index);
+    int open_lower_layer(FileSystem::IFile *&file, ImageConfigNS::LayerConfig &layer, int index);
 
     std::string m_exception;
     int m_status = 0; // 0: not started, 1: running, -1 exit
@@ -104,7 +104,7 @@ public:
     bool read_only = false;
 
 private:
-    FileSystem::Prefetcher* m_prefetcher = nullptr;
+    FileSystem::Prefetcher *m_prefetcher = nullptr;
     ImageConfigNS::ImageConfig conf;
     std::list<BKDL::BkDownload *> dl_list;
     photon::join_handle *dl_thread_jh = nullptr;
@@ -112,11 +112,10 @@ private:
 
     int init_image_file();
     void set_failed(std::string reason);
-    LSMT::IFileRO *open_lowers(std::vector<ImageConfigNS::LayerConfig> &,
-                               bool &);
+    LSMT::IFileRO *open_lowers(std::vector<ImageConfigNS::LayerConfig> &, bool &);
     LSMT::IFileRW *open_upper(ImageConfigNS::UpperConfig &);
     FileSystem::IFile *__open_ro_file(const std::string &);
-    FileSystem::IFile *__open_ro_remote(const std::string &dir,
-                                        const std::string &, const uint64_t, int);
+    FileSystem::IFile *__open_ro_remote(const std::string &dir, const std::string &, const uint64_t,
+                                        int);
     void start_bk_dl_thread();
 };

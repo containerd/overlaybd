@@ -16,21 +16,19 @@
 #pragma once
 
 #include "compressor.h"
-namespace ZFile
-{
-    const static size_t MAX_READ_SIZE     = 65536; // 64K
+namespace ZFile {
+const static size_t MAX_READ_SIZE = 65536; // 64K
 
-    extern "C" FileSystem::IFile* zfile_open_ro(FileSystem::IFile* file, bool verify = false,
+extern "C" FileSystem::IFile *zfile_open_ro(FileSystem::IFile *file, bool verify = false,
                                             bool ownership = false);
 
-    extern "C" int zfile_compress(  FileSystem::IFile* src_file,
-                    FileSystem::IFile* dst_file,
-                    const CompressArgs *opt = nullptr);
+extern "C" int zfile_compress(FileSystem::IFile *src_file, FileSystem::IFile *dst_file,
+                              const CompressArgs *opt = nullptr);
 
-    extern "C" int zfile_decompress(FileSystem::IFile *src_file, FileSystem::IFile *dst_file);
+extern "C" int zfile_decompress(FileSystem::IFile *src_file, FileSystem::IFile *dst_file);
 
-    // return 1 if file object is a zfile.
-    // return 0 if file object is a normal file.
-    // otherwise return -1.
-    extern "C" int is_zfile(FileSystem::IFile *file);
-}
+// return 1 if file object is a zfile.
+// return 0 if file object is a normal file.
+// otherwise return -1.
+extern "C" int is_zfile(FileSystem::IFile *file);
+} // namespace ZFile

@@ -47,10 +47,10 @@ namespace FileSystem {
 
 #define TAR_HEADER_SIZE 512
 
-#define int_to_oct(num, oct, octlen) \
+#define int_to_oct(num, oct, octlen)                                                               \
     snprintf((oct), (octlen), "%*lo ", (octlen)-2, (unsigned long)(num))
 
-//forward declaration
+// forward declaration
 static IFile *open_tar_file(IFile *file, bool verify_type = true);
 
 struct tar_header {
@@ -145,7 +145,7 @@ public:
         memset(&(th_buf), 0, sizeof(struct tar_header));
         m_file->pread(&th_buf, TAR_HEADER_SIZE, 0);
         base_offset = TAR_HEADER_SIZE;
-        if (th_buf.typeflag=='x') {
+        if (th_buf.typeflag == 'x') {
             base_offset = 3 * TAR_HEADER_SIZE;
             auto size = oct_to_size(th_buf.size);
             LOG_DEBUG("read PAX extended header. (size: `B)", size);
@@ -157,7 +157,7 @@ public:
                 if (buffer[i] == '\n') {
                     estring_view attr(buffer + prev, buffer + i);
                     if (attr.find("size=") != string::npos) {
-                        auto  p = attr.find("size=") + strlen("size=");
+                        auto p = attr.find("size=") + strlen("size=");
                         auto str_size = attr.substr(p);
                         m_size = strtoll(str_size.to_string().c_str(), nullptr, 10);
                         if (m_size == 0) {
@@ -177,7 +177,7 @@ public:
     }
 
     virtual int fstat(struct stat *buf) override {
-      
+
         int ret = m_file->fstat(buf);
         if (ret < 0) {
             return ret;
@@ -240,7 +240,8 @@ public:
         struct tar_header th_buf;
         memset(&(th_buf), 0, sizeof(struct tar_header));
         m_file->pread(&th_buf, TAR_HEADER_SIZE, 0);
-        if (strncmp(th_buf.magic, TMAGIC_EMPTY, TMAGLEN - 1) == 0 && strncmp(th_buf.version, TVERSION_EMPTY, TVERSLEN) == 0) {
+        if (strncmp(th_buf.magic, TMAGIC_EMPTY, TMAGLEN - 1) == 0 &&
+            strncmp(th_buf.version, TVERSION_EMPTY, TVERSLEN) == 0) {
             LOG_INFO("write header for tar file");
             write_header_trailer();
         }
@@ -255,27 +256,27 @@ private:
         m_file->fstat(&s);
         struct tar_header th_buf;
         memset(&(th_buf), 0, sizeof(struct tar_header));
-        //th_set_type
+        // th_set_type
         th_buf.typeflag = '0';
-        //th_set_user
+        // th_set_user
         struct passwd *pw;
         pw = getpwuid(s.st_uid);
         if (pw != NULL)
             strlcpy(th_buf.uname, pw->pw_name, sizeof(th_buf.uname));
         int_to_oct(s.st_uid, th_buf.uid, 8);
-        //th_set_group
+        // th_set_group
         struct group *gr;
         gr = getgrgid(s.st_gid);
         if (gr != NULL)
             strlcpy(th_buf.gname, gr->gr_name, sizeof(th_buf.gname));
         int_to_oct(s.st_gid, th_buf.gid, 8);
-        //th_set_mode
+        // th_set_mode
         int_to_oct(s.st_mode, th_buf.mode, 8);
-        //th_set_mtime
+        // th_set_mtime
         int_to_oct_nonull(s.st_mtime, th_buf.mtime, 12);
-        //th_set_size
+        // th_set_size
         int_to_oct_nonull(s.st_size - TAR_HEADER_SIZE, th_buf.size, 12);
-        //th_set_path
+        // th_set_path
         snprintf(th_buf.name, 100, "%s", "overlaybd.commit");
 
         /* magic, version, and checksum */
@@ -286,8 +287,10 @@ private:
         m_file->pwrite(&th_buf, TAR_HEADER_SIZE, 0);
 
         memset(&(th_buf), 0, sizeof(struct tar_header));
-        m_file->pwrite(&th_buf, TAR_HEADER_SIZE, (s.st_size + 511) / TAR_HEADER_SIZE * TAR_HEADER_SIZE);
-        m_file->pwrite(&th_buf, TAR_HEADER_SIZE, (s.st_size + 511) / TAR_HEADER_SIZE * TAR_HEADER_SIZE + TAR_HEADER_SIZE);
+        m_file->pwrite(&th_buf, TAR_HEADER_SIZE,
+                       (s.st_size + 511) / TAR_HEADER_SIZE * TAR_HEADER_SIZE);
+        m_file->pwrite(&th_buf, TAR_HEADER_SIZE,
+                       (s.st_size + 511) / TAR_HEADER_SIZE * TAR_HEADER_SIZE + TAR_HEADER_SIZE);
         return 0;
     }
 }; // namespace FileSystem
@@ -340,8 +343,6 @@ private:
         int_to_oct_nonull(-1, th_buf.size, 12);
         return (file->pwrite((char *)(&th_buf), TAR_HEADER_SIZE, 0) == TAR_HEADER_SIZE);
     }
-
-
 };
 
 static IFile *new_tar_file(IFile *file) {
@@ -353,8 +354,8 @@ static IFile *new_tar_file(IFile *file) {
     return ret;
 }
 
-static IFile *open_tar_file(IFile *file, bool verify_type ) {
-    
+static IFile *open_tar_file(IFile *file, bool verify_type) {
+
     if (!verify_type) {
         return new_tar_file(file);
     }
@@ -362,7 +363,7 @@ static IFile *open_tar_file(IFile *file, bool verify_type ) {
         return new_tar_file(file);
     }
     LOG_DEBUG("not tar file, open as normal file");
-    return file; //open as normal file
+    return file; // open as normal file
 }
 
 IFileSystem *new_tar_fs_adaptor(IFileSystem *fs) {

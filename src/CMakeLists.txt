@@ -1,19 +1,11 @@
+find_package(CURL REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(aio REQUIRED)
+find_package(nl)
 find_package(PkgConfig)
 pkg_check_modules(GLIB REQUIRED gio-unix-2.0)
 
-find_library(LIBNL_LIB nl-3)
-find_library(LIBNL_GENL_LIB nl-genl-3)
-set(LIBNL_LIBS
-  ${LIBNL_LIB}
-  ${LIBNL_GENL_LIB}
-)
-
-find_path(LIBNL_INCLUDE_DIR
-  NAMES
-  netlink/netlink.h
-  PATH_SUFFIXES
-  libnl3
-)
+link_libraries(pthread aio rt resolv)
 
 include(FetchContent)
 set(FETCHCONTENT_QUIET false)
@@ -58,24 +50,16 @@ target_include_directories(tcmu_lib
   PUBLIC ${tcmu_runner_SOURCE_DIR}/ccan
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
 )
-
 target_link_libraries(tcmu_lib
   ${LIBNL_LIBS}
   ${GLIB_LIBRARIES}
   photon_lib
 )
 
-set(CURL_STATIC ON)
-find_package(CURL REQUIRED)
-set(OpenSSL_STATIC ON)
-find_package(OpenSSL REQUIRED)
-
 file(GLOB SOURCE_IMAGE image_file.cpp image_service.cpp sure_file.cpp switch_file.cpp bk_download.cpp prefetch.cpp)
-
 add_library(image_lib STATIC
     ${SOURCE_IMAGE}
 )
-
 target_include_directories(image_lib PUBLIC
     ${CURL_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIR}
@@ -86,7 +70,6 @@ add_executable(overlaybd-tcmu main.cpp)
 target_include_directories(overlaybd-tcmu
   PUBLIC ${tcmu_runner_SOURCE_DIR}
 )
-
 target_link_libraries(overlaybd-tcmu
     -Wl,--whole-archive
     base_lib
@@ -99,14 +82,7 @@ target_link_libraries(overlaybd-tcmu
     ${OPENSSL_SSL_LIBRARY}
     ${OPENSSL_CRYPTO_LIBRARY}
     -Wl,--no-whole-archive
-
-    -lrt
-    -lresolv
-    -laio
-    -lpthread
-    -static-libgcc
 )
-
 
 install(TARGETS overlaybd-tcmu DESTINATION /opt/overlaybd/bin)
 install(FILES example_config/overlaybd-tcmu.service DESTINATION /opt/overlaybd/)

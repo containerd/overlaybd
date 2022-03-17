@@ -76,8 +76,8 @@ protected:
 
 public:
     explicit TCMULoop(struct tcmulib_context *ctx)
-        : ctx(ctx), loop(new_event_loop({this, &TCMULoop::wait_for_readable},
-                                        {this, &TCMULoop::on_accept})) {
+        : ctx(ctx),
+          loop(new_event_loop({this, &TCMULoop::wait_for_readable}, {this, &TCMULoop::on_accept})) {
         fd = tcmulib_get_master_fd(ctx);
     }
 
@@ -86,7 +86,9 @@ public:
         delete loop;
     }
 
-    void run() { loop->async_run(); }
+    void run() {
+        loop->async_run();
+    }
 };
 
 void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
@@ -98,8 +100,7 @@ void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
     switch (cmd->cdb[0]) {
     case INQUIRY:
         photon::thread_yield();
-        ret =
-            tcmu_emulate_inquiry(dev, NULL, cmd->cdb, cmd->iovec, cmd->iov_cnt);
+        ret = tcmu_emulate_inquiry(dev, NULL, cmd->cdb, cmd->iovec, cmd->iov_cnt);
         tcmulib_command_complete(dev, cmd, ret);
         break;
 
@@ -112,8 +113,7 @@ void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
     case SERVICE_ACTION_IN_16:
         photon::thread_yield();
         if (cmd->cdb[1] == READ_CAPACITY_16)
-            ret = tcmu_emulate_read_capacity_16(file->num_lbas,
-                                                file->block_size, cmd->cdb,
+            ret = tcmu_emulate_read_capacity_16(file->num_lbas, file->block_size, cmd->cdb,
                                                 cmd->iovec, cmd->iov_cnt);
         else
             ret = TCMU_STS_NOT_HANDLED;
@@ -139,8 +139,7 @@ void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
     case READ_12:
     case READ_16:
         length = tcmu_iovec_length(cmd->iovec, cmd->iov_cnt);
-        ret = file->preadv(cmd->iovec, cmd->iov_cnt,
-                           tcmu_cdb_to_byte(dev, cmd->cdb));
+        ret = file->preadv(cmd->iovec, cmd->iov_cnt, tcmu_cdb_to_byte(dev, cmd->cdb));
         if (ret == length) {
             tcmulib_command_complete(dev, cmd, TCMU_STS_OK);
         } else {
@@ -153,14 +152,12 @@ void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
     case WRITE_12:
     case WRITE_16:
         length = tcmu_iovec_length(cmd->iovec, cmd->iov_cnt);
-        ret = file->pwritev(cmd->iovec, cmd->iov_cnt,
-                            tcmu_cdb_to_byte(dev, cmd->cdb));
+        ret = file->pwritev(cmd->iovec, cmd->iov_cnt, tcmu_cdb_to_byte(dev, cmd->cdb));
         if (ret == length) {
             tcmulib_command_complete(dev, cmd, TCMU_STS_OK);
         } else {
             if (errno == EROFS) {
-                tcmulib_command_complete(dev, cmd,
-                                         TCMU_STS_WR_ERR_INCOMPAT_FRMT);
+                tcmulib_command_complete(dev, cmd, TCMU_STS_WR_ERR_INCOMPAT_FRMT);
             } else {
                 tcmulib_command_complete(dev, cmd, TCMU_STS_WR_ERR);
             }
@@ -271,7 +268,9 @@ public:
         delete loop;
     }
 
-    void run() { loop->async_run(); }
+    void run() {
+        loop->async_run();
+    }
 };
 
 static char *tcmu_get_path(struct tcmu_device *dev) {
@@ -318,7 +317,7 @@ static int dev_open(struct tcmu_device *dev) {
     struct timeval end;
     gettimeofday(&end, NULL);
 
-    uint64_t elapsed = 1000000UL * (end.tv_sec-start.tv_sec)+ end.tv_usec-start.tv_usec;
+    uint64_t elapsed = 1000000UL * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
     LOG_INFO("dev opened `, time cost ` ms", config, elapsed / 1000);
     return 0;
 }
@@ -345,7 +344,6 @@ void sigint_handler(int signal = SIGINT) {
         main_loop = nullptr;
     }
 }
-
 
 int main(int argc, char **argv) {
     mallopt(M_TRIM_THRESHOLD, 128 * 1024);
@@ -385,8 +383,7 @@ int main(int argc, char **argv) {
         ret = setrlimit(RLIMIT_NOFILE, &rlim);
         if (ret == -1) {
             LOG_ERROR("failed to set max open fd to [soft: ` hard: `]",
-                      (long long int)rlim.rlim_cur,
-                      (long long int)rlim.rlim_max);
+                      (long long int)rlim.rlim_cur, (long long int)rlim.rlim_max);
             return ret;
         }
     }
@@ -435,7 +432,7 @@ int main(int argc, char **argv) {
     main_loop->run();
 
     while (main_loop != nullptr) {
-        photon::thread_usleep(200*1000);
+        photon::thread_usleep(200 * 1000);
     }
     LOG_INFO("main loop exited");
 

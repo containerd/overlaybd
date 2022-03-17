@@ -9,8 +9,9 @@
 
 class ease_ocf_provider {
 public:
-    ease_ocf_provider(ease_ocf_volume_params* params, size_t prefetch_unit) :
-            m_volume_params(params), m_prefetch_unit(prefetch_unit) {}
+    ease_ocf_provider(ease_ocf_volume_params *params, size_t prefetch_unit)
+        : m_volume_params(params), m_prefetch_unit(prefetch_unit) {
+    }
 
     int start(bool reload_media);
 
@@ -20,7 +21,7 @@ public:
      * @brief Caller should guarantee that offset + count does not exceed the EOF.
      * @return On success, count is returned. On error, other value is returned.
      */
-    ssize_t ocf_pread(void* buf, size_t count, off_t offset, size_t blk_addr, OcfSrcFileCtx* ctx,
+    ssize_t ocf_pread(void *buf, size_t count, off_t offset, size_t blk_addr, OcfSrcFileCtx *ctx,
                       bool prefetch = false);
 
     size_t prefetch_unit() const {
@@ -30,10 +31,10 @@ public:
     static const size_t SectorSize;
 
 private:
-    static constexpr const char* CACHE_NAME = "Ease Cache";
-    static constexpr const char* CORE_NAME = "Ease Core";
-    static constexpr const char* CACHE_UUID = "cache";
-    static constexpr const char* CORE_UUID = "core";
+    static constexpr const char *CACHE_NAME = "Ease Cache";
+    static constexpr const char *CORE_NAME = "Ease Core";
+    static constexpr const char *CACHE_UUID = "cache";
+    static constexpr const char *CORE_UUID = "core";
 
     /* Main control context */
     ocf_ctx_t m_ctx = nullptr;
@@ -46,10 +47,10 @@ private:
     ease_ocf_config m_cfg = {};
 
     /* Queue */
-    ease_ocf_queue* m_queue = nullptr;
+    ease_ocf_queue *m_queue = nullptr;
 
     /* Volume parameters */
-    ease_ocf_volume_params* m_volume_params;    // owned by external class
+    ease_ocf_volume_params *m_volume_params; // owned by external class
 
     size_t m_prefetch_unit;
 
@@ -70,8 +71,8 @@ private:
         off_t upper_bound;
     };
 
-    static void prepare_aligned_iov(size_t count, off_t offset, alignment& a, IOVector& iov, const void* buf,
-                             void* padding_buf);
+    static void prepare_aligned_iov(size_t count, off_t offset, alignment &a, IOVector &iov,
+                                    const void *buf, void *padding_buf);
 
-    static void copy_aligned_iov(size_t count, alignment& a, IOVector& iov, void* buf);
+    static void copy_aligned_iov(size_t count, alignment &a, IOVector &iov, void *buf);
 };

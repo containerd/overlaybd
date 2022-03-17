@@ -225,7 +225,8 @@ public:
         offset += step;
         count -= step;
     }
-    template <typename T> bool is_aligned(T x) {
+    template <typename T>
+    bool is_aligned(T x) {
         static_assert(std::is_integral<T>::value, "T must be integral types");
         return (x & (ALIGNMENT - 1)) == 0;
     }
