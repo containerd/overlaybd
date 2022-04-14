@@ -13,7 +13,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
 
     steps:
     - uses: actions/checkout@v2
@@ -22,7 +22,7 @@ jobs:
       shell: bash
       run: |
         sudo apt install -y pkg-config libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libglib2.0-dev
-        sudo apt install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool
+        sudo apt install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm
         wget https://github.com/google/googletest/archive/refs/tags/release-1.10.0.tar.gz
         tar -zxvf release-1.10.0.tar.gz
         cd googletest-release-1.10.0/
@@ -38,7 +38,7 @@ jobs:
       working-directory: ${{github.workspace}}/build
       run: |
         git submodule update --init
-        cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TESTING=1
+        cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TESTING=1 -DENABLE_DSA=1 -DENABLE_ISAL=1
 
     - name: Build
       working-directory: ${{github.workspace}}/build

@@ -2,3 +2,9 @@
 	path = src/overlaybd/fs/cache/ocf_cache/ocf
 	url = https://github.com/Open-CAS/ocf
 	branch = v21.6.4
+[submodule "src/overlaybd/fs/zfile/thirdparty/DML"]
+	path = src/overlaybd/fs/zfile/thirdparty/DML
+	url = https://github.com/intel/DML.git
+[submodule "src/overlaybd/fs/zfile/thirdparty/isa-l"]
+	path = src/overlaybd/fs/zfile/thirdparty/isa-l
+	url = https://github.com/intel/isa-l.git
