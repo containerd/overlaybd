@@ -12,7 +12,7 @@ jobs:
   # based on https://github.com/containerd/project-checks/blob/main/action.yml
   project:
     name: DCO Checks
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     timeout-minutes: 5
 
     steps:
