@@ -120,9 +120,11 @@ public:
         snprintf_names(next_layer_id++);
     }
 
-    IFileRW *create_file_rw() {
+    IFileRW *create_file_rw(bool sparse = false) {
         name_next_layer();
         auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+        // auto fdata = photon::fs::open_localfile_adaptor(data_name.back().c_str(), O_RDWR |
+        // O_CREAT | O_TRUNC, S_IRWXU);
         auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         LOG_DEBUG("open_file: ` `", data_name.back().c_str(), idx_name.back().c_str());
         LayerInfo _;
@@ -130,6 +132,7 @@ public:
         EXPECT_EQ(nullptr, ::create_file_rw(_, true));
         LOG_INFO("TEST OK");
         LayerInfo args(fdata, findex);
+        args.sparse_rw = sparse;
         if (parent_uuid != "")
             args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
         args.virtual_size = vsize;
@@ -323,15 +326,16 @@ public:
         memset(data, 0, vsize);
     }
 
-    IFileRW *create_file() {
+    IFileRW *create_file(bool sparse = false) {
         cout << "creating a file, by randwrite()" << endl;
         memset(data, 0, PREAD_LEN);
         cout << "create_file_rw" << endl;
-        auto file = create_file_rw();
+        auto file = create_file_rw(sparse);
         cout << "randwrite" << endl;
         randwrite(file, FLAGS_nwrites);
         return file;
     }
+
     bool verify_file(LSMT::IFileRO *file) {
         if (FLAGS_verify) {
             cout << "read and verify file , vsize expected: " << (vsize >> 20) << "M" << endl;
@@ -393,12 +397,15 @@ public:
     char /* layer_data[128], layer_index[128], layer[128], layer_gc[128], */ fn_merged[128] =
         "merged.lsmt";
 
-    IFileRW *create_a_layer() {
+    IFileRW *create_a_layer(bool sparse = false) {
         name_next_layer();
         auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         LOG_INFO("data: ` index: `", data_name.back().c_str(), idx_name.back().c_str());
         LayerInfo args(fdata, findex);
+        if (sparse)
+            args.sparse_rw = true;
+
         if (parent_uuid != "")
             args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
         args.virtual_size = vsize;
@@ -411,6 +418,7 @@ public:
         randwrite(file, FLAGS_nwrites);
         return file;
     }
+
     IFile *create_ro_layer() {
         auto file = create_a_layer();
         UUID uu;
@@ -425,8 +433,8 @@ public:
     }
 
     IFile *create_commit_layer(int i = 0, int io_engine = 0, bool compress = false,
-                               bool verify = false) {
-        auto file = create_a_layer();
+                               bool verify = false, bool sparse = false) {
+        auto file = create_a_layer(sparse);
         IFile *as = nullptr;
         IFile *dst = nullptr;
         auto dst_filename = layer_name.back();
