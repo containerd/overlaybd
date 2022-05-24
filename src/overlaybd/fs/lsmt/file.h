@@ -97,6 +97,7 @@ struct LayerInfo {
     UUID parent_uuid;
     UUID uuid;
     char *user_tag = nullptr; // a user provided string of message, 256B at most
+    bool sparse_rw = false;
     size_t len = 0;           // len of user_tag; if it's 0, it will be detected with strlen()
     LayerInfo(IFile *_fdata = nullptr, IFile *_findex = nullptr) : fdata(_fdata), findex(_findex) {
         parent_uuid.clear();

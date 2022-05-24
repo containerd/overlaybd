@@ -70,6 +70,7 @@ struct HeaderTrailer {
     static const uint32_t FLAG_SHIFT_HEADER = 0; // 1:header         0:trailer
     static const uint32_t FLAG_SHIFT_TYPE = 1;   // 1:data file,     0:index file
     static const uint32_t FLAG_SHIFT_SEALED = 2; // 1:YES,           0:NO
+    static const uint32_t FLAG_SPARSE_RW = 4;    // 1:sparse file    0:normal file
 
     uint32_t get_flag_bit(uint32_t shift) const {
         return flags & (1 << shift);
@@ -95,6 +96,10 @@ struct HeaderTrailer {
     bool is_sealed() const {
         return get_flag_bit(FLAG_SHIFT_SEALED);
     }
+    bool is_sparse_rw() const {
+        return get_flag_bit(FLAG_SPARSE_RW);
+    }
+
     void set_header() {
         set_flag_bit(FLAG_SHIFT_HEADER);
     }
@@ -116,6 +121,13 @@ struct HeaderTrailer {
 
     void set_uuid(const UUID uuid) {
         this->uuid = uuid;
+    }
+
+    void set_sparse_rw() {
+        set_flag_bit(FLAG_SPARSE_RW);
+    }
+    void clr_sparse_rw() {
+        clr_flag_bit(FLAG_SPARSE_RW);
     }
 
     int set_tag(char *buf, size_t n) {
@@ -336,6 +348,10 @@ static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, boo
         pht->set_data_file();
     else
         pht->set_index_file();
+    if (args.sparse_rw)
+        pht->set_sparse_rw();
+    else
+        pht->clr_sparse_rw();
 
     pht->index_offset = index_offset;
     pht->index_size = index_size;
@@ -853,6 +869,94 @@ public:
     }
 };
 
+class LSMTSparseFile : public LSMTFile {
+public:
+    static const off_t BASE_MOFFSET = HeaderTrailer::SPACE;
+
+    virtual int close() override {
+        return LSMTReadOnlyFile::close();
+    }
+
+    virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+        LOG_DEBUG("{offset:`,length:`}", offset, count);
+        CHECK_ALIGNMENT(count, offset);
+
+        while (count > MAX_IO_SIZE) {
+            auto ret = pwrite(buf, MAX_IO_SIZE, offset);
+            if (ret < (ssize_t)MAX_IO_SIZE)
+                return -1;
+            (char *&)buf += MAX_IO_SIZE;
+            count -= MAX_IO_SIZE;
+            offset += MAX_IO_SIZE;
+        }
+        auto moffset = BASE_MOFFSET + offset;
+        SegmentMapping m{
+            (uint64_t)offset / (uint64_t)ALIGNMENT,
+            (uint32_t)count / (uint32_t)ALIGNMENT,
+            (uint64_t)moffset / (uint64_t)ALIGNMENT,
+        };
+        // wait unlock
+        ssize_t ret = -1;
+        {
+            ret = m_files[0]->pwrite(buf, count, moffset);
+            if (ret != (ssize_t)count) {
+                LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`", m_files[0],
+                                 ret, moffset, count);
+            }
+            LOG_DEBUG("insert segment: `", m);
+            static_cast<IMemoryIndex0 *>(m_index)->insert(m);
+        }
+        return ret;
+    }
+
+    // virtual int discard(off_t offset, off_t len) override
+    virtual int discard(SegmentMapping &m) override {
+        m.moffset = (uint64_t)(m.offset + (HeaderTrailer::SPACE / ALIGNMENT));
+        LOG_DEBUG(m);
+        static_cast<IMemoryIndex0 *>(m_index)->insert(m);
+        return m_files[0]->trim(m.offset * ALIGNMENT + HeaderTrailer::SPACE, m.length * ALIGNMENT);
+    }
+
+    // sparse RW File can't support these methods:
+    // UNIMPLEMENTED(int commit(const CommitArgs &args) const override);
+    UNIMPLEMENTED(int close_seal(IFileRO **reopen_as = nullptr) override);
+
+    static int create_mappings(const IFile *file, vector<SegmentMapping> &mappings) {
+
+        auto moffset = BASE_MOFFSET;
+        while (true) {
+            auto begin = const_cast<IFile*>(file)->lseek(moffset, SEEK_DATA);
+            if (begin == -1)
+                break;
+            auto end =  const_cast<IFile*>(file)->lseek(begin, SEEK_HOLE);
+            if (end == -1)
+                break;
+            LOG_DEBUG("segment find: [ mbegin: `, mend: ` ]", begin, end);
+            uint64_t total_length = (end - begin) / ALIGNMENT;
+            uint64_t prev_offset = ((uint64_t)begin - BASE_MOFFSET) / (uint64_t)ALIGNMENT;
+            uint64_t prev_moffset = (uint64_t)(begin / ALIGNMENT);
+            while (total_length > Segment::MAX_LENGTH) {
+                uint32_t length = Segment::MAX_LENGTH;
+                LOG_DEBUG("segment mapping {offset: `, length:`, moffset: `}", prev_offset, length,
+                          prev_moffset);
+                mappings.emplace_back(prev_offset, length, prev_moffset);
+                prev_moffset += Segment::MAX_LENGTH;
+                prev_offset += Segment::MAX_LENGTH;
+                total_length -= Segment::MAX_LENGTH;
+            }
+            LOG_DEBUG("segment mapping {offset: `, length:`, moffset: `}", prev_offset,
+                      total_length, prev_moffset);
+            mappings.emplace_back(prev_offset, (uint32_t)total_length, prev_moffset);
+            moffset = end;
+        }
+        if (errno != ENXIO) {
+            LOG_ERRNO_RETURN(0, -1, "seek EOF failed, expected errno ENXIO(-6)");
+        }
+        LOG_INFO("segment size: `", mappings.size());
+        return 0;
+    }
+};
+
 HeaderTrailer *verify_ht(IFile *file, char *buf) {
     if (file == nullptr) {
         LOG_ERRNO_RETURN(0, nullptr, "invalid file ptr (null).");
@@ -876,7 +980,7 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
     auto ret = file->fstat(&stat);
     if (ret < 0)
         LOG_ERRNO_RETURN(0, nullptr, "failed to stat file.");
-
+    assert(pht->is_sparse_rw() == false);
     uint64_t index_bytes;
     if (trailer) {
         if (!pht->is_data_file())
@@ -967,7 +1071,7 @@ IFileRO *open_file_ro(IFile *file, bool ownership) {
 IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
     ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
     auto pht = verify_ht(fdata, buf);
-    if ((pht == nullptr) || !findex) {
+    if ((pht == nullptr) || ((pht->is_sparse_rw() == false) && (!findex))) {
         LOG_ERRNO_RETURN(0, nullptr, "invalid file ptr, fdata: ` findex: `", fdata, findex);
     }
     struct stat stat;
@@ -976,21 +1080,39 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
         LOG_ERRNO_RETURN(0, nullptr, "failed to stat data file.");
     }
     IMemoryIndex0 *pi = nullptr;
-
-    HeaderTrailer ht;
-    auto p = do_load_index(findex, &ht, false);
-    if (!p) {
-        LOG_ERROR_RETURN(EIO, nullptr, "failed to load index from file.");
+    if (pht->is_sparse_rw() == false) {
+        HeaderTrailer ht;
+        auto p = do_load_index(findex, &ht, false);
+        if (!p) {
+            LOG_ERROR_RETURN(EIO, nullptr, "failed to load index from file.");
+        }
+        DEFER(delete[] p);
+        pi = create_memory_index0(p, ht.index_size, HeaderTrailer::SPACE / ALIGNMENT,
+                                  stat.st_size / ALIGNMENT);
+        if (!pi) {
+            LOG_ERROR_RETURN(0, nullptr, "failed to create memory index!");
+        }
+        pht = &ht;
+    } else {
+        LOG_DEBUG("create index from sparse file.");
+        vector<SegmentMapping> mappings;
+        if (LSMTSparseFile::create_mappings(fdata, mappings) == -1) {
+            LOG_ERROR_RETURN(0, nullptr, "failed to create segment mappings from sparse file!");
+        }
+        pi = create_memory_index0((const SegmentMapping *)&mappings[0], mappings.size(),
+                                  HeaderTrailer::SPACE / ALIGNMENT, stat.st_size / ALIGNMENT);
+        if (!pi) {
+            LOG_ERROR_RETURN(0, nullptr, "failed to create memory index from sparse file!");
+        }
     }
-    DEFER(delete[] p);
-    pi = create_memory_index0(p, ht.index_size, HeaderTrailer::SPACE / ALIGNMENT,
-                              stat.st_size / ALIGNMENT);
-    if (!pi) {
-        LOG_ERROR_RETURN(0, nullptr, "failed to create memory index!");
+    LSMTFile *rst = nullptr;
+    if (pht->is_sparse_rw() == false) {
+        LOG_INFO("create LSMTFile object (append-only)");
+        rst = new LSMTFile;
+    } else {
+        LOG_INFO("create LSMTSparseFile object");
+        rst = new LSMTSparseFile;
     }
-    pht = &ht;
-
-    LSMTFile *rst = new LSMTFile;
     rst->m_index = pi;
     rst->m_findex = findex;
     rst->m_files.push_back(fdata);
@@ -999,18 +1121,24 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
     UUID raw;
     raw.parse(pht->uuid);
     rst->m_uuid.push_back(raw);
-    LOG_INFO("Layer Info: { UUID:` , Parent_UUID: `, Virtual size: `, Version: `.` }", pht->uuid,
-             pht->parent_uuid, rst->m_vsize, pht->version, pht->sub_version);
+    LOG_INFO("Layer Info: { UUID:` , Parent_UUID: `, SparseRW: `, Virtual size: `, Version: `.` }",
+             pht->uuid, pht->parent_uuid, pht->is_sparse_rw(), rst->m_vsize, pht->version,
+             pht->sub_version);
     return rst;
 }
 
 IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
     auto fdata = args.fdata;
     auto findex = args.findex;
-    if (!fdata || !findex) {
+    if ((args.sparse_rw == false) && (!fdata || !findex)) {
         LOG_ERROR_RETURN(0, nullptr, "invalid file ptr, fdata: `, findex: `", fdata, findex);
     }
-    LSMTFile *rst = new LSMTFile;
+    LSMTFile *rst = nullptr;
+    if (args.sparse_rw == false) {
+        rst = new LSMTFile;
+    } else {
+        rst = new LSMTSparseFile;
+    }
     rst->m_index = create_memory_index0((const SegmentMapping *)nullptr, 0, 0, 0);
     rst->m_findex = findex;
     rst->m_files.push_back(fdata);
@@ -1022,10 +1150,13 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
     rst->m_vsize = args.virtual_size;
     rst->m_file_ownership = ownership;
     write_header_trailer(fdata, true, false, true, 0, 0, args);
-    write_header_trailer(findex, true, false, false, HeaderTrailer::SPACE, 0, args);
+    if (!args.sparse_rw) {
+        write_header_trailer(findex, true, false, false, HeaderTrailer::SPACE, 0, args);
+    }
     HeaderTrailer tmp;
-    LOG_INFO("Layer Info: { UUID:`, Parent_UUID: `, Virtual size: `, Version: `.` }", raw,
-             args.parent_uuid, rst->m_vsize, tmp.version, tmp.sub_version);
+    // args.parent_uuid.to_string(parent_uuid, UUID::String::LEN);
+    LOG_INFO("Layer Info: { UUID:`, Parent_UUID: `, Sparse: ` Virtual size: `, Version: `.` }", raw,
+             args.parent_uuid, args.sparse_rw, rst->m_vsize, tmp.version, tmp.sub_version);
     return rst;
 }
 
@@ -1229,7 +1360,12 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
         LOG_ERRNO_RETURN(0, nullptr, "verify upper layer's Header failed.");
     }
     auto idx = create_combo_index((IMemoryIndex0 *)u->m_index, l->m_index, l->m_files.size(), true);
-    LSMTFile *rst = new LSMTFile;
+    LSMTFile *rst = nullptr;
+    if (!pht->is_sparse_rw()) {
+        rst = new LSMTFile;
+    } else {
+        rst = new LSMTSparseFile;
+    }
     rst->m_index = idx;
     rst->m_findex = u->m_findex;
     rst->m_vsize = u->m_vsize;
