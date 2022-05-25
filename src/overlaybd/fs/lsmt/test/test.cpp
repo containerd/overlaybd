@@ -24,6 +24,7 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 */
 #include "lsmt-filetest.h"
 #include <sys/time.h>
+
 #include "../../../photon/syncio/fd-events.h"
 #include "../../../photon/syncio/aio-wrapper.h"
 
@@ -388,6 +389,13 @@ TEST_F(FileTest, create_open) {
     delete file2;
 }
 
+TEST_F(FileTest, create_open_sp) {
+    auto file1 = create_file_rw(/*sparse = */ true);
+    delete file1;
+    auto file2 = open_file_rw();
+    delete file2;
+}
+
 class FileTest1 : public FileTest {
 public:
     virtual void SetUp() override {
@@ -399,6 +407,50 @@ public:
         delete file;
     }
 };
+
+TEST_F(FileTest2, sparse_rw) {
+    auto fn_sparse = "sparse_test.lsmt";
+    // auto fn_normal = "rw.lsmt";
+    auto file = lfs->open(fn_sparse, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    if (!file) {
+        LOG_ERROR("create file failed: `, err: `", fn_sparse, strerror(errno));
+        return;
+    }
+    LayerInfo args;
+    args.fdata = file;
+    args.sparse_rw = true;
+    args.virtual_size = 64 << 20;
+    auto layer = ::create_file_rw(args, true);
+    char raw_data[65536];
+    vector<Segment> segments{{5, 5},        {10, 10}, {20, 10}, {100, 10},
+                             {130944, 128}, {7, 8},   {25, 80}};
+    // vector<uint64_t> predict_write{5, 10, 10, 10, 128, 0, 70};
+    // {{5, 25, 0}, {100, 10, 20}});
+    int i = 0;
+    auto rw_index = layer->index();
+
+    for (auto m : segments) {
+        // Segment s{(uint64_t)m.offset, (uint32_t)m.length};
+        // auto predict = predict_insert(rw_index, s, 65536);
+        // auto check = predict_write[i];
+        // EXPECT_EQ(predict, check);
+        layer->pwrite(raw_data, m.length * ALIGNMENT, m.offset * ALIGNMENT);
+        i++;
+    }
+    SegmentMapping *segs = rw_index->dump();
+    for (auto m = segs; m < segs + rw_index->size(); m++) {
+        LOG_INFO("`", *m);
+    }
+    layer->close();
+    file = lfs->open(fn_sparse, O_RDONLY);
+    layer = ::open_file_rw(file, nullptr, true);
+    rw_index = layer->index();
+    segs = rw_index->dump();
+    for (auto m = segs; m < segs + rw_index->size(); m++) {
+        LOG_INFO("`", *m);
+    }
+    layer->close();
+}
 
 TEST_F(FileTest2, commit_close_seal) {
     reset_verify_file();
@@ -456,6 +508,39 @@ TEST_F(FileTest2, commit_close_seal) {
     cout << "end" << endl;
 }
 
+TEST_F(FileTest2, commit) {
+    reset_verify_file();
+    auto file0 = create_file_rw();
+    auto file1 = create_file_rw(true);
+    randwrite1(file0, file1, FLAGS_nwrites);
+    LOG_INFO("compare index.");
+    auto index0 = file0->index();
+    auto index1 = file1->index();
+    auto p0 = index0->dump();
+    auto p1 = index1->dump();
+    EXPECT_EQ(index0->size(), index1->size());
+    for (size_t i = 0; i < index0->size(); i++) {
+        auto s0 = p0 + i;
+        auto s1 = p1 + i;
+        EXPECT_EQ(s0->offset, s1->offset);
+        EXPECT_EQ(s0->length, s1->length);
+    }
+    auto fn_c0 = "commit0";
+    auto fn_c1 = "commit1";
+    verify_file(open_file_rw());
+    auto fcommit0 = lfs->open(fn_c0, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto fcommit1 = lfs->open(fn_c1, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    CommitArgs args0(fcommit0), args1(fcommit1);
+    file0->commit(args0);
+    file1->commit(args1);
+    LOG_INFO("verify commit file from append LSMT");
+    verify_file(fn_c0);
+    LOG_INFO("verify commit file from sparse LSMT");
+    verify_file(fn_c1);
+    DEFER(lfs->unlink(fn_c0));
+    DEFER(lfs->unlink(fn_c1));
+}
+
 TEST_F(FileTest3, stack_files) {
     CleanUp();
     cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
@@ -482,6 +567,40 @@ TEST_F(FileTest3, stack_files) {
     auto upper = create_file_rw();
     auto file = stack_files(upper, lower, 0, true);
     randwrite(file, FLAGS_nwrites);
+    verify_file(file);
+    delete file;
+}
+
+TEST_F(FileTest3, stack_sparsefiles) {
+    CleanUp();
+    cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
+    for (int i = 0; i < FLAGS_layers; ++i) {
+        files[i] = create_commit_layer(0, 1 /*libaio*/, false, false,
+                                       true); //创建若干层RO Layer,文件指针保存在files中
+        auto lower = open_files_ro(files, i + 1);
+        DEFER(delete lower);
+        verify_file(lower);
+    }
+    cout << "merging RO layers as " << fn_merged << endl;
+    auto merged = lfs->open(fn_merged, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    merge_files_ro(files, FLAGS_layers, merged);
+    /*auto mergedro =*/::open_file_ro(merged, true);
+    cout << "verifying merged RO layers file" << endl;
+    cout << "verifying stacked RO layers file" << endl;
+    auto lower = open_files_ro(files, FLAGS_layers);
+    verify_file(lower);
+    ((LSMTReadOnlyFile *)lower)->m_index =
+        create_level_index(lower->index()->buffer(), lower->index()->size(), 0, UINT64_MAX, false);
+    EXPECT_EQ(((LSMTReadOnlyFile *)lower)->close_seal(), -1);
+    CommitArgs _(nullptr);
+    EXPECT_EQ(((LSMTReadOnlyFile *)lower)->commit(_), -1);
+    auto stat = ((LSMTReadOnlyFile *)lower)->data_stat();
+    LOG_INFO("RO valid data: `", stat.valid_data_size);
+    cout << "generating a RW layer by randwrite()" << endl;
+    auto upper = create_a_layer(true);
+
+    auto file = stack_files(upper, lower, 0, true);
+
     verify_file(file);
     delete file;
 }
