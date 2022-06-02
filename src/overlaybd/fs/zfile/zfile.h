@@ -27,6 +27,10 @@ extern "C" int zfile_compress(FileSystem::IFile *src_file, FileSystem::IFile *ds
 
 extern "C" int zfile_decompress(FileSystem::IFile *src_file, FileSystem::IFile *dst_file);
 
+extern "C" FileSystem::IFile *new_zfile_builder(FileSystem::IFile *file,
+                                                const CompressArgs *args = nullptr,
+                                                bool ownership = false);
+
 // return 1 if file object is a zfile.
 // return 0 if file object is a normal file.
 // otherwise return -1.
