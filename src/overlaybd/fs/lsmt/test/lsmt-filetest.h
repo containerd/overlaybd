@@ -439,16 +439,23 @@ public:
         IFile *dst = nullptr;
         auto dst_filename = layer_name.back();
         if (compress) {
-            auto temp_filename = dst_filename + ".tmp";
-            as = lfs->open(temp_filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
-            dst = FileSystem::open_localfile_adaptor(dst_filename.c_str(),
-                                                     O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+            // auto temp_filename = dst_filename + ".tmp";
+            // as = lfs->open(temp_filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+            dst = lfs->open(dst_filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
 
         } else {
-            as = lfs->open(dst_filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
-            dst = as;
+            dst = lfs->open(dst_filename.c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+            // dst = as;
         }
-        CommitArgs args(as);
+        CommitArgs args(nullptr);
+        if (compress) {
+            CompressOptions opt;
+            opt.verify = 1;
+            CompressArgs zfile_args(opt);
+            args.as = new_zfile_builder(dst, &zfile_args);
+        } else {
+            args.as = dst;
+        }
         char msg[1024]{};
         args.user_tag = msg;
         args.tag_len = 1024;
@@ -457,28 +464,34 @@ public:
             args.tag_len = 256;
             file->commit(args);
         }
+        args.as->close();
         lfs->unlink(data_name.back().c_str());
         lfs->unlink(idx_name.back().c_str());
         delete file;
-        auto tmp = ::open_file_ro(as);
-        UUID uuid;
-        tmp->get_uuid(uuid, 0);
-        parent_uuid = UUID::String(uuid).c_str();
-        LOG_INFO("reset parent_uuid: `", parent_uuid.c_str());
+        // // auto tmp = ::open_file_ro(as);
+        // // UUID uuid;
+        // // tmp->get_uuid(uuid, 0);
+        // // parent_uuid = UUID::String(uuid).c_str();
+        // // LOG_INFO("reset parent_uuid: `", parent_uuid.c_str());
+        // if (compress) {
+        //     LOG_INFO("compress commit file and enable checksum.");
+        //     CompressOptions opt;
+        //     opt.verify = verify;
+        //     CompressArgs zfile_args(opt);
+        //     int ret = zfile_compress(as, dst, &zfile_args);
+        //     if (ret != 0) {
+        //         LOG_ERRNO_RETURN(0, nullptr, "compress commmit file failed.");
+        //     }
+        //     dst = ZFile::zfile_open_ro(dst, true);
+        //     return dst;
+        // }
+        dst->close();
+
+        dst = lfs->open(layer_name.back().c_str(), O_RDONLY);
         if (compress) {
-            LOG_INFO("compress commit file and enable checksum.");
-            CompressOptions opt;
-            opt.verify = verify;
-            CompressArgs zfile_args(opt);
-            int ret = zfile_compress(as, dst, &zfile_args);
-            if (ret != 0) {
-                LOG_ERRNO_RETURN(0, nullptr, "compress commmit file failed.");
-            }
-            dst = ZFile::zfile_open_ro(dst, true);
-            return dst;
+            return ZFile::zfile_open_ro(dst, true);
         }
-        return FileSystem::open_localfile_adaptor(("/tmp/" + layer_name.back()).c_str(), O_RDONLY,
-                                                  420U, io_engine);
+        return dst;
     }
 
     virtual IFileRO *create_image(int total_layers) {
