@@ -36,6 +36,7 @@ static void usage() {
         "overlaybd-create [options] <data file> <index file> <virtual size in GB>\n"
         "options:\n"
         "   -u <parent_UUID>\n"
+        "   -s          create sparse RW layer, <index file> will be ignore."
         "example:\n"
         "   ./overlaybd-create ./file.data ./file.index 100\n";
 
@@ -56,14 +57,20 @@ uint64_t vsize;
 int level = 255;
 unique_ptr<IFile> fdata, findex;
 string parent_uuid;
+bool sparse = false;
+
 static void parse_args(int argc, char **argv) {
     int shift = 1;
     int ch;
-    while ((ch = getopt(argc, argv, "u:")) != -1) {
+    while ((ch = getopt(argc, argv, "u:s")) != -1) {
         switch (ch) {
         case 'u':
             parent_uuid = optarg;
             shift += 2;
+            break;
+        case 's':
+            sparse = true;
+            shift += 1;
             break;
         default:
             usage();
@@ -97,6 +104,7 @@ int main(int argc, char **argv) {
     LSMT::LayerInfo args(fdata.get(), findex.get());
     args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
     args.virtual_size = vsize;
+    args.sparse_rw = sparse;
 
     auto file = LSMT::create_file_rw(args, false);
     if (!file) {

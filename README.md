@@ -1,13 +1,21 @@
 # Overlaybd
 
-## Accelerated Container Image
+Overlaybd is a novel layering block-level image format, which is design for container, secure container and applicable to virtual machine. And it is an open-source implementation of paper [DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba).
 
-overlaybd is the storage backend of [Accelerated Container Image](https://github.com/containerd/accelerated-container-image), which is a solution of remote container image by fetching image data on-demand without pulling the whole image before the container starts.
+Overlaybd has 2 core component:
+* **Overlaybd**
+  is a block-device based image format, provideing a merged view of a sequence of block-based layers as a virtual block device.
 
-overlaybd provides a merged view of a sequence of block-based layers as an block device.
-This repository is a component of [Accelerated Container Image](https://github.com/containerd/accelerated-container-image), provides an implementation of overlaybd by [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
+* **Zfile**
+  is a compression file format which support seekalbe online decompression.
 
-overlaybd is a __non-core__ sub-project of containerd.
+This repository is an implementation of overlaybd based on [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
+
+Overlaybd can be used as the storage backend of [Accelerated Container Image](https://github.com/containerd/accelerated-container-image), which is a solution of remote container image by fetching image data on-demand without downloading and unpacking the whole image before the container starts.
+
+Benefits from the universality of block-device, overlaybd is also a widely applicable image format for most runtime, including qemu/kvm and any other runtime supporting block or scsi api.
+
+Overlaybd is a __non-core__ sub-project of containerd.
 
 ## Setup
 
@@ -77,7 +85,7 @@ If you want to use avx512 to accelerate CRC calculation.
 cmake -D ENABLE_ISAL=1 ..
 ```
 
-For more informations go to `overlaybd/src/overlaybd/fs/zfile/README.md`. 
+For more informations go to `overlaybd/src/overlaybd/fs/zfile/README.md`.
 
 Finally, setup a systemd service for overlaybd-tcmu backstore.
 
@@ -148,13 +156,101 @@ Here is an example of credential file described by `credentialFilePath` field.
 
 Credentials are reloaded when authentication is required.
 Credentials have to be updated before expiration if temporary credential is used, otherwise overlaybd keeps reloading until a valid credential is set.
-For the convenience of testing, we provided a public registry on Aliyun ACR, see later examples.
 
 > **Important**: The corresponding credential has to be set before launching devices, if the registry is not public.
 
-## What's next?
+## Usage
 
-Now we have finished the setup of overlaybd, let's go back to [Accelerated Container Image](https://github.com/containerd/accelerated-container-image) repo and start to run our first accelerated container.
+### Use with containerd
+
+Please install overlaybd and refer to  [Accelerated Container Image](https://github.com/containerd/accelerated-container-image). Overlaybd is well integrated with containerd and easy to use.
+
+### Standalone Usage
+
+For other scenarios, users can use overlaybd manually. Overlaybd works as a backing store of TCMU, so users can run overlaybd image by interacting with configfs.
+
+#### Config file
+A config file is required to describe an overlaybd image, only local image and registry image are supported. Here is a sample json config file:
+```json
+{
+      "repoBlobUrl": "https://obd.cr.aliyuncs.com/v2/overlaybd/sample/blobs",
+      "lowers" : [
+          {
+              "file" : "/opt/overlaybd/layer0"
+          },
+          {
+              "dir": "/var/lib/containerd/root/io.containerd.snapshotter.v1.overlayfs/snapshots/1000",
+              "digest": "sha256:e3b0d67cfa3a37dfed187badc7766e3db64d492c4db2dc4260997b41af1b28f3",
+              "size": 43446424
+          }
+      ],
+      "resultFile": "/home/overlaybd/1/result"
+}
+```
+| Field               | Description |
+| ---                 | ---         |
+| repoBlobUrl         | the url of the repository blobs of the remote image. It is required for a registry image. |
+| lowers              | a list describing the lower layers of the image in bottom-upper order. |
+| file                | it means the corresponding layer is a local file. if a local file is used, other options are not needed. |
+| dir                 | it means the corresponding layer will be stored in this directory after downloading. |
+| digest and size     | the digest and size of a remote layer. It is required for a remote layer. |
+| resultFile          | the file for saving the failure reasons. If a device is successfully lauched, success is writen into the file, otherwise, the failure s reported by this file. |
+
+
+#### Start up
+
+Here is an example to start up an overlaybd image.
+First, create the overlaybd tcmu device.
+
+``` bash
+mkdir -p /sys/kernel/config/target/core/user_1/vol1
+echo -n dev_config=overlaybd//root/config.v1.json > /sys/kernel/config/target/core/user_1/vol1/control
+echo -n 1 > /sys/kernel/config/target/core/user_1/vol1/enable
+```
+Then, create a tcm loop device.
+```bash
+mkdir -p /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0
+echo -n "naa.123456789abcdef" > /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/nexus
+ln -s /sys/kernel/config/target/core/user_1/vol1 /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0/vol1
+```
+Then a block device `/dev/sdX` is generated, overlaybd image can be used locally. Furthermore, overlaybd device can be used on remote hosts by iscsi.
+
+#### Clean up
+Just remove the files and directories in configfs in reverse order.
+
+#### Writable layer
+Overlaybd provides a log-structured writable layer and a sprase-file writable layer. Log-structured layer is append only and converts all writes into sequential writes so that the image build/convert process is usually faster. Sparse-file writable layer is more suitable for container rutime.
+
+Use `overlaybd-create` to create a writable layer.
+```bash
+  /opt/overlaybd/bin/overlaybd-create ${data_file} ${index_file} ${virtual size}
+```
+use `-s` to for creating sparse-file writable layer.
+The upper option in overlaybd config file must be set to use a writable layer. Only one writable layer is avialable and it always workes as the top layer.Example:
+```json
+{
+    "repoBlobUrl": ...,
+    "lowers" : [
+        ...
+    ],
+    "upper": {
+        "index": "${index_file}",
+        "data": "${data_file}"
+    },
+    "resultFile": "/home/overlaybd/1/result"
+}
+```
+If upper is set, the overlaybd device is launched as a writable device. The differences produced by data writing are stored in the index and data files ofupper.
+
+After writing data and destroying the device, `overlaybd-commit` command is required to excute to commit the layer into a read-only layer and can be used asa lower layer later.
+```bash
+/opt/overlaybd/bin/overlaybd-commit ${data_file} ${index_file} ${commit_file}
+```
+At last, compression may be needed.
+```bash
+/opt/overlaybd/bin/overlaybd-zfile ${commit_file} ${zfile}
+```
+The zfile can be used as lower layer with online decompression.
 
 
 ## Kernel module
