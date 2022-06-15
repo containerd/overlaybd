@@ -898,9 +898,9 @@ public:
         // wait unlock
         ssize_t ret = -1;
         {
-            ret = m_files[0]->pwrite(buf, count, moffset);
+            ret = m_files[m_rw_tag]->pwrite(buf, count, moffset);
             if (ret != (ssize_t)count) {
-                LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`", m_files[0],
+                LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`", m_files[m_rw_tag],
                                  ret, moffset, count);
             }
             LOG_DEBUG("insert segment: `", m);
@@ -914,7 +914,7 @@ public:
         m.moffset = (uint64_t)(m.offset + (HeaderTrailer::SPACE / ALIGNMENT));
         LOG_DEBUG(m);
         static_cast<IMemoryIndex0 *>(m_index)->insert(m);
-        return m_files[0]->trim(m.offset * ALIGNMENT + HeaderTrailer::SPACE, m.length * ALIGNMENT);
+        return m_files[m_rw_tag]->trim(m.offset * ALIGNMENT + HeaderTrailer::SPACE, m.length * ALIGNMENT);
     }
 
     // sparse RW File can't support these methods:
