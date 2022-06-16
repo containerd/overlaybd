@@ -13,7 +13,6 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -23,21 +22,22 @@
 #include <vector>
 #include <algorithm>
 
-#include "overlaybd/alog-stdstring.h"
-#include "overlaybd/alog.h"
-#include "overlaybd/fs/aligned-file.h"
-#include "overlaybd/fs/filesystem.h"
-#include "overlaybd/fs/localfs.h"
-#include "overlaybd/fs/lsmt/file.h"
-#include "overlaybd/fs/zfile/zfile.h"
+#include <photon/common/alog.h>
+#include <photon/common/alog-stdstring.h>
+#include <photon/fs/filesystem.h>
+#include <photon/fs/aligned-file.h>
+#include <photon/fs/localfs.h>
+#include "overlaybd/lsmt/file.h"
+#include "overlaybd/zfile/zfile.h"
 #include "config.h"
 #include "image_file.h"
 #include "sure_file.h"
 #include "switch_file.h"
 
 #define PARALLEL_LOAD_INDEX 32
+using namespace photon::fs;
 
-FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
+IFile *ImageFile::__open_ro_file(const std::string &path) {
     int flags = O_RDONLY;
 
     LOG_DEBUG("open ro file: `", path);
@@ -46,12 +46,12 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
         LOG_WARN("invalid ioengine: `, set to psync", ioengine);
         ioengine = 0;
     }
-    if (ioengine == IOEngineType::io_engine_libaio) {
+    if (ioengine == ioengine_libaio) {
         flags |= O_DIRECT;
         LOG_DEBUG("`: flag add O_DIRECT", path);
     }
 
-    auto file = FileSystem::open_localfile_adaptor(path.c_str(), flags, 0644, ioengine);
+    auto file = open_localfile_adaptor(path.c_str(), flags, 0644, ioengine);
     if (!file) {
         set_failed("failed to open local file " + path);
         LOG_ERROR_RETURN(0, nullptr, "open(`),`:`", path, errno, strerror(errno));
@@ -59,7 +59,7 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
 
     if (flags & O_DIRECT) {
         LOG_DEBUG("create aligned file. IO_FLAGS: `", flags);
-        auto aligned_file = new_aligned_file_adaptor(file, FileSystem::ALIGNMENT_4K, true, true);
+        auto aligned_file = new_aligned_file_adaptor(file, ALIGNMENT_4K, true, true);
         if (!aligned_file) {
             set_failed("failed to open aligned_file_adaptor " + path);
             delete file;
@@ -69,7 +69,7 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
         file = aligned_file;
     }
     // set to local, no need to switch, for zfile and audit
-    FileSystem::ISwitchFile *switch_file = FileSystem::new_switch_file(file, true, path.c_str());
+    ISwitchFile *switch_file = new_switch_file(file, true, path.c_str());
     if (!switch_file) {
         set_failed("failed to open switch file `" + path);
         delete file;
@@ -81,7 +81,7 @@ FileSystem::IFile *ImageFile::__open_ro_file(const std::string &path) {
     return file;
 }
 
-FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &digest,
+IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &digest,
                                                const uint64_t size, int layer_index) {
     std::string url;
     int64_t extra_range, rand_wait;
@@ -97,7 +97,7 @@ FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std
     url += digest;
 
     LOG_DEBUG("open file from remotefs: `, size: `", url, size);
-    FileSystem::IFile *remote_file = image_service.global_fs.remote_fs->open(url.c_str(), O_RDONLY);
+    IFile *remote_file = image_service.global_fs.remote_fs->open(url.c_str(), O_RDONLY);
     if (!remote_file) {
         if (errno == EPERM)
             set_auth_failed();
@@ -106,19 +106,19 @@ FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std
         LOG_ERROR_RETURN(0, nullptr, "failed to open remote file `", url);
     }
 
-    FileSystem::ISwitchFile *switch_file = FileSystem::new_switch_file(remote_file);
+    ISwitchFile *switch_file = new_switch_file(remote_file);
     if (!switch_file) {
         set_failed("failed to open switch file `" + url);
         delete remote_file;
         LOG_ERROR_RETURN(0, nullptr, "failed to open switch file `", url);
     }
 
-    FileSystem::IFile *file = switch_file;
+    IFile *file = switch_file;
     if (m_prefetcher != nullptr) {
         file = m_prefetcher->new_prefetch_file(switch_file, layer_index);
     }
 
-    FileSystem::IFile *sure_file = new_sure_file(file, this);
+    IFile *sure_file = new_sure_file(file, this);
     if (!sure_file) {
         set_failed("failed to open sure file `" + url);
         delete switch_file;
@@ -127,7 +127,7 @@ FileSystem::IFile *ImageFile::__open_ro_remote(const std::string &dir, const std
 
     if (conf.HasMember("download") && conf.download().enable() == 1) {
         // download from registry, verify sha256 after downloaded.
-        FileSystem::IFile *srcfile = image_service.global_fs.srcfs->open(url.c_str(), O_RDONLY);
+        IFile *srcfile = image_service.global_fs.srcfs->open(url.c_str(), O_RDONLY);
         if (srcfile == nullptr) {
             LOG_WARN("failed to open source file, ignore download");
         } else {
@@ -157,7 +157,7 @@ void ImageFile::start_bk_dl_thread() {
 }
 
 struct ParallelOpenTask {
-    std::vector<FileSystem::IFile *> &files;
+    std::vector<IFile *> &files;
     int eno = 0;
     std::vector<ImageConfigNS::LayerConfig> &layers;
     int i = 0, nlayers;
@@ -175,7 +175,7 @@ struct ParallelOpenTask {
         this->eno = eno;
     }
 
-    ParallelOpenTask(std::vector<FileSystem::IFile *> &files, size_t nlayers,
+    ParallelOpenTask(std::vector<IFile *> &files, size_t nlayers,
                      std::vector<ImageConfigNS::LayerConfig> &layers)
         : files(files), nlayers(nlayers), layers(layers) {
     }
@@ -197,7 +197,7 @@ void *do_parallel_open_files(ImageFile *imgfile, ParallelOpenTask &tm) {
     return nullptr;
 }
 
-int ImageFile::open_lower_layer(FileSystem::IFile *&file, ImageConfigNS::LayerConfig &layer,
+int ImageFile::open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer,
                                 int index) {
     std::string opened;
     if (layer.file() != "") {
@@ -229,7 +229,7 @@ LSMT::IFileRO *ImageFile::open_lowers(std::vector<ImageConfigNS::LayerConfig> &l
         return NULL;
 
     photon::join_handle *ths[PARALLEL_LOAD_INDEX];
-    std::vector<FileSystem::IFile *> files;
+    std::vector<IFile *> files;
     files.resize(lowers.size(), nullptr);
     auto n = std::min(PARALLEL_LOAD_INDEX, (int)lowers.size());
     LOG_DEBUG("create ` photon threads to open lowers", n);
@@ -253,7 +253,7 @@ LSMT::IFileRO *ImageFile::open_lowers(std::vector<ImageConfigNS::LayerConfig> &l
             goto ERROR_EXIT;
         }
     }
-    ret = LSMT::open_files_ro((FileSystem::IFile **)&(files[0]), lowers.size(), true);
+    ret = LSMT::open_files_ro((IFile **)&(files[0]), lowers.size(), true);
     if (!ret) {
         LOG_ERROR("LSMT::open_files_ro(files, `, `) return NULL", lowers.size(), true);
         goto ERROR_EXIT;
@@ -279,8 +279,8 @@ ERROR_EXIT:
 }
 
 LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
-    FileSystem::IFile *data_file = NULL;
-    FileSystem::IFile *idx_file = NULL;
+    IFile *data_file = NULL;
+    IFile *idx_file = NULL;
     LSMT::IFileRW *ret = NULL;
 
     LOG_INFO("upper layer : ` , `", upper.index(), upper.data());
@@ -334,18 +334,18 @@ int ImageFile::init_image_file() {
         LOG_INFO("Acceleration layer found at `, ignore the last lower", accel_layer);
 
         std::string trace_file = accel_layer + "/trace";
-        if (FileSystem::Prefetcher::detect_mode(trace_file) ==
-            FileSystem::Prefetcher::Mode::Replay) {
-            m_prefetcher = FileSystem::new_prefetcher(trace_file);
+        if (Prefetcher::detect_mode(trace_file) ==
+            Prefetcher::Mode::Replay) {
+            m_prefetcher = new_prefetcher(trace_file);
         }
 
     } else if (!conf.recordTracePath().empty()) {
-        if (FileSystem::Prefetcher::detect_mode(conf.recordTracePath()) !=
-            FileSystem::Prefetcher::Mode::Record) {
+        if (Prefetcher::detect_mode(conf.recordTracePath()) !=
+            Prefetcher::Mode::Record) {
             LOG_ERROR("Prefetch: incorrect mode for trace recording");
             goto ERROR_EXIT;
         }
-        m_prefetcher = FileSystem::new_prefetcher(conf.recordTracePath());
+        m_prefetcher = new_prefetcher(conf.recordTracePath());
         record_no_download = true;
     }
 

@@ -13,14 +13,13 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
-#include "../overlaybd/alog.h"
-#include "../overlaybd/fs/filesystem.h"
-#include "../overlaybd/fs/localfs.h"
-#include "../overlaybd/fs/virtual-file.h"
-#include "../overlaybd/fs/zfile/zfile.h"
-#include "../overlaybd/fs/tar_file.h"
-#include "../overlaybd/utility.h"
-#include "../overlaybd/uuid.h"
+
+#include "../overlaybd/zfile/zfile.h"
+#include "../overlaybd/tar_file.h"
+#include <photon/common/uuid.h>
+#include <photon/common/utility.h>
+#include <photon/fs/localfs.h>
+#include <photon/common/alog.h>
 #include <cstdio>
 #include <cstdlib>
 #include <errno.h>
@@ -32,7 +31,7 @@
 #include <unistd.h>
 
 using namespace std;
-using namespace FileSystem;
+using namespace photon::fs;
 using namespace ZFile;
 
 int usage() {
@@ -51,7 +50,7 @@ int usage() {
     return 0;
 }
 
-FileSystem::IFileSystem *lfs = nullptr;
+IFileSystem *lfs = nullptr;
 
 int main(int argc, char **argv) {
     log_output_level = 1;

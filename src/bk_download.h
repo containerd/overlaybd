@@ -16,11 +16,15 @@
 #pragma once
 #include <list>
 #include <string>
-#include "overlaybd/fs/filesystem.h"
 #include "switch_file.h"
 
 class ImageFile;
 
+namespace photon {
+    namespace fs {
+        class IFile;
+    }
+}
 namespace BKDL {
 
 static std::string DOWNLOAD_TMP_NAME = "overlaybd.download";
@@ -42,7 +46,7 @@ public:
         unlock_file();
         delete src_file;
     }
-    BkDownload(FileSystem::ISwitchFile *sw_file, FileSystem::IFile *src_file, const std::string dir,
+    BkDownload(ISwitchFile *sw_file, photon::fs::IFile *src_file, const std::string dir,
                int32_t limit_MB_ps, int32_t try_cnt, ImageFile *image_file, std::string digest)
         : sw_file(sw_file), src_file(src_file), dir(dir), limit_MB_ps(limit_MB_ps),
           try_cnt(try_cnt), image_file(image_file), digest(digest) {
@@ -53,8 +57,8 @@ private:
     bool download_blob(int &running);
     bool download_done();
 
-    FileSystem::ISwitchFile *sw_file = nullptr;
-    FileSystem::IFile *src_file = nullptr;
+    ISwitchFile *sw_file = nullptr;
+    photon::fs::IFile *src_file = nullptr;
     int32_t limit_MB_ps;
     ImageFile *image_file;
     std::string digest;

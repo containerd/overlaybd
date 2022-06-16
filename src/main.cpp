@@ -15,19 +15,20 @@
 */
 #include "image_file.h"
 #include "image_service.h"
-#include "overlaybd/alog.h"
-#include "overlaybd/event-loop.h"
-#include "overlaybd/fs/filesystem.h"
-#include "overlaybd/net/curl.h"
-#include "overlaybd/photon/syncio/aio-wrapper.h"
-#include "overlaybd/photon/syncio/fd-events.h"
-#include "overlaybd/photon/syncio/signal.h"
-#include "overlaybd/photon/thread-pool.h"
-#include "overlaybd/photon/thread.h"
-#include "libtcmu.h"
-#include "libtcmu_common.h"
-#include "scsi.h"
-#include "scsi_defs.h"
+#include <photon/common/alog.h>
+#include <photon/common/event-loop.h>
+#include <photon/fs/filesystem.h>
+#include <photon/net/curl.h>
+#include <photon/io/fd-events.h>
+#include <photon/io/signalfd.h>
+#include <photon/photon.h>
+#include <photon/thread/thread.h>
+#include <photon/thread/thread-pool.h>
+
+#include <libtcmu.h>
+#include <libtcmu_common.h>
+#include <scsi.h>
+#include <scsi_defs.h>
 #include <fcntl.h>
 #include <scsi/scsi.h>
 #include <sys/resource.h>
@@ -348,17 +349,7 @@ void sigint_handler(int signal = SIGINT) {
 int main(int argc, char **argv) {
     mallopt(M_TRIM_THRESHOLD, 128 * 1024);
 
-    photon::init();
-    DEFER(photon::fini());
-    photon::fd_events_init();
-    DEFER(photon::fd_events_fini());
-    photon::libaio_wrapper_init();
-    DEFER(photon::libaio_wrapper_fini());
-    photon::sync_signal_init();
-    DEFER(photon::sync_signal_fini());
-    Net::libcurl_init();
-    DEFER(Net::libcurl_fini());
-
+    photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     photon::block_all_signal();
     photon::sync_signal(SIGTERM, &sigint_handler);
     photon::sync_signal(SIGINT, &sigint_handler);
@@ -408,16 +399,17 @@ int main(int argc, char **argv) {
         LOG_INFO("reset netlink done");
     }
 
-    struct tcmulib_context *tcmulib_ctx;
-    struct tcmulib_handler main_handler;
-    main_handler.name = "Handler for overlaybd devices";
-    main_handler.subtype = "overlaybd";
-    main_handler.cfg_desc = "overlaybd bs";
-    main_handler.check_config = nullptr;
-    main_handler.added = dev_open;
-    main_handler.removed = dev_close;
+    std::vector<struct tcmulib_handler> handlers;
+    struct tcmulib_handler overlaybd_handler;
+    overlaybd_handler.name = "Handler for overlaybd devices";
+    overlaybd_handler.subtype = "overlaybd";
+    overlaybd_handler.cfg_desc = "overlaybd bs";
+    overlaybd_handler.check_config = nullptr;
+    overlaybd_handler.added = dev_open;
+    overlaybd_handler.removed = dev_close;
+    handlers.push_back(overlaybd_handler);
 
-    tcmulib_ctx = tcmulib_initialize(&main_handler, 1);
+    struct tcmulib_context *tcmulib_ctx = tcmulib_initialize(handlers);
     if (!tcmulib_ctx) {
         LOG_ERROR("tcmulib init failed.");
         return -1;

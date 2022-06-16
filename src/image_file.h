@@ -15,7 +15,6 @@
 */
 #pragma once
 
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -31,13 +30,13 @@
 #include "config.h"
 #include "image_service.h"
 #include "prefetch.h"
-#include "overlaybd/alog.h"
-#include "overlaybd/fs/filesystem.h"
-#include "overlaybd/fs/forwardfs.h"
-#include "overlaybd/fs/lsmt/file.h"
-#include "overlaybd/photon/thread11.h"
+#include <photon/common/alog.h>
+#include <photon/fs/filesystem.h>
+#include <photon/fs/forwardfs.h>
+#include <photon/thread/thread11.h>
+#include "overlaybd/lsmt/file.h"
 
-class ImageFile : public FileSystem::ForwardFile {
+class ImageFile : public photon::fs::ForwardFile {
 public:
     ImageFile(ImageConfigNS::ImageConfig &_conf, ImageService &is)
         : ForwardFile(nullptr), image_service(is) {
@@ -93,7 +92,7 @@ public:
     }
 
     void set_auth_failed();
-    int open_lower_layer(FileSystem::IFile *&file, ImageConfigNS::LayerConfig &layer, int index);
+    int open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer, int index);
 
     std::string m_exception;
     int m_status = 0; // 0: not started, 1: running, -1 exit
@@ -104,7 +103,7 @@ public:
     bool read_only = false;
 
 private:
-    FileSystem::Prefetcher *m_prefetcher = nullptr;
+    Prefetcher *m_prefetcher = nullptr;
     ImageConfigNS::ImageConfig conf;
     std::list<BKDL::BkDownload *> dl_list;
     photon::join_handle *dl_thread_jh = nullptr;
@@ -114,8 +113,8 @@ private:
     void set_failed(std::string reason);
     LSMT::IFileRO *open_lowers(std::vector<ImageConfigNS::LayerConfig> &, bool &);
     LSMT::IFileRW *open_upper(ImageConfigNS::UpperConfig &);
-    FileSystem::IFile *__open_ro_file(const std::string &);
-    FileSystem::IFile *__open_ro_remote(const std::string &dir, const std::string &, const uint64_t,
+    IFile *__open_ro_file(const std::string &);
+    IFile *__open_ro_remote(const std::string &dir, const std::string &, const uint64_t,
                                         int);
     void start_bk_dl_thread();
 };
