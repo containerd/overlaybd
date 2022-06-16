@@ -13,9 +13,10 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
-#include "../overlaybd/alog.h"
-#include "../overlaybd/fs/localfs.h"
-#include "../overlaybd/fs/lsmt/file.h"
+
+#include <photon/common/alog.h>
+#include <photon/fs/localfs.h>
+#include "../overlaybd/lsmt/file.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -29,7 +30,7 @@
 
 using namespace std;
 using namespace LSMT;
-using namespace FileSystem;
+using namespace photon::fs;
 
 static void usage() {
     static const char msg[] =

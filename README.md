@@ -2,6 +2,8 @@
 
 Overlaybd is a novel layering block-level image format, which is design for container, secure container and applicable to virtual machine. And it is an open-source implementation of paper [DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba).
 
+Overlaybd is based on [PhotonLibOS](https://github.com/alibaba/PhotonLibOS), which is a high-efficiency LibOS framework.
+
 Overlaybd has 2 core component:
 * **Overlaybd**
   is a block-device based image format, provideing a merged view of a sequence of block-based layers as a virtual block device.
@@ -50,8 +52,8 @@ To build overlaybd from source code, the following dependencies are required:
 * gcc/g++ >= 7
 
 * Libaio, libcurl, libnl3, glib2 and openssl runtime and development libraries.
-  * CentOS/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel glib2-devel`
-  * Debian/Ubuntu: `sudo apt install pkg-config libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libglib2.0-dev libgflags-dev`
+  * CentOS/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel`
+  * Debian/Ubuntu: `sudo apt install libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libgflags-dev`
 
 #### Build
 
@@ -85,7 +87,7 @@ If you want to use avx512 to accelerate CRC calculation.
 cmake -D ENABLE_ISAL=1 ..
 ```
 
-For more informations go to `overlaybd/src/overlaybd/fs/zfile/README.md`.
+For more informations go to `overlaybd/src/overlaybd/zfile/README.md`.
 
 Finally, setup a systemd service for overlaybd-tcmu backstore.
 

@@ -20,10 +20,9 @@
 
 #include <cctype>
 #include <string>
-#include "overlaybd/fs/filesystem.h"
+#include <photon/fs/filesystem.h>
 
-namespace FileSystem {
-
+using namespace photon::fs;
 /*
  * 1. Prefetcher supports `record` and `replay` operations on a specific container image.
  *    It will persist R/W metadata of all layers into a trace file during container boot-up,
@@ -68,5 +67,3 @@ protected:
 };
 
 Prefetcher *new_prefetcher(const std::string &trace_file_path);
-
-} // namespace FileSystem

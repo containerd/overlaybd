@@ -14,11 +14,15 @@
    limitations under the License.
 */
 #pragma once
-#include "overlaybd/fs/filesystem.h"
 
-struct ImageFile;
+namespace photon {
+    namespace fs {
+        class IFile;
+    }
+}
+class ImageFile;
 
-extern "C" FileSystem::IFile *new_sure_file(FileSystem::IFile *src_file, ImageFile *image_file,
+IFile *new_sure_file(IFile *src_file, ImageFile *image_file,
                                             bool ownership = true);
-extern "C" FileSystem::IFile *new_sure_file_by_path(const char *file_path, int open_flags,
+IFile *new_sure_file_by_path(const char *file_path, int open_flags,
                                                     ImageFile *image_file, bool ownership = true);
