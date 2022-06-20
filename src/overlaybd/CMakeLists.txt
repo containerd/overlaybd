@@ -1,11 +1,17 @@
-file(GLOB SOURCE_BASE "*.cpp")
-add_library(base_lib STATIC ${SOURCE_BASE})
-target_compile_definitions(base_lib PUBLIC "-DLOGCURRENT")
+add_subdirectory(registryfs)
+add_subdirectory(lsmt)
+add_subdirectory(zfile)
+add_subdirectory(cache)
 
-add_subdirectory(fs)
-add_subdirectory(net)
-add_subdirectory(photon)
-
-if(BUILD_TESTING)
-  add_subdirectory(test)
-endif()
+file(GLOB SOURCE_OBD "*.cpp")
+add_library(overlaybd_lib STATIC ${SOURCE_OBD})
+target_include_directories(overlaybd_lib PUBLIC
+    ${PHOTON_INCLUDE_DIR}
+)
+target_link_libraries(overlaybd_lib
+    photon_static
+    registryfs_lib
+    lsmt_lib
+    zfile_lib
+    cache_lib
+)

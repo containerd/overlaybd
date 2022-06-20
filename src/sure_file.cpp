@@ -15,14 +15,15 @@
 */
 #include <limits.h>
 #include <unistd.h>
-#include "overlaybd/alog-stdstring.h"
-#include "overlaybd/alog.h"
-#include "overlaybd/fs/localfs.h"
-#include "overlaybd/photon/thread.h"
+#include <photon/common/alog.h>
+#include <photon/common/alog-stdstring.h>
+#include <photon/fs/localfs.h>
+#include <photon/thread/thread.h>
 #include "image_file.h"
 #include "sure_file.h"
 
-namespace FileSystem {
+using namespace photon::fs;
+
 class SureFile : public ForwardFile_Ownership {
 public:
     SureFile() = delete;
@@ -112,19 +113,19 @@ public:
         return -1;
     }
 };
-} // namespace FileSystem
 
-FileSystem::IFile *new_sure_file(FileSystem::IFile *src_file, ImageFile *image_file,
+
+IFile *new_sure_file(IFile *src_file, ImageFile *image_file,
                                  bool ownership) {
     if (!src_file) {
         LOG_ERROR("failed to new_sure_file(null)");
         return nullptr;
     }
-    return new FileSystem::SureFile(src_file, image_file, ownership);
+    return new SureFile(src_file, image_file, ownership);
 }
 
-FileSystem::IFile *new_sure_file_by_path(const char *file_path, int open_flags,
+IFile *new_sure_file_by_path(const char *file_path, int open_flags,
                                          ImageFile *image_file, bool ownership) {
-    auto file = FileSystem::open_localfile_adaptor(file_path, open_flags, 0644, 0);
+    auto file = open_localfile_adaptor(file_path, open_flags, 0644, 0);
     return new_sure_file(file, image_file, ownership);
 }

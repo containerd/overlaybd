@@ -15,18 +15,17 @@
 */
 #include <fcntl.h>
 #include <mutex>
-#include "overlaybd/alog-audit.h"
-#include "overlaybd/alog-stdstring.h"
-#include "overlaybd/alog.h"
-#include "overlaybd/fs/localfs.h"
-#include "overlaybd/photon/thread.h"
-#include "overlaybd/fs/tar_file.h"
+#include <photon/common/alog-audit.h>
+#include <photon/common/alog-stdstring.h>
+#include <photon/common/alog.h>
+#include <photon/fs/localfs.h>
+#include <photon/thread/thread.h>
+#include "overlaybd/tar_file.h"
 #include "switch_file.h"
-#include "overlaybd/fs/zfile/zfile.h"
+#include "overlaybd/zfile/zfile.h"
 
 using namespace std;
-
-namespace FileSystem {
+using namespace photon::fs;
 
 #define FORWARD(func)                                                                              \
     check_switch();                                                                                \
@@ -75,7 +74,7 @@ public:
         }
 
         // if tar file, open tar file
-        file = FileSystem::new_tar_file_adaptor(file);
+        file = new_tar_file_adaptor(file);
         // open zfile
         auto zf = ZFile::zfile_open_ro(file, false, true);
         if (!zf) {
@@ -180,7 +179,7 @@ public:
 
 ISwitchFile *new_switch_file(IFile *source, bool local, const char *file_path) {
     // if tar file, open tar file
-    IFile *file = FileSystem::new_tar_file_adaptor(source);
+    IFile *file = new_tar_file_adaptor(source);
     // open zfile
     bool verify = !local;
     auto zf = ZFile::zfile_open_ro(file, verify, true);
@@ -191,4 +190,3 @@ ISwitchFile *new_switch_file(IFile *source, bool local, const char *file_path) {
     file = zf;
     return new SwitchFile(file, local, file_path);
 };
-} // namespace FileSystem

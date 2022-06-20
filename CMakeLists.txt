@@ -2,10 +2,10 @@ cmake_minimum_required(VERSION 3.11)
 
 project(
   overlaybd
-  VERSION 0.4.1
+  VERSION 0.5.0
   LANGUAGES C CXX
 )
-enable_language(C ASM)
+enable_language(C)
 
 set(LIBRARY_OUTPUT_PATH "${CMAKE_SOURCE_DIR}/build/output")
 set(EXECUTABLE_OUTPUT_PATH "${CMAKE_SOURCE_DIR}/build/output")
@@ -24,7 +24,8 @@ endif()
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED on)
 
-add_definitions("-DRAPIDJSON_HAS_STDSTRING=1")
+find_package(photon REQUIRED)
+find_package(tcmu REQUIRED)
 
 if(BUILD_TESTING)
   enable_testing()
