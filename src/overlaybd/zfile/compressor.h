@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <memory>
+#include "lz4/lz4.h"
 
 namespace photon {
     namespace fs {
@@ -75,6 +76,13 @@ public:
     */
     virtual int compress(const unsigned char *src, size_t src_len, unsigned char *dst,
                          size_t dst_len) = 0;
+    /* 
+        return the number of batches in QAT compressing...
+    */
+    virtual int nbatch() = 0;
+    virtual int compress_batch(const unsigned char *src, size_t *src_chunk_len, unsigned char *dst,
+                        size_t dst_buffer_capacity, size_t *dst_chunk_len /* save result chunk length */, 
+                        size_t nchunk) = 0;
     /*
         return decompressed buffer size.
         return -1 when error occurred.
