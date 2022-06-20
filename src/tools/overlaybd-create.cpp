@@ -23,13 +23,13 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include "../overlaybd/fs/lsmt/file.h"
-#include "../overlaybd/fs/localfs.h"
-#include "../overlaybd/alog.h"
-#include "../overlaybd/uuid.h"
+#include "../overlaybd/lsmt/file.h"
+#include <photon/common/alog.h>
+#include <photon/fs/localfs.h>
+#include <photon/common/uuid.h>
 
 using namespace std;
-using namespace FileSystem;
+using namespace photon::fs;
 
 static void usage() {
     static const char msg[] =

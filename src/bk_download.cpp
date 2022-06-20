@@ -19,18 +19,19 @@
 #include <string>
 #include <thread>
 #include <sys/file.h>
-#include "overlaybd/alog-stdstring.h"
-#include "overlaybd/alog.h"
-#include "overlaybd/fs/localfs.h"
-#include "overlaybd/fs/throttled-file.h"
-#include "overlaybd/photon/thread.h"
-#include "overlaybd/photon/syncio/fd-events.h"
+#include <photon/common/alog.h>
+#include <photon/common/alog-stdstring.h>
+#include <photon/fs/localfs.h>
+#include <photon/fs/throttled-file.h>
+#include <photon/thread/thread.h>
+#include <photon/common/event-loop.h>
+#include <photon/io/fd-events.h>
 #include "bk_download.h"
-#include "overlaybd/event-loop.h"
+
 #include <openssl/sha.h>
 #include <sys/stat.h>
 #include <unistd.h>
-using namespace FileSystem;
+using namespace photon::fs;
 
 static constexpr size_t ALIGNMENT = 4096;
 
@@ -75,7 +76,7 @@ std::string sha256sum(const char *fn) {
 
 bool check_downloaded(const std::string &dir) {
     std::string fn = dir + "/" + COMMIT_FILE_NAME;
-    auto lfs = FileSystem::new_localfs_adaptor();
+    auto lfs = photon::fs::new_localfs_adaptor();
     if (!lfs) {
         LOG_ERROR("new_localfs_adaptor() return NULL");
         return false;
@@ -159,7 +160,7 @@ bool BkDownload::download_done() {
     std::string shares;
     std::thread sha256_thread([&, th]() {
         shares = sha256sum(old_name.c_str());
-        photon::safe_thread_interrupt(th, EINTR, 0);
+        photon::thread_interrupt(th, EINTR);
     });
     sha256_thread.detach();
     photon::thread_usleep(-1UL);
@@ -208,20 +209,20 @@ void BkDownload::unlock_file() {
 bool BkDownload::download_blob(int &running) {
     std::string dl_file_path = dir + "/" + DOWNLOAD_TMP_NAME;
     try_cnt--;
-    FileSystem::IFile *src = src_file;
+    IFile *src = src_file;
     if (limit_MB_ps > 0) {
-        FileSystem::ThrottleLimits limits;
+        ThrottleLimits limits;
         limits.R.throughput = limit_MB_ps * 1024UL * 1024; // MB
         limits.R.block_size = 1024UL * 1024;
         limits.time_window = 1UL;
-        src = FileSystem::new_throttled_file(src, limits);
+        src = new_throttled_file(src, limits);
     }
     DEFER({
         if (limit_MB_ps > 0)
             delete src;
     });
 
-    auto dst = FileSystem::open_localfile_adaptor(dl_file_path.c_str(), O_RDWR | O_CREAT, 0644);
+    auto dst = open_localfile_adaptor(dl_file_path.c_str(), O_RDWR | O_CREAT, 0644);
     if (dst == nullptr) {
         LOG_ERRNO_RETURN(0, -1, "failed to open dst file `", dl_file_path.c_str());
     }

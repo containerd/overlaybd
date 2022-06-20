@@ -16,18 +16,16 @@
 #include "image_service.h"
 #include "config.h"
 #include "image_file.h"
-#include "overlaybd/alog-stdstring.h"
-#include "overlaybd/alog.h"
+#include <photon/common/alog-stdstring.h>
+#include <photon/common/alog.h>
+#include <photon/common/io-alloc.h>
+#include <photon/fs/localfs.h>
+#include <photon/thread/thread.h>
+#include "overlaybd/cache/cache.h"
+#include "overlaybd/registryfs/registryfs.h"
+#include "overlaybd/tar_file.h"
+#include "overlaybd/zfile/zfile.h"
 #include "overlaybd/base64.h"
-#include "overlaybd/io-alloc.h"
-#include "overlaybd/fs/cache/cache.h"
-#include "overlaybd/fs/filesystem.h"
-#include "overlaybd/fs/localfs.h"
-#include "overlaybd/fs/registryfs/registryfs.h"
-#include "overlaybd/fs/tar_file.h"
-#include "overlaybd/fs/zfile/zfile.h"
-#include "overlaybd/photon/thread.h"
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -45,7 +43,7 @@ struct ImageRef {
 };
 
 bool create_dir(const char *dirname) {
-    auto lfs = FileSystem::new_localfs_adaptor();
+    auto lfs = new_localfs_adaptor();
     if (lfs == nullptr) {
         LOG_ERRNO_RETURN(0, false, "new localfs_adaptor failed");
     }
@@ -169,7 +167,7 @@ int ImageService::read_global_config_and_set() {
         }
     }
 
-    LOG_INFO("global config: cache_dir: `, cache_size_GB: `, cache_type `",
+    LOG_INFO("global config: cache_dir: `, cache_size_GB: `, cache_type: `",
              global_conf.registryCacheDir(), global_conf.registryCacheSizeGB(), global_conf.cacheType());
     return 0;
 }
@@ -193,7 +191,7 @@ void ImageService::set_result_file(std::string &filename, std::string &data) {
         return;
     }
 
-    auto file = FileSystem::open_localfile_adaptor(filename.c_str(),
+    auto file = open_localfile_adaptor(filename.c_str(),
                                                    O_RDWR | O_CREAT | O_TRUNC);
     if (file == nullptr) {
         LOG_ERROR("failed to open result file", filename);
@@ -227,13 +225,13 @@ int ImageService::init() {
         }
 
         LOG_INFO("create registryfs with cafile:`", cafile);
-        auto registry_fs = FileSystem::new_registryfs_with_credential_callback(
+        auto registry_fs = new_registryfs_with_credential_callback(
             {this, &ImageService::reload_auth}, cafile, 30UL * 1000000);
         if (registry_fs == nullptr) {
             LOG_ERROR_RETURN(0, -1, "create registryfs failed.");
         }
 
-        auto tar_fs = FileSystem::new_tar_fs_adaptor(registry_fs);
+        auto tar_fs = new_tar_fs_adaptor(registry_fs);
         if (tar_fs == nullptr) {
             delete registry_fs;
             LOG_ERROR_RETURN(0, -1, "create tar_fs failed.");
@@ -241,7 +239,7 @@ int ImageService::init() {
         global_fs.srcfs = tar_fs;
 
         if (global_conf.cacheType() == "file") {
-            auto registry_cache_fs = FileSystem::new_localfs_adaptor(
+            auto registry_cache_fs = new_localfs_adaptor(
                 global_conf.registryCacheDir().c_str());
             if (registry_cache_fs == nullptr) {
                 delete tar_fs;
@@ -259,7 +257,7 @@ int ImageService::init() {
             if (::access(namespace_dir.c_str(), F_OK) != 0 && ::mkdir(namespace_dir.c_str(), 0755) != 0) {
                 LOG_ERRNO_RETURN(0, -1, "failed to create namespace_dir");
             }
-            auto namespace_fs = FileSystem::new_localfs_adaptor(namespace_dir.c_str());
+            auto namespace_fs = new_localfs_adaptor(namespace_dir.c_str());
             if (namespace_fs == nullptr) {
                 LOG_ERROR_RETURN(0, -1, "failed tp create namespace_fs");
             }
@@ -269,17 +267,17 @@ int ImageService::init() {
             global_fs.io_alloc = io_alloc;
 
             bool reload_media;
-            FileSystem::IFile* media_file;
+            IFile* media_file;
             auto media_file_path = std::string(global_conf.registryCacheDir() + "/cache_media");
             if (::access(media_file_path.c_str(), F_OK) != 0) {
                 reload_media = false;
-                media_file = FileSystem::open_localfile_adaptor(media_file_path.c_str(), O_RDWR | O_CREAT, 0644,
-                                                                FileSystem::ioengine_psync);
+                media_file = open_localfile_adaptor(media_file_path.c_str(), O_RDWR | O_CREAT, 0644,
+                                                                ioengine_psync);
                 media_file->fallocate(0, 0, global_conf.registryCacheSizeGB() * 1024UL * 1024 * 1024);
             } else {
                 reload_media = true;
-                media_file = FileSystem::open_localfile_adaptor(media_file_path.c_str(), O_RDWR, 0644,
-                                                                FileSystem::ioengine_psync);
+                media_file = open_localfile_adaptor(media_file_path.c_str(), O_RDWR, 0644,
+                                                                ioengine_psync);
             }
             global_fs.media_file = media_file;
 

@@ -26,16 +26,14 @@
 #include <sys/mman.h>
 
 #include "prefetch.h"
-#include "overlaybd/fs/forwardfs.h"
-#include "overlaybd/fs/localfs.h"
-#include "overlaybd/fs/zfile/crc32/crc32c.h"
-#include "overlaybd/alog.h"
-#include "overlaybd/alog-stdstring.h"
-#include "overlaybd/photon/thread11.h"
+#include <photon/common/alog.h>
+#include <photon/common/alog-stdstring.h>
+#include <photon/fs/forwardfs.h>
+#include <photon/fs/localfs.h>
+#include <photon/thread/thread11.h>
+#include "overlaybd/zfile/crc32/crc32c.h"
 
 using namespace std;
-
-namespace FileSystem {
 
 class PrefetcherImpl;
 
@@ -64,7 +62,7 @@ public:
         if (m_mode != Mode::Disabled) {
             int flags = m_mode == Mode::Record ? O_WRONLY : O_RDONLY;
             m_trace_file =
-                FileSystem::open_localfile_adaptor(trace_file_path.c_str(), flags, 0666, 2);
+                open_localfile_adaptor(trace_file_path.c_str(), flags, 0666);
         }
 
         // Loop detect lock file if going to record
@@ -344,4 +342,3 @@ Prefetcher::Mode Prefetcher::detect_mode(const string &trace_file_path, size_t *
     }
 }
 
-} // namespace FileSystem

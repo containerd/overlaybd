@@ -15,8 +15,8 @@
 */
 #pragma once
 
-#include "alog-stdstring.h"
-#include "utility.h"
+#include <photon/common/alog-stdstring.h>
+#include <photon/common/utility.h>
 #include <rapidjson/document.h>
 #include <rapidjson/filereadstream.h>
 #include <rapidjson/pointer.h>
