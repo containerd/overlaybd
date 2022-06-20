@@ -35,6 +35,11 @@ extern "C" {
 
 namespace crc32 {
 
+#ifdef ENABLE_DSA
+#define DSA_VENDOR_ID 0x8086
+#define DSA_DEVICE_ID 0x0b25
+#endif
+
 static uint32_t (*crc32c_func)(const uint8_t *, size_t, uint32_t) = nullptr;
 
 static void crc_init() __attribute__((constructor));
@@ -634,14 +639,13 @@ static uint32_t crc32c_dml(const uint8_t *data, size_t nbytes, uint32_t crc) {
 bool check_dsa() {
     struct pci_access *pacc;
     struct pci_dev *dev;
-    unsigned int c;
 
     pacc = pci_alloc();
     pci_init(pacc);
     pci_scan_bus(pacc);
     for (dev = pacc->devices; dev; dev = dev->next) {
         pci_fill_info(dev, PCI_FILL_IDENT | PCI_FILL_BASES);
-        if (dev->vendor_id == 0x8086 && dev->device_id == 0x0b25) {
+        if (dev->vendor_id == DSA_VENDOR_ID && dev->device_id == DSA_DEVICE_ID) {
             pci_cleanup(pacc);
             return true;
         }
