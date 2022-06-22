@@ -19,10 +19,12 @@
 #include <photon/common/alog.h>
 #include <memory>
 #include <vector>
+#ifdef ENABLE_QAT
 #include "lz4/lz4-qat.h"
 extern "C" {
 #include <pci/pci.h>
 }
+#endif
 
 using namespace std;
 
@@ -36,23 +38,24 @@ public:
     uint32_t max_dst_size = 0;
     uint32_t src_blk_size = 0;
     bool qat_enable = false;
-
+#ifdef ENABLE_QAT
     LZ4_qat_param *pQat = nullptr;
-
+#endif
     vector<unsigned char *> raw_data;
     vector<unsigned char *> compressed_data;
 
     const int DEFAULT_N_BATCH = 256;
 
     ~Compressor_lz4() {
+#ifdef ENABLE_QAT  
         if (pQat) {
             qat_uninit(pQat);
             delete pQat;
         }
+#endif
     }
 
     bool check_qat() {
-
 #ifdef ENABLE_QAT
         struct pci_access *pacc;
         struct pci_dev *dev;
@@ -84,11 +87,13 @@ public:
         }
         src_blk_size = opt->block_size;
         max_dst_size = LZ4_compressBound(src_blk_size);
+#ifdef ENABLE_QAT
         if (check_qat()) {
             pQat = new LZ4_qat_param();
             qat_init(pQat);
             qat_enable = true;
         }
+#endif
         LOG_INFO("create batch buffer, size: `", nbatch());
         raw_data.resize(nbatch());
         compressed_data.resize(nbatch());
