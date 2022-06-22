@@ -87,6 +87,12 @@ If you want to use avx512 to accelerate CRC calculation.
 cmake -D ENABLE_ISAL=1 ..
 ```
 
+If you want to use QAT to accelerate compression/decompression.
+
+```bash
+cmake -D ENABLE_QAT=1 ..
+```
+
 For more informations go to `overlaybd/src/overlaybd/zfile/README.md`.
 
 Finally, setup a systemd service for overlaybd-tcmu backstore.
