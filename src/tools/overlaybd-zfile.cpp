@@ -29,6 +29,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <photon/photon.h>
+#include "CLI11.hpp"
 
 using namespace std;
 using namespace photon::fs;
@@ -53,92 +55,82 @@ int usage() {
 IFileSystem *lfs = nullptr;
 
 int main(int argc, char **argv) {
-    log_output_level = 1;
-    int ch;
-    int op = 0;
-    int parse_idx = 1;
     bool rm_old = false;
     bool tar = false;
+    bool extract = false;
+    std::string fn_src, fn_dst;
+
+    CLI::App app{"this is overlaybd-zfile"};
+    app.add_flag("-t", tar, "wrapper with tar");
+    app.add_flag("-x", extract, "create sparse RW layer");
+    app.add_flag("-f", rm_old, "force compress. unlink exist");
+    app.add_option("file", fn_src, "file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
+    app.add_option("zfile", fn_dst, "zfile path")->type_name("FILEPATH")->required();
+    CLI11_PARSE(app, argc, argv);
+
+    set_log_output_level(1);
+    photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+
+
     CompressOptions opt;
     opt.verify = 1;
-    while ((ch = getopt(argc, argv, "tfxd:")) != -1) {
-        switch (ch) {
-        case 'd':
-            printf("set log output level: %d\n", log_output_level);
-            log_output_level = 0;
-            parse_idx++;
-            break;
-        case 'x':
-            op = 1;
-            parse_idx++;
-            break;
-        case 'f':
-            parse_idx++;
-            rm_old = true;
-            break;
-        case 't':
-            parse_idx++;
-            tar = true;
-            break;
-        default:
-            usage();
-            exit(-1);
-        }
-    }
     lfs = new_localfs_adaptor();
-    auto fn_src = argv[parse_idx++];
-    auto fn_dst = argv[parse_idx++];
     if (rm_old) {
-        lfs->unlink(fn_dst);
+        lfs->unlink(fn_dst.c_str());
     }
     IFileSystem *fs = lfs;
     if (tar) {
-        LOG_INFO("create tar header.");
         fs = new_tar_fs_adaptor(lfs);
     }
 
     int ret = 0;
     CompressArgs args(opt);
-    if (op == 0) {
-        printf("compress file %s as %s\n", fn_src, fn_dst);
-        IFile *infile = lfs->open(fn_src, O_RDONLY);
+    if (!extract) {
+        printf("compress file %s as %s\n", fn_src.c_str(), fn_dst.c_str());
+        IFile *infile = lfs->open(fn_src.c_str(), O_RDONLY);
         if (infile == nullptr) {
-            LOG_ERROR_RETURN(0, -1, "open source file error.");
+            fprintf(stderr, "failed to open file %s\n", fn_src.c_str());
+            exit(-1);
         }
         DEFER(delete infile);
 
-        IFile *outfile = fs->open(fn_dst, O_RDWR | O_CREAT | O_EXCL, 0644);
+        IFile *outfile = fs->open(fn_dst.c_str(), O_RDWR | O_CREAT | O_EXCL, 0644);
         if (outfile == nullptr) {
-            LOG_ERROR_RETURN(0, -1, "open dst file error.");
+            fprintf(stderr, "failed to open file %s\n", fn_dst.c_str());
+            exit(-1);
         }
         DEFER(delete outfile);
 
         ret = zfile_compress(infile, outfile, &args);
         if (ret != 0) {
-            LOG_ERROR_RETURN(0, -1, "compress fail. (err: `, msg: `)", errno, strerror(errno));
+            fprintf(stderr, "compress failed, errno:%d\n", errno);
+            exit(-1);
         }
-        LOG_INFO("compress file done.");
+        printf("compress file done.\n");
         return ret;
     } else {
-        printf("decompress file %s as %s\n", fn_src, fn_dst);
+        printf("decompress file %s as %s\n", fn_src.c_str(), fn_dst.c_str());
 
-        IFile *infile = fs->open(fn_src, O_RDONLY);
+        IFile *infile = fs->open(fn_src.c_str(), O_RDONLY);
         if (infile == nullptr) {
-            LOG_ERROR_RETURN(0, -1, "open source file error.");
+             fprintf(stderr, "failed to open file %s\n", fn_dst.c_str());
+            exit(-1);
         }
         DEFER(delete infile);
 
-        IFile *outfile = lfs->open(fn_dst, O_WRONLY | O_CREAT | O_EXCL, S_IRWXU);
+        IFile *outfile = lfs->open(fn_dst.c_str(), O_WRONLY | O_CREAT | O_EXCL, S_IRWXU);
         if (outfile == nullptr) {
-            LOG_ERROR_RETURN(0, -1, "open dst file error.");
+            fprintf(stderr, "failed to open file %s\n", fn_dst.c_str());
+            exit(-1);
         }
         DEFER(delete outfile);
 
         ret = zfile_decompress(infile, outfile);
         if (ret != 0) {
-            LOG_ERROR_RETURN(0, -1, "decompress fail. (err: `, msg: `)", errno, strerror(errno));
+             fprintf(stderr, "decompress failed, errno:%d\n", errno);
+             exit(-1);
         }
-        LOG_INFO("decompress file done.");
+        printf("decompress file done.\n");
         return ret;
     }
 }
