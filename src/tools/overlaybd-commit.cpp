@@ -16,7 +16,9 @@
 
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
+#include <photon/photon.h>
 #include "../overlaybd/lsmt/file.h"
+#include "../overlaybd/zfile/zfile.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -27,27 +29,15 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include "CLI11.hpp"
 
 using namespace std;
 using namespace LSMT;
 using namespace photon::fs;
 
-static void usage() {
-    static const char msg[] =
-        "overlaybd-commit [-v|-m msg | -p parent_uuid]  <data file> <index file> [output file]\n"
-        "options:\n"
-        "   -v print log detail.\n"
-        "   -m <msg>    add some custom message if needed.\n"
-        "   -p <parent-uuid> parent uuid.\n"
-        "example:\n"
-        "   ./overlaybd-commit -m commitMsg ./file.data ./file.index ./file.lsmt\n";
 
-    puts(msg);
-    exit(0);
-}
-
-IFile *open(IFileSystem *fs, const char *fn, int flags, mode_t mode = 0) {
-    auto file = fs->open(fn, flags, mode);
+IFile *open_file(const char *fn, int flags, mode_t mode = 0) {
+    auto file = open_localfile_adaptor(fn, flags, mode, 0);
     if (!file) {
         fprintf(stderr, "failed to open file '%s', %d: %s\n", fn, errno, strerror(errno));
         exit(-1);
@@ -55,68 +45,44 @@ IFile *open(IFileSystem *fs, const char *fn, int flags, mode_t mode = 0) {
     return file;
 }
 
-IFileRW *fin;
-IFile *fout;
-string commit_msg;
-string parent_uuid;
-
-static void parse_args(int argc, char **argv) {
-    int shift = 1;
-    int ch;
-    bool log = false;
-    while ((ch = getopt(argc, argv, "vm:p:")) != -1) {
-        switch (ch) {
-        case 'v':
-            log = true;
-            shift++;
-            break;
-        case 'm':
-            commit_msg = optarg;
-            shift += 2;
-            break;
-        case 'p':
-            if (!UUID::String::is_valid(optarg)) {
-                fprintf(stderr, "invalid UUID format.\n");
-                exit(-1);
-            }
-            parent_uuid = string(optarg);
-            shift += 2;
-            break;
-        default:
-            usage();
-            exit(-1);
-        }
-    }
-    if (argc - shift < 1 || argc - shift > 3)
-        return usage();
-
-    if (!log)
-        log_output = log_output_null;
-    unique_ptr<IFileSystem> lfs(new_localfs_adaptor());
-    auto fdata = open(lfs.get(), argv[shift], O_RDONLY);
-    shift++;
-    auto findex = open(lfs.get(), argv[shift], O_RDONLY);
-    shift++;
-    fin = open_file_rw(fdata, findex, true);
-    if (!fin) {
-        delete fdata;
-        delete findex;
-        fprintf(stderr, "failed to create lsmt file object, possibly wrong file format!\n");
-        exit(-1);
-    }
-
-    fout = (argc - shift == 0) ? new_localfile_adaptor(1) : // stdout
-               open(lfs.get(), argv[argc - 1], O_RDWR | O_EXCL | O_CREAT,
-                    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-}
-
 int main(int argc, char **argv) {
-    parse_args(argc, argv);
-    CommitArgs args(fout);
+    string commit_msg;
+    string parent_uuid;
+    std::string data_file_path, index_file_path, commit_file_path;
+    bool compress_zfile = false;
+
+    CLI::App app{"this is overlaybd-commit"};
+    app.add_option("-m", commit_msg, "add some custom message if needed");
+    app.add_option("-p", parent_uuid, "parent uuid");
+    app.add_flag("-z", compress_zfile, "compress to zfile");
+    app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
+    app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
+    app.add_option("commit_file", commit_file_path, "commit file path")->type_name("FILEPATH")->required();
+    CLI11_PARSE(app, argc, argv);
+
+    set_log_output_level(1);
+    photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+
+
+    IFile* fdata = open_file(data_file_path.c_str(), O_RDONLY, 0);
+    IFile* findex = open_file(index_file_path.c_str(), O_RDONLY, 0);
+    IFileRW* fin = open_file_rw(fdata, findex, true);
+    IFile* fout = open_file(commit_file_path.c_str(),  O_RDWR | O_EXCL | O_CREAT,
+                    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    auto out = fout;
+    IFile *zfile_builder = nullptr;
+    ZFile::CompressOptions opt;
+    opt.verify = 1;
+    ZFile::CompressArgs zfile_args(opt);
+    if (compress_zfile) {
+        zfile_builder = ZFile::new_zfile_builder(out, &zfile_args, false);
+        out = zfile_builder;
+    }
+
+    CommitArgs args(out);
     if (parent_uuid.empty() == false) {
         memcpy(args.parent_uuid.data, parent_uuid.c_str(), parent_uuid.length());
     }
-
     if (commit_msg != "") {
         args.user_tag = const_cast<char *>(commit_msg.c_str());
     }
@@ -124,6 +90,8 @@ int main(int argc, char **argv) {
     if (ret < 0) {
         fprintf(stderr, "failed to perform commit(), %d: %s\n", errno, strerror(errno));
     }
+    out->close();
+    delete zfile_builder;
     delete fout;
     delete fin;
     printf("lsmt_commit has committed files SUCCESSFULLY\n");

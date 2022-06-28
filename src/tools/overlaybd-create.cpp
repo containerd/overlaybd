@@ -27,25 +27,14 @@
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
 #include <photon/common/uuid.h>
+#include <photon/photon.h>
+#include "CLI11.hpp"
 
 using namespace std;
 using namespace photon::fs;
 
-static void usage() {
-    static const char msg[] =
-        "overlaybd-create [options] <data file> <index file> <virtual size in GB>\n"
-        "options:\n"
-        "   -u <parent_UUID>\n"
-        "   -s          create sparse RW layer, <index file> will be ignore."
-        "example:\n"
-        "   ./overlaybd-create ./file.data ./file.index 100\n";
-
-    puts(msg);
-    exit(0);
-}
-
-IFile *open(IFileSystem *fs, const char *fn, int flags, mode_t mode = 0) {
-    auto file = fs->open(fn, flags, mode);
+IFile *open_file(const char *fn, int flags, mode_t mode = 0) {
+    auto file = open_localfile_adaptor(fn, flags, mode, 0);
     if (!file) {
         fprintf(stderr, "failed to open file '%s', %d: %s\n", fn, errno, strerror(errno));
         exit(-1);
@@ -53,55 +42,32 @@ IFile *open(IFileSystem *fs, const char *fn, int flags, mode_t mode = 0) {
     return file;
 }
 
-uint64_t vsize;
-int level = 255;
-unique_ptr<IFile> fdata, findex;
-string parent_uuid;
-bool sparse = false;
 
-static void parse_args(int argc, char **argv) {
-    int shift = 1;
-    int ch;
-    while ((ch = getopt(argc, argv, "u:s")) != -1) {
-        switch (ch) {
-        case 'u':
-            parent_uuid = optarg;
-            shift += 2;
-            break;
-        case 's':
-            sparse = true;
-            shift += 1;
-            break;
-        default:
-            usage();
-            exit(-1);
-        }
-    }
-    if (argc - shift < 2)
-        return usage();
-
-    const auto flag = O_RDWR | O_EXCL | O_CREAT;
-    const auto mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
-    unique_ptr<IFileSystem> lfs(new_localfs_adaptor());
-    auto fdata = open(lfs.get(), argv[shift++], flag, mode);
-    auto findex = open(lfs.get(), argv[shift++], flag, mode);
-    ::findex.reset(findex);
-    ::fdata.reset(fdata);
-
-    int ret = sscanf(argv[shift++], "%lu", &vsize);
-    if (ret != 1) {
-        fprintf(stderr, "failed to parse virtual size: '%s'\n", argv[shift - 1]);
-        exit(-1);
-    }
-    vsize *= 1024 * 1024 * 1024;
-    if (shift == argc)
-        return;
-}
 
 int main(int argc, char **argv) {
-    log_output = log_output_null;
-    parse_args(argc, argv);
-    LSMT::LayerInfo args(fdata.get(), findex.get());
+    uint64_t vsize;
+    string parent_uuid;
+    bool sparse = false;
+    std::string data_file_path, index_file_path;
+
+    CLI::App app{"this is overlaybd-create"};
+    app.add_option("-u", parent_uuid, "parent uuid");
+    app.add_flag("-s", sparse, "create sparse RW layer");
+    app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->required();
+    app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->required();
+    app.add_option("vsize", vsize, "virtual size(GB)")->type_name("INT")->check(CLI::PositiveNumber)->required();
+    CLI11_PARSE(app, argc, argv);
+
+
+    photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+
+    vsize *= 1024 * 1024 * 1024;
+    const auto flag = O_RDWR | O_EXCL | O_CREAT;
+    const auto mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+    IFile* fdata = open_file(data_file_path.c_str(), flag, mode);
+    IFile* findex = open_file(index_file_path.c_str(), flag, mode);
+
+    LSMT::LayerInfo args(fdata, findex);
     args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
     args.virtual_size = vsize;
     args.sparse_rw = sparse;
@@ -112,6 +78,8 @@ int main(int argc, char **argv) {
         exit(-1);
     }
     delete file;
+    delete fdata;
+    delete findex;
     printf("lsmt_create has created files SUCCESSFULLY\n");
     return 0;
 }

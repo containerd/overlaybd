@@ -1,4 +1,3 @@
-
 add_executable(overlaybd-commit overlaybd-commit.cpp)
 target_include_directories(overlaybd-commit PUBLIC ${PHOTON_INCLUDE_DIR})
 target_link_libraries(overlaybd-commit photon_static overlaybd_lib)
@@ -13,7 +12,7 @@ target_link_libraries(overlaybd-zfile photon_static overlaybd_lib)
 
 install(TARGETS
     overlaybd-commit
-    #overlaybd-create
-    #overlaybd-zfile
+    overlaybd-create
+    overlaybd-zfile
     DESTINATION /opt/overlaybd/bin
 )
