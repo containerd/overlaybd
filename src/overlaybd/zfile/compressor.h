@@ -89,6 +89,10 @@ public:
     */
     virtual int decompress(const unsigned char *src, size_t src_len, unsigned char *dst,
                            size_t dst_len) = 0;
+
+    virtual int decompress_batch(const unsigned char *src, size_t *src_chunk_len, unsigned char *dst,
+                        size_t dst_buffer_capacity, size_t *dst_chunk_len /* save result chunk length */, 
+                        size_t nchunk) = 0;
 };
 
 extern "C" ICompressor *create_compressor(const CompressArgs *args);
