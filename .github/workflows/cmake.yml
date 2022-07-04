@@ -21,6 +21,7 @@ jobs:
     - name: Install Dependencies
       shell: bash
       run: |
+        sudo apt update -y
         sudo apt install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev
         sudo apt install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm
         wget https://github.com/google/googletest/archive/refs/tags/release-1.10.0.tar.gz
