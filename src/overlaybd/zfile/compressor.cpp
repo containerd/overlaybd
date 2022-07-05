@@ -43,6 +43,7 @@ public:
 #endif
     vector<unsigned char *> raw_data;
     vector<unsigned char *> compressed_data;
+    vector<unsigned char *> decompressed_data;
 
     const int DEFAULT_N_BATCH = 256;
 
@@ -97,6 +98,7 @@ public:
         LOG_INFO("create batch buffer, size: `", nbatch());
         raw_data.resize(nbatch());
         compressed_data.resize(nbatch());
+        decompressed_data.resize(nbatch());
         return 0;
     }
 
@@ -157,36 +159,51 @@ public:
     int decompress(const unsigned char *src, size_t src_len, unsigned char *dst,
                    size_t dst_len) override {
 
-        /*
-        The code prepared for QAT.
+        size_t dst_chunk_len;
+        if (decompress_batch(src, &src_len, dst, dst_len, &dst_chunk_len, 1) != 0) {
+            LOG_ERRNO_RETURN(0, -1, "compress data failed.");
+        }
+        return dst_chunk_len; // return decompressed size for single block.
+    }
 
-            if (dst_len < src_blk_size) {
-                LOG_ERROR_RETURN(0, -1, "dst_len (`) should be greater than compressed block size `",
-                                dst_len, src_blk_size);
-            }
-            auto ret = LZ4_decompress_qat(pQat, (const char *)src, (char *)dst, src_len, dst_len);
+    int decompress_batch(const unsigned char *src, size_t *src_chunk_len, unsigned char *dst,
+                         size_t dst_buffer_capacity, size_t *dst_chunk_len, size_t n) override {
+
+        if (dst_buffer_capacity / n < src_blk_size) {
+            LOG_ERROR_RETURN(ENOBUFS, -1, "dst_len (`) should be greater than compressed block size `",
+                             dst_buffer_capacity / n, src_blk_size);
+        }
+        off_t src_offset = 0, dst_offset = 0;
+        int ret = 0;
+        for (ssize_t i = 0; i < n; i++) {
+            raw_data[i] = ((unsigned char *)src + src_offset);
+            decompressed_data[i] = ((unsigned char *)dst + dst_offset);
+            src_offset += src_chunk_len[i];
+            dst_offset += dst_buffer_capacity / n;
+        }
+#ifdef ENABLE_QAT
+        if (qat_enable) {
+            ret = LZ4_decompress_qat(pQat, &raw_data[0], src_chunk_len, &decompressed_data[0],
+                                   dst_chunk_len, n);
             if (ret < 0) {
-                LOG_ERROR_RETURN(EFAULT, -1, "LZ4 decompress data failed. (retcode: `)", ret);
+                LOG_ERROR_RETURN(EFAULT, -1, "LZ4 decompress data failed. (retcode: `).", ret);
+            }
+            return ret;
+        }
+#endif
+        for (ssize_t i = 0; i < n; i++) {
+            ret = LZ4_decompress_safe((const char *)raw_data[i], (char *)decompressed_data[i],
+                                       src_chunk_len[i], dst_buffer_capacity / n);
+
+            dst_chunk_len[i] = ret;
+            if (ret < 0) {
+                LOG_ERROR_RETURN(EFAULT, -1, "LZ4 decompress data failed. (retcode: `).", ret);
             }
             if (ret == 0) {
                 LOG_ERROR_RETURN(EFAULT, -1, "LZ4 decompress returns 0. THIS SHOULD BE NEVER HAPPEN!");
             }
-            LOG_DEBUG("decompressed ` bytes back into ` bytes.", src_len, ret);
-            return ret;
-        */
-        if (dst_len < src_blk_size) {
-            LOG_ERROR_RETURN(0, -1, "dst_len (`) should be greater than compressed block size `",
-                             dst_len, src_blk_size);
         }
-        auto ret = LZ4_decompress_safe((const char *)src, (char *)dst, src_len, dst_len);
-        if (ret < 0) {
-            LOG_ERROR_RETURN(EFAULT, -1, "LZ4 decompress data failed. (retcode: `)", ret);
-        }
-        if (ret == 0) {
-            LOG_ERROR_RETURN(EFAULT, -1, "LZ4 decompress returns 0. THIS SHOULD BE NEVER HAPPEN!");
-        }
-        LOG_DEBUG("decompressed ` bytes back into ` bytes.", src_len, ret);
-        return ret;
+        return 0;
     }
 };
 
