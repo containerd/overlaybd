@@ -94,8 +94,10 @@ LZ4LIB_API int LZ4_compress_qat(LZ4_qat_param *pQat, const unsigned char *const 
    (negative value). If the source stream is detected malformed, the function will stop decoding and
    return a negative result. This function is protected against malicious data packets.
 */
-LZ4LIB_API int LZ4_decompress_qat(LZ4_qat_param *pQat, const char *src, char *dst,
-                                  int compressedSize, int dstCapacity);
+LZ4LIB_API int LZ4_decompress_qat(LZ4_qat_param *pQat, const unsigned char *const raw_data[],
+                                size_t src_chunk_len[], unsigned char *decompressed_data[],
+                                size_t dst_chunk_len[], size_t n);
+
 
 int qat_init(LZ4_qat_param *pQat);
 
