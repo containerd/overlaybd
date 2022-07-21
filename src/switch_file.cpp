@@ -21,6 +21,8 @@
 #include <photon/fs/localfs.h>
 #include <photon/thread/thread.h>
 #include "overlaybd/tar_file.h"
+#include "photon/common/alog.h"
+#include "photon/fs/filesystem.h"
 #include "switch_file.h"
 #include "overlaybd/zfile/zfile.h"
 
@@ -32,6 +34,25 @@ using namespace photon::fs;
     ++io_count;                                                                                    \
     DEFER({ --io_count; });                                                                        \
     return m_file->func;
+
+// check if the `file` is zfile format
+static IFile *try_open_zfile(IFile *file, bool verify, const char *file_path) {
+    auto is_zfile = ZFile::is_zfile(file);
+    if (is_zfile == -1) {
+        delete file;
+        LOG_ERRNO_RETURN(0, nullptr, "check file type failed.");
+    }
+    // open zfile
+    if (is_zfile == 1) {
+        auto zf = ZFile::zfile_open_ro(file, verify, true);
+        if (!zf) {
+            LOG_ERROR_RETURN(0, nullptr, "zfile_open_ro failed, path: `: error: `(`)", file_path,
+                             errno, strerror(errno));
+        }
+        return zf;
+    }
+    return file;
+}
 
 class SwitchFile : public ISwitchFile {
 public:
@@ -59,7 +80,7 @@ public:
         }
     }
 
-    void set_switch_file(const char *filepath) {
+    void set_switch_file(const char *filepath) override {
         m_filepath = filepath;
         state = 1;
     }
@@ -74,16 +95,7 @@ public:
         }
 
         // if tar file, open tar file
-        file = new_tar_file_adaptor(file);
-        // open zfile
-        auto zf = ZFile::zfile_open_ro(file, false, true);
-        if (!zf) {
-            delete file;
-            LOG_ERROR_RETURN(0, -1, "zfile_open_ro failed, path: `: error: `(`)", m_filepath, errno,
-                             strerror(errno));
-        }
-        file = zf;
-
+        file = try_open_zfile(new_tar_file_adaptor(file), false, m_filepath.c_str());
         LOG_INFO("switch to localfile '`' success.", m_filepath);
         m_old = m_file;
         m_file = file;
@@ -179,14 +191,7 @@ public:
 
 ISwitchFile *new_switch_file(IFile *source, bool local, const char *file_path) {
     // if tar file, open tar file
-    IFile *file = new_tar_file_adaptor(source);
-    // open zfile
-    bool verify = !local;
-    auto zf = ZFile::zfile_open_ro(file, verify, true);
-    if (!zf) {
-        LOG_ERROR_RETURN(0, nullptr, "zfile_open_ro failed, path: `: error: `(`)", file_path, errno,
-                         strerror(errno));
-    }
-    file = zf;
+    auto file = try_open_zfile(new_tar_file_adaptor(source), !local, file_path);
+
     return new SwitchFile(file, local, file_path);
 };
