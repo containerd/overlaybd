@@ -60,6 +60,13 @@ struct ImageConfig : public ConfigUtils::Config {
     APPCFG_PARA(recordTracePath, std::string, "");
 };
 
+struct P2PConfig : public ConfigUtils::Config {
+    APPCFG_CLASS
+
+    APPCFG_PARA(enable, bool, false);
+    APPCFG_PARA(address, std::string, "http://localhost:9731/accelerator");
+};
+
 struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_CLASS
 
@@ -72,8 +79,12 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(logPath, std::string, "/var/log/overlaybd.log");
     APPCFG_PARA(download, DownloadConfig);
     APPCFG_PARA(enableAudit, bool, true);
+    APPCFG_PARA(p2pConfig, P2PConfig);
     APPCFG_PARA(auditPath, std::string, "/var/log/overlaybd-audit.log");
 };
+
+
+
 
 struct AuthConfig : public ConfigUtils::Config {
     APPCFG_CLASS

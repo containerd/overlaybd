@@ -10,6 +10,10 @@
         "delayExtra": 30,
         "maxMBps": 100
     },
+    "p2pConfig": {
+        "enable": false,
+        "address": "http://localhost:9731/accelerator"
+    },
     "enableAudit": true,
     "auditPath": "/var/log/overlaybd-audit.log"
 }
