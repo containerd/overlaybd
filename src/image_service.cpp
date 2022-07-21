@@ -225,6 +225,7 @@ int ImageService::init() {
         }
 
         LOG_INFO("create registryfs with cafile:`", cafile);
+        // TODO. how to use p2p proxy in registryfs ?
         auto registry_fs = new_registryfs_with_credential_callback(
             {this, &ImageService::reload_auth}, cafile, 30UL * 1000000);
         if (registry_fs == nullptr) {
@@ -237,7 +238,10 @@ int ImageService::init() {
             LOG_ERROR_RETURN(0, -1, "create tar_fs failed.");
         }
         global_fs.srcfs = tar_fs;
-
+        if (global_conf.p2pConfig().enable() == true) {
+            global_fs.remote_fs = registry_fs;
+            return 0;
+        }
         if (global_conf.cacheType() == "file") {
             auto registry_cache_fs = new_localfs_adaptor(
                 global_conf.registryCacheDir().c_str());
