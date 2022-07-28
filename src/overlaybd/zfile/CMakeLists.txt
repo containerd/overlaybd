@@ -2,12 +2,23 @@ file(GLOB SOURCE_ZFILE "*.cpp")
 file(GLOB SOURCE_LZ4 "lz4/*.c")
 file(GLOB SOURCE_CRC32 "crc32/crc32c.cpp")
 
+# Get CPU arch
+execute_process(COMMAND uname -m OUTPUT_VARIABLE ARCH OUTPUT_STRIP_TRAILING_WHITESPACE)
+if (NOT (${ARCH} STREQUAL x86_64) AND NOT (${ARCH} STREQUAL aarch64))
+    message(FATAL_ERROR "Unknown CPU architecture ${ARCH}")
+endif ()
+
 set (CMAKE_CXX_STANDARD 17)
 add_library(crc32_lib STATIC ${SOURCE_CRC32})
 target_include_directories(crc32_lib PUBLIC
     ${PHOTON_INCLUDE_DIR}
 )
-target_compile_options(crc32_lib PUBLIC -msse4.2 -mcrc32)
+
+if (${ARCH} STREQUAL x86_64)
+    target_compile_options(crc32_lib PUBLIC -msse4.2 -mcrc32)
+else()
+    target_compile_options(crc32_lib PUBLIC -march=native)
+endif()
 
 if(ENABLE_DSA OR ENABLE_ISAL)
     add_subdirectory(thirdparty)
