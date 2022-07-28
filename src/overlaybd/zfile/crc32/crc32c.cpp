@@ -32,6 +32,12 @@ extern "C" {
 #include <crc.h>
 #endif
 
+#if (defined(__aarch64__) && defined(__ARM_FEATURE_CRC32))
+#define __builtin_ia32_crc32di __builtin_aarch64_crc32cx
+#define __builtin_ia32_crc32si __builtin_aarch64_crc32cw
+#define __builtin_ia32_crc32hi __builtin_aarch64_crc32ch
+#define __builtin_ia32_crc32qi __builtin_aarch64_crc32cb
+#endif
 
 namespace crc32 {
 
@@ -665,6 +671,7 @@ static uint32_t crc32c_isal(const uint8_t *data, size_t nbytes, uint32_t crc) {
 #endif
 
 static void crc_init() {
+#if ((defined(__x86_64__) || defined(__i386__)) && defined(__SSE4_2__))
     __builtin_cpu_init();
 #ifdef ENABLE_DSA
     if (check_dsa()) {
@@ -685,6 +692,11 @@ static void crc_init() {
     } else {
         crc32c_func = crc32c_sw;
     }
+#elif (defined(__aarch64__) && defined(__ARM_FEATURE_CRC32))
+    crc32c_func = crc32c_hw;
+#else
+    crc32c_func = crc32c_sw;
+#endif
 }
 
 static void crc_deinit() {
