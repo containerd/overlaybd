@@ -46,7 +46,36 @@ jobs:
       shell: bash
       run: make -j64
 
-    - name: Test
+    - name: E2E Test
+      working-directory: ${{github.workspace}}/build
+      shell: bash
+      run: |
+        sudo make install
+        sudo systemctl enable /opt/overlaybd/overlaybd-tcmu.service
+        sudo systemctl start overlaybd-tcmu
+        sudo systemctl status overlaybd-tcmu
+        sudo mkdir -p /var/lib/overlaybd/test/
+        sudo mkdir -p /sys/kernel/config/target/core/user_1/vol1
+        echo -n dev_config=overlaybd/${{github.workspace}}/src/example_config/redis.obd.config.json | sudo tee /sys/kernel/config/target/core/user_1/vol1/control
+        echo -n 1 | sudo tee /sys/kernel/config/target/core/user_1/vol1/enable
+        sudo mkdir -p /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0
+        echo -n "naa.123456789abcdef" | sudo tee /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/nexus
+        sudo ln -s /sys/kernel/config/target/core/user_1/vol1 /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0/vol1
+        lsblk
+        sudo apt install -y lsscsi
+        dev=`lsscsi | grep TCMU | awk '{print $7}'`
+        echo $dev
+        sudo mkdir mp
+        sudo mount -o ro $dev mp
+        ls mp
+
+    - name: Unit Test
       working-directory: ${{github.workspace}}/build
       shell: bash
       run: ctest -j8 --output-on-failure -C $BUILD_TYPE
+
+
+
+
+
+
