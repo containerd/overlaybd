@@ -1,0 +1,42 @@
+{
+    "repoBlobUrl": "https://registry-1.docker.io/v2/overlaybd/redis/blobs",
+    "lowers": [
+        {
+            "digest": "sha256:a8b5fca80efae55088290f3da8110d7742de55c2a378d5ab53226a483f390e21",
+            "size": 4739584,
+            "dir": "/var/lib/overlaybd/test/1"
+        },
+        {
+            "digest": "sha256:87763befd4f3289905d709bd03c969db43e512502be7e1132b625bdef487d01f",
+            "size": 43458048,
+            "dir": "/var/lib/overlaybd/test/2"
+        },
+        {
+            "digest": "sha256:5bf55fa8550c47a1054c7a02138b9f79b5f574f040b1e444ad717d320d3afc67",
+            "size": 25600,
+            "dir": "/var/lib/overlaybd/test/3"
+        },
+        {
+            "digest": "sha256:62a999219eb529a2403f2b5849869d3253bf1014721293333f7f66be54308b94",
+            "size": 2610688,
+            "dir": "/var/lib/overlaybd/test/4"
+        },
+        {
+            "digest": "sha256:f2d33f598db59a8a4fcb490764cdfca3157ec6a742870378154cbef93acefce9",
+            "size": 17303040,
+            "dir": "/var/lib/overlaybd/test/5"
+        },
+        {
+            "digest": "sha256:8d77203e222f30ab4b8ba2e232fd9d71880dd80f6f24fa18e45d1d578e40eb57",
+            "size": 8192,
+            "dir": "/var/lib/overlaybd/test/6"
+        },
+        {
+            "digest": "sha256:8bdb50d0eb5ec766ba235c06ac8c8a6f44ab1beeed756efa532e73b79786e36a",
+            "size": 11776,
+            "dir": "/var/lib/overlaybd/test/7"
+        }
+    ],
+    "upper": {},
+    "resultFile": "/var/lib/overlaybd/init-debug.log"
+}
