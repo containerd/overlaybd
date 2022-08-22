@@ -121,13 +121,17 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
         "delayExtra": 30,
         "maxMBps": 100
     },
+    "p2pConfig": {
+        "enable": false,
+        "address": "http://localhost:9731/accelerator"
+    },
     "enableAudit": true,
     "auditPath": "/var/log/overlaybd-audit.log"
 }
 ```
 
 | Field               | Description                                                                                           |
-| ---                 | ---                                                                                                   |
+|---------------------|-------------------------------------------------------------------------------------------------------|
 | logLevel            | DEBUG 0, INFO  1, WARN  2, ERROR 3                                                                    |
 | ioEngine            | IO engine used to open local files: psync 0, libaio 1, posix aio 2.                                   |
 | logPath             | The path for log file, `/var/log/overlaybd.log` is the default value.                                 |
@@ -138,6 +142,8 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | download.enable     | Whether background downloading is enabled or not.                                                     |
 | download.delay      | The seconds waiting to start downloading task after the overlaybd device launched.                    |
 | download.delayExtra | A random extra delay is attached to delay, avoiding too many tasks started at the same time.          |
+| p2pConfig.enable    | Whether p2p proxy is enabled or not.                                                                  |
+| p2pConfig.address   | The proxy for p2p download.                                                                           |
 | download.maxMBps    | The speed limit in MB/s for a downloading task.                                                       |
 | enableAudit         | Enable audit or not.                                                                                  |
 | auditPath           | The path for audit file, `/var/log/overlaybd-audit.log` is the default value.                         |
