@@ -59,7 +59,7 @@ static std::unordered_map<estring_view, estring_view> str_to_kvmap(const estring
     return ret;
 }
 
-class RegistryFS : public IFileSystem {
+class RegistryFSImpl : public RegistryFS {
 public:
     UNIMPLEMENTED_POINTER(IFile *creat(const char *, mode_t) override);
     UNIMPLEMENTED(int mkdir(const char *, mode_t) override);
@@ -86,13 +86,13 @@ public:
         return open(pathname, flags); // ignore mode
     }
 
-    RegistryFS(PasswordCB callback, const char *caFile, uint64_t timeout)
+    RegistryFSImpl(PasswordCB callback, const char *caFile, uint64_t timeout)
         : m_callback(callback), m_caFile(caFile), m_timeout(timeout),
           m_meta_cache(kMinimalMetaLife), m_scope_token(kMinimalTokenLife),
           m_url_actual(kMinimalAUrlLife) {
     }
 
-    ~RegistryFS() {
+    ~RegistryFSImpl() {
     }
 
     long GET(const char *url, photon::net::HeaderMap *headers, off_t offset, size_t count,
@@ -109,6 +109,13 @@ public:
         });
         if (actual_url == nullptr)
             return ret;
+
+        //use p2p proxy
+        if(m_accelerate.size() > 0) {
+            estring accelerate_url = m_accelerate + "/" + *actual_url;
+            actual_url = &accelerate_url;
+            LOG_DEBUG("p2p_url: `", *actual_url);
+        }
 
         {
             auto curl = get_cURL();
@@ -219,10 +226,16 @@ public:
         }
     }
 
+    virtual int setAccelerateAddress(const char* addr = "") override {
+        m_accelerate = estring(addr);
+        return 0;
+    }
+
 protected:
     using CURLPool = IdentityPool<photon::net::cURL, 4>;
     CURLPool m_curl_pool;
     PasswordCB m_callback;
+    estring m_accelerate;
     estring m_caFile;
     uint64_t m_timeout;
     ObjectCache<estring, ImageLayerMeta *> m_meta_cache;
@@ -322,11 +335,11 @@ class RegistryFileImpl : public RegistryFile {
 public:
     estring m_filename;
     estring m_url;
-    RegistryFS *m_fs;
+    RegistryFSImpl *m_fs;
     uint64_t m_timeout;
     size_t m_filesize;
 
-    RegistryFileImpl(const char *filename, const char *url, RegistryFS *fs, uint64_t timeout)
+    RegistryFileImpl(const char *filename, const char *url, RegistryFSImpl *fs, uint64_t timeout)
         : m_filename(filename), m_url(url), m_fs(fs), m_timeout(timeout) {
         m_filesize = 0;
     }
@@ -462,13 +475,13 @@ public:
     }
 };
 
-inline IFile *RegistryFS::open(const char *pathname, int) {
+inline IFile *RegistryFSImpl::open(const char *pathname, int) {
     std::string url = pathname;
     std::string path = pathname;
     if (*pathname != '/')
         path = std::string("/") + pathname;
 
-    auto file = new RegistryFileImpl(path.c_str(), url.c_str(), (RegistryFS *)this, m_timeout);
+    auto file = new RegistryFileImpl(path.c_str(), url.c_str(), (RegistryFSImpl *)this, m_timeout);
     struct stat buf;
     int ret = file->fstat(&buf);
     if (ret < 0) {
@@ -483,6 +496,6 @@ IFileSystem *new_registryfs_with_credential_callback(PasswordCB callback, const 
                                                      uint64_t timeout) {
     if (!callback)
         LOG_ERROR_RETURN(EINVAL, nullptr, "password callback not set");
-    return new RegistryFS(callback, caFile ? caFile : "", timeout);
+    return new RegistryFSImpl(callback, caFile ? caFile : "", timeout);
 }
 

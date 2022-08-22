@@ -32,6 +32,11 @@ struct ImageLayerMeta {
     char lastModified[128];
 };
 
+class RegistryFS : public IFileSystem {
+public:
+    virtual int setAccelerateAddress(const char* addr = "") = 0;
+};
+
 // IFile open by registryfs are RegistryFile, it can cast to RegistryFile* so
 // that able to call getMeta & getUrl methods
 // Since RegistryFile depends on registryfs to get authorized, it can only open
