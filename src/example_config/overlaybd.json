@@ -12,7 +12,7 @@
     },
     "p2pConfig": {
         "enable": false,
-        "address": "http://localhost:9731/accelerator"
+        "address": "localhost:9731/accelerator"
     },
     "enableAudit": true,
     "auditPath": "/var/log/overlaybd-audit.log"
