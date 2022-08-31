@@ -111,8 +111,9 @@ public:
             return ret;
 
         //use p2p proxy
+        estring accelerate_url;
         if(m_accelerate.size() > 0) {
-            estring accelerate_url = m_accelerate + "/" + *actual_url;
+            accelerate_url = m_accelerate + "/" + *actual_url;
             actual_url = &accelerate_url;
             LOG_DEBUG("p2p_url: `", *actual_url);
         }
