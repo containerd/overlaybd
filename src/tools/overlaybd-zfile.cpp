@@ -36,22 +36,6 @@ using namespace std;
 using namespace photon::fs;
 using namespace ZFile;
 
-int usage() {
-    static const char msg[] = "overlaybd-zfile is a tool to create/extract zfile. \n"
-                              "Usage: overlaybd-zfile [options] <src_file> <dst_file>\n"
-                              "   -d show debug log.\n"
-                              "   -f force compress. unlink exist <dst_file>.\n"
-                              "   -x extract zfile.\n"
-                              "   -t wrapper with tar.\n"
-                              "example:\n"
-                              "- create\n"
-                              "   ./overlaybd-zfile ./layer0.lsmt ./layer0.lsmtz\n"
-                              "- extract\n"
-                              "   ./overlaybd-zfile -x ./layer0.lsmtz ./layer0.lsmt\n";
-    puts(msg);
-    return 0;
-}
-
 IFileSystem *lfs = nullptr;
 
 int main(int argc, char **argv) {
@@ -60,12 +44,12 @@ int main(int argc, char **argv) {
     bool extract = false;
     std::string fn_src, fn_dst;
 
-    CLI::App app{"this is overlaybd-zfile"};
+    CLI::App app{"this is a zfile tool to create/extract zfile"};
     app.add_flag("-t", tar, "wrapper with tar");
-    app.add_flag("-x", extract, "create sparse RW layer");
+    app.add_flag("-x", extract, "extract zfile");
     app.add_flag("-f", rm_old, "force compress. unlink exist");
-    app.add_option("file", fn_src, "file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
-    app.add_option("zfile", fn_dst, "zfile path")->type_name("FILEPATH")->required();
+    app.add_option("source_file", fn_src, "source file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
+    app.add_option("target_file", fn_dst, "target file path")->type_name("FILEPATH")->required();
     CLI11_PARSE(app, argc, argv);
 
     set_log_output_level(1);
