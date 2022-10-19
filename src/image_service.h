@@ -38,9 +38,10 @@ struct ImageFile;
 
 class ImageService {
 public:
+    ImageService(const char *config_path = nullptr);
     ~ImageService();
     int init();
-    ImageFile *create_image_file(const char *config_path);
+    ImageFile *create_image_file(const char *image_config_path);
     ImageConfigNS::GlobalConfig global_conf;
     struct GlobalFs global_fs;
 
@@ -48,9 +49,10 @@ private:
     int read_global_config_and_set();
     std::pair<std::string, std::string> reload_auth(const char *remote_path);
     void set_result_file(std::string &filename, std::string &data);
+    std::string m_config_path;
 };
 
-ImageService *create_image_service();
+ImageService *create_image_service(const char *config_path = nullptr);
 
 int load_cred_from_file(const std::string path, const std::string &remote_path,
                         std::string &username, std::string &password);

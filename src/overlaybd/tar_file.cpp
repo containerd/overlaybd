@@ -29,6 +29,7 @@
 #include <sys/param.h>
 #include <sys/types.h>
 #include <stdlib.h>
+#include "untar/libtar.h"
 
 using namespace std;
 using namespace photon::fs;
@@ -95,19 +96,6 @@ size_t strlcpy(char *dst, char *src, size_t siz) {
     }
 
     return (s - src - 1); /* count does not include NUL */
-}
-
-int oct_to_int(char *oct) {
-    int i;
-    return sscanf(oct, "%o", &i) == 1 ? i : 0;
-}
-void int_to_oct_nonull(int num, char *oct, size_t octlen) {
-    snprintf(oct, octlen, "%*lo", (int)(octlen - 1), (unsigned long)num);
-    oct[octlen - 1] = ' ';
-}
-size_t oct_to_size(char *oct) {
-    size_t i;
-    return sscanf(oct, "%zo", &i) == 1 ? i : 0;
 }
 
 int th_crc_calc(struct tar_header &th_buf) {
