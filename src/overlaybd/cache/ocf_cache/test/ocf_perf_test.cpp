@@ -491,7 +491,7 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    photon::init(photon::INIT_EVENT_EPOLL|photon::INIT_IO_LIBCURL|photon::INIT_EVENT_SIGNALFD, photon::INIT_IO_LIBAIO);
+photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
 
 
     auto pooled_allocator = new PooledAllocator<2 * 1024 * 1024, 1024, 4096>;

@@ -734,7 +734,7 @@ int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     ::gflags::ParseCommandLineFlags(&argc, &argv, true);
     log_output_level = FLAGS_log_level;
-    photon::init(photon::INIT_EVENT_EPOLL|photon::INIT_IO_LIBCURL|photon::INIT_EVENT_SIGNALFD, photon::INIT_IO_LIBAIO);
+    photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
 
     auto ret = RUN_ALL_TESTS();
     (void)ret;

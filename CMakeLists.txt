@@ -23,6 +23,7 @@ endif()
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED on)
+set(ENABLE_MIMIC_VDSO off)
 
 find_package(photon REQUIRED)
 find_package(tcmu REQUIRED)
