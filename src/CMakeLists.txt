@@ -7,14 +7,32 @@ link_libraries(rt pthread resolv)
 
 add_subdirectory(overlaybd)
 
-add_executable(overlaybd-tcmu
-  main.cpp
+add_library(overlaybd_image_lib
   image_file.cpp
   image_service.cpp
   sure_file.cpp
   switch_file.cpp
   bk_download.cpp
   prefetch.cpp
+)
+target_include_directories(overlaybd_image_lib PUBLIC
+  ${CURL_INCLUDE_DIRS}
+  ${OPENSSL_INCLUDE_DIR}
+  ${rapidjson_SOURCE_DIR}/include
+  ${PHOTON_INCLUDE_DIR}
+)
+
+target_link_libraries(overlaybd_image_lib
+  photon_static
+  overlaybd_lib
+  ${CURL_LIBRARIES}
+  ${OPENSSL_SSL_LIBRARY}
+  ${OPENSSL_CRYPTO_LIBRARY}
+  ${AIO_LIBRARIES}
+)
+
+add_executable(overlaybd-tcmu
+  main.cpp
 )
 target_include_directories(overlaybd-tcmu PUBLIC
   ${TCMU_INCLUDE_DIR}
@@ -26,6 +44,7 @@ target_include_directories(overlaybd-tcmu PUBLIC
 target_link_libraries(overlaybd-tcmu
   photon_static
   overlaybd_lib
+  overlaybd_image_lib
   tcmu_static
   ${CURL_LIBRARIES}
   ${OPENSSL_SSL_LIBRARY}

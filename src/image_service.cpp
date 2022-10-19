@@ -132,9 +132,9 @@ int load_cred_from_file(const std::string path, const std::string &remote_path,
 }
 
 int ImageService::read_global_config_and_set() {
-    if (!global_conf.ParseJSON(DEFAULT_CONFIG_PATH)) {
-        LOG_ERROR_RETURN(0, -1, "error parse global config json: `",
-                         DEFAULT_CONFIG_PATH);
+    LOG_INFO("using config `", m_config_path);
+    if (!global_conf.ParseJSON(m_config_path)) {
+        LOG_ERROR_RETURN(0, -1, "error parse global config json: `", m_config_path);
     }
     uint32_t ioengine = global_conf.ioEngine();
     if (ioengine > 2) {
@@ -299,7 +299,7 @@ int ImageService::init() {
 
 ImageFile *ImageService::create_image_file(const char *config_path) {
     ImageConfigNS::GlobalConfig defaultDlCfg;
-    if (!defaultDlCfg.ParseJSON(DEFAULT_CONFIG_PATH)) {
+    if (!defaultDlCfg.ParseJSON(m_config_path)) {
         LOG_WARN("default download config parse failed, ignore");
     }
     ImageConfigNS::ImageConfig cfg;
@@ -325,6 +325,10 @@ ImageFile *ImageService::create_image_file(const char *config_path) {
     return ret;
 }
 
+ImageService::ImageService(const char *config_path) {
+    m_config_path = config_path ? config_path : DEFAULT_CONFIG_PATH;
+}
+
 ImageService::~ImageService() {
     delete global_fs.remote_fs;
     delete global_fs.media_file;
@@ -334,8 +338,8 @@ ImageService::~ImageService() {
     LOG_INFO("image service is fully stopped");
 }
 
-ImageService *create_image_service() {
-    ImageService *ret = new ImageService();
+ImageService *create_image_service(const char *config_path) {
+    ImageService *ret = new ImageService(config_path);
     if (ret->init() < 0) {
         delete ret;
         return nullptr;

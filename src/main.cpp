@@ -20,7 +20,7 @@
 #include <photon/fs/filesystem.h>
 #include <photon/net/curl.h>
 #include <photon/io/fd-events.h>
-#include <photon/io/signalfd.h>
+#include <photon/io/signal.h>
 #include <photon/photon.h>
 #include <photon/thread/thread.h>
 #include <photon/thread/thread-pool.h>
@@ -353,8 +353,10 @@ int main(int argc, char **argv) {
     photon::block_all_signal();
     photon::sync_signal(SIGTERM, &sigint_handler);
     photon::sync_signal(SIGINT, &sigint_handler);
-
-    imgservice = create_image_service();
+    if (argc > 1)
+        imgservice = create_image_service(argv[1]);
+    else
+        imgservice = create_image_service();
     if (imgservice == nullptr) {
         LOG_ERROR("failed to create image service");
         return -1;
