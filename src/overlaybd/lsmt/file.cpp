@@ -895,7 +895,7 @@ public:
             (uint32_t)count / (uint32_t)ALIGNMENT,
             (uint64_t)moffset / (uint64_t)ALIGNMENT,
         };
-        // wait unlock
+        m.tag = m_rw_tag;
         ssize_t ret = -1;
         {
             ret = m_files[m_rw_tag]->pwrite(buf, count, moffset);
