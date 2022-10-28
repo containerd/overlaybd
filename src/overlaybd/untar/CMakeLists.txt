@@ -7,5 +7,5 @@ target_include_directories(untar_lib PUBLIC
 
 # if(BUILD_TESTING)
 #  add_subdirectory(test)
+#  add_subdirectory(test2)
 # endif()
-add_subdirectory(test2)

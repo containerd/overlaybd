@@ -88,15 +88,42 @@ int Tar::read_header_internal() {
 	return i;
 }
 
-int Tar::read_header() {
-	size_t sz, j, blocks;
+int Tar::read_sepcial_file(char *&buf) {
+	size_t j, blocks;
 	char *ptr;
+	int sz = header.get_size();
+	blocks = (sz / T_BLOCKSIZE) + (sz % T_BLOCKSIZE ? 1 : 0);
+	if (blocks > ((size_t)-1 / T_BLOCKSIZE)) {
+		errno = E2BIG;
+		return -1;
+	}
+	buf = (char *)malloc(blocks * T_BLOCKSIZE);
+	if (buf == nullptr)
+		return -1;
+
+	for (j = 0, ptr = buf; j < blocks; j++, ptr += T_BLOCKSIZE) {
+		auto i = file->read(ptr, T_BLOCKSIZE);
+		if (i != T_BLOCKSIZE) {
+			if (i != -1)
+				errno = EINVAL;
+			return -1;
+		}
+	}
+
+	return sz;
+}
+
+int Tar::read_header() {
 
 	if (header.gnu_longname != nullptr)
 		free(header.gnu_longname);
 	if (header.gnu_longlink != nullptr)
 		free(header.gnu_longlink);
 	memset(&(header), 0, sizeof(TarHeader));
+	if (pax != nullptr) {
+		delete pax;
+		pax = nullptr;
+	}
 
 	int i = read_header_internal();
 	if (i == 0)
@@ -107,28 +134,36 @@ int Tar::read_header() {
 		return -1;
 	}
 
-	/* check for GNU long link extention */
-	if (header.typeflag == GNU_LONGLINK_TYPE) {
-		sz = header.get_size();
-		blocks = (sz / T_BLOCKSIZE) + (sz % T_BLOCKSIZE ? 1 : 0);
-		if (blocks > ((size_t)-1 / T_BLOCKSIZE)) {
-			errno = E2BIG;
-			return -1;
-		}
-
-		header.gnu_longlink = (char *)malloc(blocks * T_BLOCKSIZE);
-		if (header.gnu_longlink == nullptr)
-			return -1;
-
-		for (j = 0, ptr = header.gnu_longlink; j < blocks; j++, ptr += T_BLOCKSIZE) {
-			i = file->read(ptr, T_BLOCKSIZE);
-			if (i != T_BLOCKSIZE) {
-				if (i != -1)
-					errno = EINVAL;
+	while (header.typeflag == GNU_LONGLINK_TYPE || 
+		   header.typeflag == GNU_LONGNAME_TYPE ||
+		   header.typeflag == PAX_HEADER) {
+		size_t sz;
+		switch (header.typeflag) {
+		/* check for GNU long link extention */
+		case GNU_LONGLINK_TYPE:	
+			sz = read_sepcial_file(header.gnu_longlink);
+			if (sz < 0) return -1;
+			break;
+		/* check for GNU long name extention */
+		case GNU_LONGNAME_TYPE:
+			sz = read_sepcial_file(header.gnu_longname);
+			if (sz < 0) return -1;
+			break;
+		/* check for Pax Format Header */
+		case PAX_HEADER:
+			if (pax == nullptr)
+				pax = new PaxHeader();
+			sz = read_sepcial_file(pax->pax_buf);
+			if (sz < 0) return -1;
+			LOG_DEBUG("found pax header ", VALUE(sz));
+			i = pax->read_pax(sz);
+			if (i) {
+				errno = EINVAL;
 				return -1;
 			}
+			break;
 		}
-
+		
 		i = read_header_internal();
 		if (i != T_BLOCKSIZE) {
 			if (i != -1)
@@ -137,35 +172,53 @@ int Tar::read_header() {
 		}
 	}
 
-	/* check for GNU long name extention */
-	if (header.typeflag == GNU_LONGNAME_TYPE) {
-		sz = header.get_size();
-		blocks = (sz / T_BLOCKSIZE) + (sz % T_BLOCKSIZE ? 1 : 0);
-		if (blocks > ((size_t)-1 / T_BLOCKSIZE)) {
-			errno = E2BIG;
-			return -1;
-		}
-		header.gnu_longname = (char *)malloc(blocks * T_BLOCKSIZE);
-		if (header.gnu_longname == nullptr)
-			return -1;
+	return 0;
+}
 
-		for (j = 0, ptr = header.gnu_longname; j < blocks; j++, ptr += T_BLOCKSIZE) {
-			file->read(ptr, T_BLOCKSIZE);
-			if (i != T_BLOCKSIZE) {
-				if (i != -1)
-					errno = EINVAL;
-				return -1;
-			}
-		}
-
-		i = read_header_internal();
-		if (i != T_BLOCKSIZE) {
-			if (i != -1)
-				errno = EINVAL;
+/*
+	Each line consists of a decimal number, a space, a key string, an equals sign, a
+value string, and a new line.  The decimal number indicates the length of the entire
+line, including the initial length field and the trailing newline. 
+An example of such a field is:
+    25 ctime=1084839148.1212\n
+*/
+int PaxHeader::read_pax(size_t size) {
+	char *start = pax_buf;
+	char *end = pax_buf + size;
+	while (start < end) {
+		char *p = start;
+		long len = strtol(p, &p, 0);
+		if (len < 5 || len >= LONG_MAX)
 			return -1;
-		}
+		size_t sz = len - (++p - start) - 1;
+		if (sz <= 0)
+			return -1;
+		std::string record(p, sz);
+		auto pos = record.find('=');
+		if (pos == std::string::npos)
+			return -1;
+		std::string key = record.substr(0, pos);
+		std::string value = record.substr(pos + 1);
+		LOG_DEBUG(VALUE(key.c_str()), VALUE(value.c_str()));
+		records[key] = value;
+		start += len;
 	}
 
+	return parse_pax_records();
+}
+
+int PaxHeader::parse_pax_records() {
+	// TODO: support more pax type
+	for (auto rec : records) {
+		LOG_DEBUG("`->`", rec.first.c_str(), rec.second.c_str());
+		if (rec.first == PAX_SIZE) {
+			size = std::stol(rec.second);
+		} else if (rec.first == PAX_PATH) {
+			path = strdup(rec.second.data());
+		} else if (rec.first == PAX_LINKPATH) {
+			linkpath = strdup(rec.second.data());
+		}
+	}
 	return 0;
 }
 
@@ -299,9 +352,12 @@ int Tar::extract_file() {
 		i = extract_symlink(filename);
 	else if (TH_ISCHR(header) || TH_ISBLK(header) || TH_ISFIFO(header))
 		i = extract_block_char_fifo(filename);
-	else {
-		LOG_WARN("ignore unimplemented type `, filename `", header.typeflag, filename);
-		i = 0;
+	else if (TH_ISGLOBALHEADER(header)) {
+		LOG_WARN("PAX Global Extended Headers found and ignored");
+		return 0;
+	} else {
+		LOG_ERROR("unhandled tar header type `", header.typeflag);
+		return 1;
 	}
 
 	if (i != 0) {
@@ -318,31 +374,15 @@ int Tar::extract_file() {
 }
 
 int Tar::extract_regfile(const char *filename) {
-	mode_t mode = header.get_mode();
-	size_t size = header.get_size();
-	uid_t uid = header.get_uid();
-	gid_t gid = header.get_gid();
+	long size = get_size();
 
-	LOG_DEBUG("  ==> extracting: ` (mode `, uid `, gid `, ` bytes)\n", filename, mode, uid, gid, size);
+	LOG_DEBUG("  ==> extracting: ` (` bytes)\n", filename, size);
 	photon::fs::IFile *fout = fs->open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 	if (fout == nullptr) {
 		return -1;
 	}
 	DEFER({delete fout;});
 
-#if 0
-	/* change the owner.  (will only work if run as root) */
-	if (fout->fchown(fdout, uid, gid) == -1 && errno != EPERM)
-	{
-		return -1;
-	}
-
-	/* make sure the mode isn't inheritted from a file we're overwriting */
-	if (fout->fchmod(fdout, mode & 07777) == -1)
-	{
-		return -1;
-	}
-#endif
 	char buf[1024*1024];
 	off_t pos = 0;
 	size_t left = size;
@@ -361,7 +401,7 @@ int Tar::extract_regfile(const char *filename) {
 		}
 		pos += wsz;
 		left -= wsz;
-		LOG_DEBUG(VALUE(rsz), VALUE(wsz), VALUE(pos), VALUE(left));
+		// LOG_DEBUG(VALUE(rsz), VALUE(wsz), VALUE(pos), VALUE(left));
 	}
 	return 0;
 }
@@ -371,7 +411,7 @@ int Tar::extract_hardlink(const char *filename) {
 	// TODO: hardlinkRootPath
 
 	// char *linktgt = safer_name_suffix(header.get_linkname());
-	char *linktgt = header.get_linkname();
+	char *linktgt = get_linkname();
 	LOG_DEBUG("  ==> extracting: ` (link to `)\n", filename, linktgt);
 	if (fs->link(linktgt, filename) == -1) {
 		LOG_ERROR("link failed, `", strerror(errno));
@@ -383,7 +423,7 @@ int Tar::extract_hardlink(const char *filename) {
 int Tar::extract_symlink(const char *filename) {
 	auto mode = header.get_mode();
 	// char *linktgt = safer_name_suffix(header.get_linkname());
-	char *linktgt = header.get_linkname();
+	char *linktgt = get_linkname();
 	LOG_DEBUG("  ==> extracting: ` (symlink to `)\n", filename, linktgt);
 	if (fs->symlink(linktgt, filename) == -1) {
 		LOG_ERROR("symlink failed, `", strerror(errno));
@@ -410,6 +450,8 @@ int Tar::extract_block_char_fifo(const char *filename) {
 	auto mode = header.get_mode();
 	auto devmaj = header.get_devmajor();
 	auto devmin = header.get_devminor();
+
+	// TODO: skip for user namespace
 
 	LOG_DEBUG("  ==> extracting: ` (block/char/fifo `,`)\n", filename, devmaj, devmin);
 	if (fs->mknod(filename, mode, makedev(devmaj, devmin)) == -1) {

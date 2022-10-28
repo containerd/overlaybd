@@ -41,6 +41,8 @@ char* safer_name_suffix(char const *file_name) {
 }
 
 char* Tar::get_pathname() {
+	if (pax && pax->path)
+		return safer_name_suffix(pax->path);
 	if (header.gnu_longname)
 		return safer_name_suffix(header.gnu_longname);
 
@@ -69,6 +71,21 @@ char* Tar::get_pathname() {
 	return safer_name_suffix(th_pathname);
 }
 
+char* Tar::get_linkname() {
+	if (pax && pax->linkpath) {
+		return pax->linkpath;
+	} else {
+		return header.get_linkname();
+	}
+}
+
+long Tar::get_size() {
+	if (pax && pax->size > 0) {
+		return pax->size;
+	} else {
+		return header.get_size();
+	}
+}
 
 mode_t TarHeader::get_mode() {
 	mode_t m = (mode_t)oct_to_int(mode);
