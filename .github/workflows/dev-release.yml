@@ -1,0 +1,50 @@
+name: dev-release
+
+on:
+  push:
+    branches:
+    - main
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  dev-release:
+    name: "Development Release"
+    runs-on: ubuntu-18.04
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Install Dependencies
+      shell: bash
+      run: |
+        sudo apt update -y
+        sudo apt install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev rpm
+        sudo apt install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm
+
+    - name: Create Build Environment
+      run: cmake -E make_directory ${{github.workspace}}/build
+
+    - name: Configure CMake
+      shell: bash
+      working-directory: ${{github.workspace}}/build
+      run: |
+        git submodule update --init
+        cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TESTING=0 -DENABLE_DSA=0 -DENABLE_ISAL=0
+
+    - name: Build
+      working-directory: ${{github.workspace}}/build
+      shell: bash
+      run: |
+        make -j64
+        cpack
+
+    - uses: "marvinpinto/action-automatic-releases@latest"
+      with:
+        repo_token: "${{ secrets.GITHUB_TOKEN }}"
+        automatic_release_tag: "latest"
+        prerelease: false
+        title: "Development Build"
+        files: |
+          ${{github.workspace}}/build/overlaybd-*.deb
