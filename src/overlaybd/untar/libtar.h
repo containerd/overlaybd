@@ -26,6 +26,7 @@
 #include <set>
 #include <string>
 #include <list>
+#include <map>
 
 #define T_BLOCKSIZE		512
 #define T_NAMELEN		100
@@ -94,6 +95,46 @@ public:
 	int signed_crc_calc();
 };
 
+/* PAX format */
+#define PAX_HEADER			'x'
+#define PAX_GLOBAL_HEADER	'g'
+#define PAX_PATH			"path"
+#define PAX_LINKPATH		"linkpath"
+#define PAX_SIZE			"size"
+#define PAX_UID				"uid"
+#define PAX_GID				"gid"
+#define PAX_UNAME			"uname"
+#define PAX_GNAME			"gname"
+#define PAX_MTIME			"mtime"
+#define PAX_ATIME			"atime"
+#define PAX_CTIME			"ctime"
+class PaxHeader {
+public:
+	char *path = nullptr;
+	char *linkpath = nullptr;
+	long size = -1;
+	uid_t uid = -1;
+	gid_t gid = -1;
+	char *uname = nullptr;
+	char *gname = nullptr;
+	long mtime = -1;
+	long atime = -1;
+	long ctime = -1;
+
+	char *pax_buf = nullptr;
+	std::map<std::string, std::string> records;
+
+	~PaxHeader() {
+		if (pax_buf) free(pax_buf);
+		if (path) free(path);
+		if (linkpath) free(linkpath);
+	}
+
+	int read_pax(size_t size);
+private:
+	int parse_pax_records();
+};
+
 class Tar {
 public:
 	photon::fs::IFileSystem *fs = nullptr; // target
@@ -103,6 +144,7 @@ public:
 	char *th_pathname = nullptr;
 	std::set<std::string> unpackedPaths;
 	std::list<std::pair<std::string, int>> dirs;	// <path, utime>
+	PaxHeader *pax = nullptr;
 
 	Tar(photon::fs::IFile *file, photon::fs::IFileSystem *fs, int options)
 		: file(file), fs(fs), options(options) {
@@ -110,13 +152,18 @@ public:
 	~Tar() {
 		if (th_pathname != nullptr)
 			free(th_pathname);
+		if (pax != nullptr)
+			delete pax;
 	}
 	char* get_pathname();
+	char* get_linkname();
+	long get_size();
 	int extract_all();
 
 private:
 	int read_header();
 	int read_header_internal();
+	int read_sepcial_file(char *&buf);
 
 	int extract_file();
 	int extract_regfile(const char *filename);
@@ -163,5 +210,6 @@ const char libtar_version[] = "1";
 			     && (h.name[strlen(h.name) - 1] == '/')))
 #define TH_ISFIFO(h)	(h.typeflag == FIFOTYPE \
 			 || S_ISFIFO((mode_t)oct_to_int(h.mode)))
+#define TH_ISGLOBALHEADER(h) (h.typeflag == PAX_GLOBAL_HEADER)
 
 
