@@ -89,7 +89,7 @@ cmake -D ENABLE_ISAL=1 ..
 
 If you want to use QAT to accelerate compression/decompression.
 
-```bash
+```bash 
 cmake -D ENABLE_QAT=1 ..
 ```
 
@@ -113,7 +113,10 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
     "logPath": "/var/log/overlaybd.log",
     "registryCacheDir": "/opt/overlaybd/registry_cache",
     "registryCacheSizeGB": 1,
-    "credentialFilePath": "/opt/overlaybd/cred.json",
+    "credentialConfig": {
+      "mode": "file",
+      "path": "/opt/overlaybd/cred.json"
+    },
     "ioEngine": 0,
     "download": {
         "enable": true,
@@ -138,7 +141,9 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | registryCacheDir    | The cache directory for remote image data.                                                            |
 | registryCacheSizeGB | The max size of cache, in GB.                                                                         |
 | cacheType           | Cache type used, `file` and `ocf` are supported, `file` is the default.                               |
-| credentialFilePath  | The credential used for fetching images on registry. `/opt/overlaybd/cred.json` is the default value. |
+| credentialFilePath(legacy)  | The credential used for fetching images on registry. `/opt/overlaybd/cred.json` is the default value. |
+| credentialConfig.mode | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` | 
+credentialConfig.path | credential file path or url which is determined by `mode`
 | download.enable     | Whether background downloading is enabled or not.                                                     |
 | download.delay      | The seconds waiting to start downloading task after the overlaybd device launched.                    |
 | download.delayExtra | A random extra delay is attached to delay, avoiding too many tasks started at the same time.          |
@@ -152,9 +157,28 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 
 ### credential config
 
-Here is an example of credential file described by `credentialFilePath` field.
+> **Important**: The corresponding credential has to be set before launching devices, if the registry is not public.
 
+Credentials are reloaded when authentication is required. Credentials have to be updated before expiration if temporary credential is used, otherwise overlaybd keeps reloading until a valid credential is set.
+
+Overlaybd supports serveral credential mode. Here are some example `credentialConfig` field.
+
+- mode **file**
+
+  the `credentialConfig.path` should be similar to '.docker/config.json' like this:
 ```json
+#### /etc/overlaybd/config.json ####
+{
+  "logLevel": 1,
+  "logPath": "/var/log/overlaybd.log",
+  ...
+  "credentialConfig": {
+      "mode": "file",
+      "path": "/opt/overlaybd/cred.json"
+    },
+  ...
+}
+#### /opt/overlaybd/cred.json ####
 {
   "auths": {
     "hub.docker.com": {
@@ -168,10 +192,42 @@ Here is an example of credential file described by `credentialFilePath` field.
 }
 ```
 
-Credentials are reloaded when authentication is required.
-Credentials have to be updated before expiration if temporary credential is used, otherwise overlaybd keeps reloading until a valid credential is set.
+- mode **http**
+  
+  the `credentialConfig.path` should be a server listening address implemented by developers and can reply to credential information.
 
-> **Important**: The corresponding credential has to be set before launching devices, if the registry is not public.
+```json
+#### /etc/overlaybd/config.json ####
+{
+  "logLevel": 1,
+  "logPath": "/var/log/overlaybd.log",
+  ...
+  "credentialConfig": {
+      "mode": "http",
+      "path": "localhost:19876/auth"
+    },
+  ...
+}
+```
+  overlaybd will send http request to the server with `remote_url` like this:
+> GET "localhost:19876/auth?remote_url=https://hub.docker.com/v2/overlaybd/ubuntu/blobs/sha256:47e63559a8487efb55b2f1ccea9cfc04110a185c49785fdf1329d1ea462ce5f0"
+  the server response should be formatted as follows:
+```json
+{
+  "traceId": "${trace_id}"
+  "success": true or false
+  "data": {
+    "auths": {
+      "hub.docker.com": {
+        "username": "username",
+        "password": "password"
+      }
+    }
+  }
+}
+```
+we write a sample http server in `test/simple_auth_server.cpp`
+
 
 ## Usage
 
