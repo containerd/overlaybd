@@ -20,12 +20,15 @@
 #include <photon/common/alog.h>
 #include <photon/common/io-alloc.h>
 #include <photon/fs/localfs.h>
+#include <photon/net/curl.h>
 #include <photon/thread/thread.h>
 #include "overlaybd/cache/cache.h"
 #include "overlaybd/registryfs/registryfs.h"
 #include "overlaybd/tar_file.h"
 #include "overlaybd/zfile/zfile.h"
 #include "overlaybd/base64.h"
+#include "photon/common/alog.h"
+#include "photon/net/curl.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -79,19 +82,15 @@ int parse_blob_url(const std::string &url, struct ImageRef &ref) {
     return 0;
 }
 
-int load_cred_from_file(const std::string path, const std::string &remote_path,
-                        std::string &username, std::string &password) {
-    ImageConfigNS::AuthConfig cfg;
-    if (!cfg.ParseJSON(path)) {
-        LOG_ERROR_RETURN(0, -1, "parse json failed: `", path);
-    }
-
+int parse_auths(const ConfigUtils::Document &auths, const std::string &remote_path,
+    std::string &username, std::string &password) {
+    
     struct ImageRef ref;
     if (parse_blob_url(remote_path, ref) != 0) {
         LOG_ERROR_RETURN(0, -1, "parse blob url failed: `", remote_path);
     }
 
-    for (auto &iter : cfg.auths().GetObject()) {
+    for (auto &iter : auths.GetObject()) {
         std::string addr = iter.name.GetString();
         LOG_DEBUG("cred addr: `", iter.name.GetString());
 
@@ -127,8 +126,43 @@ int load_cred_from_file(const std::string path, const std::string &remote_path,
             return 0;
         }
     }
+    return 0;
+}
 
-    return -1;
+int load_cred_from_file(const std::string path, const std::string &remote_path,
+                        std::string &username, std::string &password) {
+    ImageConfigNS::AuthConfig cfg;
+    if (!cfg.ParseJSON(path)) {
+        LOG_ERROR_RETURN(0, -1, "parse json failed: `", path);
+    }
+    return parse_auths(cfg.auths(), remote_path, username, password);
+}
+
+int load_cred_from_http(const std::string addr /* http server */, const std::string &remote_path,
+                        std::string &username, std::string &password) {
+
+    auto request = new photon::net::cURL();
+    DEFER({ delete request; });
+
+    auto request_url = addr + "?remote_url=" + remote_path;
+    LOG_INFO("request url: `", request_url);
+    photon::net::StringWriter writer;
+    auto ret = request->GET(request_url.c_str(), &writer, 1UL * 1000000);
+    if (ret != 200) {
+        LOG_ERRNO_RETURN(0, -1, "connect to auth component failed. http response code: `", ret);
+    }
+    LOG_DEBUG(writer.string);
+    ImageAuthResponse response;
+    LOG_DEBUG("response size: `", writer.string.size());
+    if (response.ParseJSONStream(writer.string) == false) {
+        LOG_ERRNO_RETURN(0, -1, "parse http response message failed: `，", writer.string);
+    }
+    LOG_INFO("traceId: `, succ: `", response.traceId(), response.success());
+    if (response.success() == false) {
+        LOG_ERRNO_RETURN(0, -1, "http request failed.") 
+    }
+    ImageConfigNS::AuthConfig cfg;
+    return parse_auths(response.data().auths(), remote_path, username, password);
 }
 
 int ImageService::read_global_config_and_set() {
@@ -176,8 +210,26 @@ std::pair<std::string, std::string>
 ImageService::reload_auth(const char *remote_path) {
     LOG_DEBUG("Acquire credential for ", VALUE(remote_path));
     std::string username, password;
-
-    int res = load_cred_from_file(global_conf.credentialFilePath(), std::string(remote_path), username, password);
+    int res = 0;
+    if (global_conf.credentialConfig().mode().empty()) {
+        LOG_INFO("reload auth from legacy configuration [`]", global_conf.credentialFilePath());
+        res = load_cred_from_file(global_conf.credentialFilePath(), std::string(remote_path), username, password);
+    } else {
+        auto mode = global_conf.credentialConfig().mode();
+        auto path = global_conf.credentialConfig().path();
+        if (path.empty()) {
+            LOG_ERROR("empty authentication path.");
+            return std::make_pair("","");
+        }
+        if (mode == "file") {
+            res = load_cred_from_file(path, std::string(remote_path), username, password);
+        } else if (mode == "http") {
+            res = load_cred_from_http(path, std::string(remote_path), username, password);
+        } else {
+            LOG_ERROR("invalid mode for authentication.");
+            return std::make_pair("","");
+        }
+    }
     if (res == 0) {
         LOG_INFO("auth found for `: `", remote_path, username);
         return std::make_pair(username, password);

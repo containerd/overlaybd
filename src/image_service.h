@@ -34,6 +34,14 @@ struct GlobalFs {
     IOAlloc *io_alloc = nullptr;
 };
 
+struct ImageAuthResponse : public ConfigUtils::Config {
+    APPCFG_CLASS
+
+    APPCFG_PARA(traceId, std::string, "");
+	APPCFG_PARA(success, bool, false);
+	APPCFG_PARA(data, ImageConfigNS::AuthConfig);
+}; 
+
 struct ImageFile;
 
 class ImageService {
