@@ -415,10 +415,6 @@ int Tar::extract_regfile(const char *filename) {
 }
 
 int Tar::extract_hardlink(const char *filename) {
-	auto mode = header.get_mode();
-	// TODO: hardlinkRootPath
-
-	// char *linktgt = safer_name_suffix(header.get_linkname());
 	char *linktgt = get_linkname();
 	LOG_DEBUG("  ==> extracting: ` (link to `)\n", filename, linktgt);
 	if (fs->link(linktgt, filename) == -1) {
@@ -429,8 +425,6 @@ int Tar::extract_hardlink(const char *filename) {
 }
 
 int Tar::extract_symlink(const char *filename) {
-	auto mode = header.get_mode();
-	// char *linktgt = safer_name_suffix(header.get_linkname());
 	char *linktgt = get_linkname();
 	LOG_DEBUG("  ==> extracting: ` (symlink to `)\n", filename, linktgt);
 	if (fs->symlink(linktgt, filename) == -1) {

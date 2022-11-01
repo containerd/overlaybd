@@ -17,34 +17,71 @@
 #include <photon/common/enumerable.h>
 #include <photon/fs/path.h>
 
-char* safer_name_suffix(char const *file_name) {
-	char const *p, *t;
-	p = t = file_name;
-	while (*p == '/') t = ++p;
-	while (*p) {
-		while (p[0] == '.' && p[0] == p[1] && p[2] == '/') {
-			p += 3;
-			t = p;
+
+/*
+ * In place, rewrite name to compress multiple /, eliminate ., and process ..
+ *
+ * clean_name iteratively does the following until no further processing can be done:
+ *		1. Reduce multiple slashes to a single slash.
+ *		2. Eliminate . path name elements (the current directory).
+ *		3. Eliminate .. path name elements (the parent directory) and the non-. non-.., element that precedes them.
+ *		4. Eliminate .. elements that begin a rooted path, that is, replace /.. by / at the beginning of a path.
+ *		5. Leave intact .. elements that begin a non-rooted path.
+ * If the result of this process is a null string, cleanname returns the string ".", representing the current directory.
+ * 
+ * See also Rob Pike, “Lexical File Names in Plan 9 or Getting Dot-Dot Right,”
+ * https://9p.io/sys/doc/lexnames.html
+ */
+#define SEP(x)	((x) == '/' || (x) == 0)
+char* clean_name(char *name) {
+	char *p, *q, *dotdot;
+	int rooted;
+
+	rooted = name[0] == '/';
+
+	/*
+	 * invariants:
+	 *	p points at beginning of path element we're considering.
+	 *	q points just past the last path element we wrote (no slash).
+	 *	dotdot points just past the point where .. cannot backtrack
+	 *		any further (no slash).
+	 */
+	p = q = dotdot = name+rooted;
+	while(*p) {
+		if(p[0] == '/')	/* null element */
+			p++;
+		else if(p[0] == '.' && SEP(p[1]))
+			p += 1;	/* don't count the separator in case it is nul */
+		else if(p[0] == '.' && p[1] == '.' && SEP(p[2])) {
+			p += 2;
+			if(q > dotdot) {	/* can backtrack */
+				while(--q > dotdot && *q != '/')
+					;
+			} else if(!rooted) {	/* /.. is / but ./../ is .. */
+				if(q != name)
+					*q++ = '/';
+				*q++ = '.';
+				*q++ = '.';
+				dotdot = q;
+			}
+		} else {	/* real path element */
+			if(q != name+rooted)
+				*q++ = '/';
+			while((*q = *p) != '/' && *q != 0)
+				p++, q++;
 		}
-		/* advance pointer past the next slash */
-		while (*p && (p++)[0] != '/');
 	}
-
-	if (!*t) {
-		t = ".";
-	}
-
-	if (t != file_name) {
-		/* TODO: warn somehow that the path was modified */
-	}
-	return (char*)t;
+	if(q == name)	/* empty string is really ``.'' */
+		*q++ = '.';
+	*q = '\0';
+	return name;
 }
 
 char* Tar::get_pathname() {
 	if (pax && pax->path)
-		return safer_name_suffix(pax->path);
+		return clean_name(pax->path);
 	if (header.gnu_longname)
-		return safer_name_suffix(header.gnu_longname);
+		return clean_name(header.gnu_longname);
 
 	/* allocate the th_pathname buffer if not already */
 	if (th_pathname == nullptr) {
@@ -68,14 +105,14 @@ char* Tar::get_pathname() {
 	}
 
 	/* will be deallocated in tar_close() */
-	return safer_name_suffix(th_pathname);
+	return clean_name(th_pathname);
 }
 
 char* Tar::get_linkname() {
 	if (pax && pax->linkpath) {
-		return pax->linkpath;
+		return clean_name(pax->linkpath);
 	} else {
-		return header.get_linkname();
+		return clean_name(header.get_linkname());
 	}
 }
 
