@@ -63,6 +63,16 @@ public:
         return true;
     }
 
+    bool ParseJSONStream(const std::string &json_stream) {
+       
+        if (Parse(json_stream.c_str()).HasParseError()) {
+            LOG_ERROR("error parse json: `", json_stream);
+            return false;
+        }
+        return true;
+    }
+
+
     std::string DumpString() {
         rapidjson::StringBuffer buffer;
         rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);

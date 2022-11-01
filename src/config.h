@@ -67,11 +67,18 @@ struct P2PConfig : public ConfigUtils::Config {
     APPCFG_PARA(address, std::string, "http://localhost:9731/accelerator");
 };
 
+struct CredentialConfig : public ConfigUtils::Config {
+    APPCFG_CLASS
+    APPCFG_PARA(mode, std::string, "");
+    APPCFG_PARA(path, std::string, "");
+};
+
 struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_CLASS
 
     APPCFG_PARA(registryCacheDir, std::string, "/opt/overlaybd/registryfs_cache");
     APPCFG_PARA(credentialFilePath, std::string, "/opt/overlaybd/cred.json");
+    APPCFG_PARA(credentialConfig, CredentialConfig)
     APPCFG_PARA(registryCacheSizeGB, uint32_t, 4);
     APPCFG_PARA(ioEngine, uint32_t, 0);
     APPCFG_PARA(cacheType, std::string, "file");
@@ -83,13 +90,17 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(auditPath, std::string, "/var/log/overlaybd-audit.log");
 };
 
-
-
-
 struct AuthConfig : public ConfigUtils::Config {
     APPCFG_CLASS
-
     APPCFG_PARA(auths, ConfigUtils::Document);
 };
+
+struct ImageAuthResponse : public ConfigUtils::Config {
+    APPCFG_CLASS
+
+    APPCFG_PARA(traceId, std::string, "");
+	APPCFG_PARA(success, bool, false);
+	APPCFG_PARA(data, AuthConfig);
+}; 
 
 } // namespace ImageConfigNS
