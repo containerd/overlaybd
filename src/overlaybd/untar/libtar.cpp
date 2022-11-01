@@ -350,7 +350,15 @@ int Tar::extract_file() {
 		i = extract_hardlink(filename);
 	else if (TH_ISSYM(header))
 		i = extract_symlink(filename);
-	else if (TH_ISCHR(header) || TH_ISBLK(header) || TH_ISFIFO(header))
+	else if (TH_ISCHR(header) || TH_ISBLK(header)) {
+		if (geteuid() == 0) {
+			i = extract_block_char_fifo(filename);
+		} else {
+			LOG_WARN("file ` ignored: skip for user namespace", filename);
+			return 0;
+		}
+	}
+	else if (TH_ISFIFO(header))
 		i = extract_block_char_fifo(filename);
 	else if (TH_ISGLOBALHEADER(header)) {
 		LOG_WARN("PAX Global Extended Headers found and ignored");
@@ -407,10 +415,6 @@ int Tar::extract_regfile(const char *filename) {
 }
 
 int Tar::extract_hardlink(const char *filename) {
-	auto mode = header.get_mode();
-	// TODO: hardlinkRootPath
-
-	// char *linktgt = safer_name_suffix(header.get_linkname());
 	char *linktgt = get_linkname();
 	LOG_DEBUG("  ==> extracting: ` (link to `)\n", filename, linktgt);
 	if (fs->link(linktgt, filename) == -1) {
@@ -421,8 +425,6 @@ int Tar::extract_hardlink(const char *filename) {
 }
 
 int Tar::extract_symlink(const char *filename) {
-	auto mode = header.get_mode();
-	// char *linktgt = safer_name_suffix(header.get_linkname());
 	char *linktgt = get_linkname();
 	LOG_DEBUG("  ==> extracting: ` (symlink to `)\n", filename, linktgt);
 	if (fs->symlink(linktgt, filename) == -1) {
@@ -450,8 +452,6 @@ int Tar::extract_block_char_fifo(const char *filename) {
 	auto mode = header.get_mode();
 	auto devmaj = header.get_devmajor();
 	auto devmin = header.get_devminor();
-
-	// TODO: skip for user namespace
 
 	LOG_DEBUG("  ==> extracting: ` (block/char/fifo `,`)\n", filename, devmaj, devmin);
 	if (fs->mknod(filename, mode, makedev(devmaj, devmin)) == -1) {
