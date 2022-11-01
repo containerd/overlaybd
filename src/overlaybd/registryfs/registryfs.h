@@ -18,42 +18,17 @@
 #include <stdint.h>
 #include <string>
 #include <photon/common/callback.h>
-#include <photon/fs/virtual-file.h>
+#include <photon/fs/filesystem.h>
 
-using namespace photon::fs;
-
-// Docker registry always returns Token with expiry time >= 60 seconds.
-// https://docs.docker.com/registry/spec/auth/token/#authorization-server-endpoint-descriptions
-// static const uint64_t kMinimumTokenExpiry = 60 * 1000UL;  // 60 seconds
-
-struct ImageLayerMeta {
-    uint64_t crc64;
-    uint64_t contentLength;
-    char lastModified[128];
-};
-
-class RegistryFS : public IFileSystem {
+class RegistryFS : public photon::fs::IFileSystem {
 public:
     virtual int setAccelerateAddress(const char* addr = "") = 0;
-};
-
-// IFile open by registryfs are RegistryFile, it can cast to RegistryFile* so
-// that able to call getMeta & getUrl methods
-// Since RegistryFile depends on registryfs to get authorized, it can only open
-// using registryfs, and not able to create directly using url
-class RegistryFile : public VirtualReadOnlyFile {
-public:
-    virtual int getMeta(ImageLayerMeta *meta, uint64_t timeout = -1) = 0;
-    virtual int getUrl(char *buf, size_t size, uint64_t timeout = -1) = 0;
-    int close() override {
-        return 0;
-    }
 };
 
 using PasswordCB = Delegate<std::pair<std::string, std::string>, const char *>;
 
 extern "C" {
-IFileSystem *new_registryfs_with_credential_callback(PasswordCB callback,
+photon::fs::IFileSystem *new_registryfs_with_credential_callback(PasswordCB callback,
                                                      const char *caFile = nullptr,
                                                      uint64_t timeout = -1);
 }
