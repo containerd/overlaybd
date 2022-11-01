@@ -247,8 +247,8 @@ public:
             m_idx = m_begin_idx;
             m_end = m_offset + count - 1;
             m_end_idx = (m_offset + count - 1) / m_block_size + 1;
-            LOG_DEBUG("[ offset: `, length: ` ], begin_blk: `, end_blk: `, enable_verify: `",
-                      offset, count, m_begin_idx, m_end_idx, m_verify);
+            // LOG_DEBUG("[ offset: `, length: ` ], begin_blk: `, end_blk: `, enable_verify: `",
+            //           offset, count, m_begin_idx, m_end_idx, m_verify);
         }
 
         int reload(size_t idx) {
@@ -269,8 +269,8 @@ public:
         int read_blocks(size_t begin, size_t end) {
             auto read_size = std::min(MAX_READ_SIZE, get_blocks_length(begin, end));
             auto begin_offset = m_zfile->m_jump_table[begin];
-            LOG_DEBUG("block idx: [`, `), start_offset: `, read_size: `", begin, end, begin_offset,
-                      read_size);
+            // LOG_DEBUG("block idx: [`, `), start_offset: `, read_size: `", begin, end, begin_offset,
+            //           read_size);
             auto readn = m_zfile->m_file->pread(m_buf, read_size, begin_offset);
             if (readn != (ssize_t)read_size) {
                 LOG_ERRNO_RETURN(0, -1, "read compressed blocks failed. (offset: `, len: `)",
@@ -309,7 +309,7 @@ public:
                 LOG_WARN("crc32 not support.");
                 return -1;
             }
-            LOG_DEBUG("{crc32_offset: `}", compressed_size());
+            // LOG_DEBUG("{crc32_offset: `}", compressed_size());
             return *(uint32_t *)&(m_buf[m_buf_offset + compressed_size()]);
         }
 
@@ -352,8 +352,8 @@ public:
                     cp_len = m_reader->get_inblock_offset(m_reader->m_end) + 1;
                 }
                 cp_len -= cp_begin;
-                LOG_DEBUG("block id: ` cp_begin: `, cp_len: `, compressed_size: `", blk_idx,
-                          cp_begin, cp_len, compressed_size);
+                // LOG_DEBUG("block id: ` cp_begin: `, cp_len: `, compressed_size: `", blk_idx,
+                //           cp_begin, cp_len, compressed_size);
             }
 
             iterator &operator++() {
@@ -454,11 +454,11 @@ public:
                 memcpy(buf, raw + block.cp_begin, block.cp_len);
             }
             readn += block.cp_len;
-            LOG_DEBUG("append buf, {offset: `, length: `, crc: `}", (off_t)buf - (off_t)start_addr,
-                      block.cp_len, block.crc32_code());
+            // LOG_DEBUG("append buf, {offset: `, length: `, crc: `}", (off_t)buf - (off_t)start_addr,
+            //           block.cp_len, block.crc32_code());
             buf = (unsigned char *)buf + block.cp_len;
         }
-        LOG_DEBUG("done. (readn: `)", readn);
+        // LOG_DEBUG("done. (readn: `)", readn);
         return readn;
     }
 };
@@ -804,7 +804,7 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
             raw_chunk_len[n++] = block_size;
             step -= block_size;
         }
-        ret = compressor->compress_batch(raw_data, &(raw_chunk_len[0]), compressed_data, n * buf_size, 
+        ret = compressor->compress_batch(raw_data, &(raw_chunk_len[0]), compressed_data, n * buf_size,
             &(compressed_len[0]), n);
         if (ret != 0) return -1;
         for (off_t j = 0; j < n; j++) {
@@ -819,7 +819,7 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
                 compressed_len[j] += sizeof(uint32_t);
                 ret = as->write(&crc32_code, sizeof(uint32_t));
                 if (ret < sizeof(uint32_t)) {
-                    LOG_ERRNO_RETURN(0, -1, "failed to write crc32code, offset: `, crc32: `", 
+                    LOG_ERRNO_RETURN(0, -1, "failed to write crc32code, offset: `, crc32: `",
                         moffset, crc32_code);
                 }
             }
