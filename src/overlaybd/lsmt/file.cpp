@@ -274,7 +274,7 @@ public:
                 }
                 assert(m.tag < m_files.size());
                 ssize_t size = m.length * ALIGNMENT;
-                LOG_DEBUG("offset: `, length: `", m.moffset, size);
+                // LOG_DEBUG("offset: `, length: `", m.moffset, size);
                 ssize_t ret = m_files[m.tag]->pread(buf, size, m.moffset * ALIGNMENT);
                 if (ret < size) {
                     LOG_ERRNO_RETURN(0, (int)ret,
