@@ -54,7 +54,7 @@ static void int_to_oct_nonull(int num, char *oct, size_t octlen) {
     oct[octlen - 1] = ' ';
 }
 
-char* safer_name_suffix(char const*);
+char* clean_name(char *name);
 
 
 class TarHeader {
