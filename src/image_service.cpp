@@ -159,7 +159,7 @@ int load_cred_from_http(const std::string addr /* http server */, const std::str
     }
     LOG_INFO("traceId: `, succ: `", response.traceId(), response.success());
     if (response.success() == false) {
-        LOG_ERRNO_RETURN(0, -1, "http request failed.") 
+        LOG_ERRNO_RETURN(0, -1, "http request failed.");
     }
     ImageConfigNS::AuthConfig cfg;
     return parse_auths(response.data().auths(), remote_path, username, password);

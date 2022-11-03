@@ -39,25 +39,45 @@ using namespace ZFile;
 IFileSystem *lfs = nullptr;
 
 int main(int argc, char **argv) {
+
     bool rm_old = false;
     bool tar = false;
     bool extract = false;
     std::string fn_src, fn_dst;
+    std::string algorithm;
+    int block_size;
 
     CLI::App app{"this is a zfile tool to create/extract zfile"};
     app.add_flag("-t", tar, "wrapper with tar");
     app.add_flag("-x", extract, "extract zfile");
     app.add_flag("-f", rm_old, "force compress. unlink exist");
-    app.add_option("source_file", fn_src, "source file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
+    app.add_option("--algorithm", algorithm, "compress algorithm, [lz4|zstd]")->default_str("lz4");
+    app.add_option(
+           "--bs", block_size,
+           "The size of a data block in KB. Must be a power of two between 4K~64K [4/8/16/32/64])")
+        ->default_val(4);
+    app.add_option("source_file", fn_src, "source file path")
+        ->type_name("FILEPATH")
+        ->check(CLI::ExistingFile)
+        ->required();
     app.add_option("target_file", fn_dst, "target file path")->type_name("FILEPATH")->required();
     CLI11_PARSE(app, argc, argv);
 
     set_log_output_level(1);
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
 
-
     CompressOptions opt;
     opt.verify = 1;
+    if (algorithm == "lz4") {
+        opt.type = CompressOptions::LZ4;
+    } else if (algorithm == "zstd") {
+        opt.type = CompressOptions::ZSTD;
+    }
+    opt.block_size = block_size * 1024;
+    if ((opt.block_size & (opt.block_size - 1)) != 0 || (block_size > 64 || block_size < 4)) {
+        fprintf(stderr, "invalid '--bs' parameters.\nj");
+        exit(-1);
+    }
     lfs = new_localfs_adaptor();
     if (rm_old) {
         lfs->unlink(fn_dst.c_str());
@@ -66,7 +86,6 @@ int main(int argc, char **argv) {
     if (tar) {
         fs = new_tar_fs_adaptor(lfs);
     }
-
     int ret = 0;
     CompressArgs args(opt);
     if (!extract) {
@@ -97,11 +116,10 @@ int main(int argc, char **argv) {
 
         IFile *infile = fs->open(fn_src.c_str(), O_RDONLY);
         if (infile == nullptr) {
-             fprintf(stderr, "failed to open file %s\n", fn_dst.c_str());
+            fprintf(stderr, "failed to open file %s\n", fn_dst.c_str());
             exit(-1);
         }
         DEFER(delete infile);
-
         IFile *outfile = lfs->open(fn_dst.c_str(), O_WRONLY | O_CREAT | O_EXCL, S_IRWXU);
         if (outfile == nullptr) {
             fprintf(stderr, "failed to open file %s\n", fn_dst.c_str());
@@ -111,8 +129,8 @@ int main(int argc, char **argv) {
 
         ret = zfile_decompress(infile, outfile);
         if (ret != 0) {
-             fprintf(stderr, "decompress failed, errno:%d\n", errno);
-             exit(-1);
+            fprintf(stderr, "decompress failed, errno:%d\n", errno);
+            exit(-1);
         }
         printf("decompress file done.\n");
         return ret;
