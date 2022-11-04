@@ -84,7 +84,7 @@ int parse_blob_url(const std::string &url, struct ImageRef &ref) {
 
 int parse_auths(const ConfigUtils::Document &auths, const std::string &remote_path,
     std::string &username, std::string &password) {
-    
+
     struct ImageRef ref;
     if (parse_blob_url(remote_path, ref) != 0) {
         LOG_ERROR_RETURN(0, -1, "parse blob url failed: `", remote_path);
@@ -155,11 +155,11 @@ int load_cred_from_http(const std::string addr /* http server */, const std::str
     ImageAuthResponse response;
     LOG_DEBUG("response size: `", writer.string.size());
     if (response.ParseJSONStream(writer.string) == false) {
-        LOG_ERRNO_RETURN(0, -1, "parse http response message failed: `，", writer.string);
+        LOG_ERRNO_RETURN(0, -1, "parse http response message failed: `", writer.string);
     }
     LOG_INFO("traceId: `, succ: `", response.traceId(), response.success());
     if (response.success() == false) {
-        LOG_ERRNO_RETURN(0, -1, "http request failed.") 
+        LOG_ERRNO_RETURN(0, -1, "http request failed.");
     }
     ImageConfigNS::AuthConfig cfg;
     return parse_auths(response.data().auths(), remote_path, username, password);
@@ -289,7 +289,8 @@ int ImageService::init() {
             delete registry_fs;
             LOG_ERROR_RETURN(0, -1, "create tar_fs failed.");
         }
-        global_fs.srcfs = tar_fs;
+        global_fs.srcfs = registry_fs;
+
         if (global_conf.p2pConfig().enable() == true) {
             ((RegistryFS*)registry_fs)->setAccelerateAddress(global_conf.p2pConfig().address().c_str());
             global_fs.remote_fs = registry_fs;
