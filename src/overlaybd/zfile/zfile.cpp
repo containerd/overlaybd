@@ -144,60 +144,57 @@ public:
         uint64_t index_offset; // in bytes
         uint64_t index_size;   // # of SegmentMappings
         uint64_t raw_data_size;
-        uint64_t reserved_0; // fix compatibility with HeaderTrailer in release_v1.0
+        uint64_t reserved_0;
         CompressOptions opt;
 
     } /* __attribute__((packed)) */;
 
     struct JumpTable {
-        typedef uint16_t inttype;
-        static const inttype inttype_max = UINT16_MAX;
-        static const int DEFAULT_PART_SIZE = 16; // 16 x 4k = 64k
-        static const int DEFAULT_LSHIFT = 16;    // save local minimum of each part.
+        typedef uint16_t uinttype;
+        static const uinttype uinttype_max = UINT16_MAX;
+        int group_size;
 
-        std::vector<uint64_t> partial_offset; // 48 bits logical offset + 16 bits partial minimum
-        std::vector<inttype> deltas;
+        std::vector<uint64_t> partial_offset;
+        std::vector<uinttype> deltas; // partial sum in each page;
 
         off_t operator[](size_t idx) const {
-            // return BASE  + idx % (page_size) * local_minimum + sum(delta - local_minimum)
-            off_t part_idx = idx / DEFAULT_PART_SIZE;
-            off_t inner_idx = idx & (DEFAULT_PART_SIZE - 1);
-            auto local_min = partial_offset[part_idx] & ((1 << DEFAULT_LSHIFT) - 1);
-            auto part_offset = partial_offset[part_idx] >> DEFAULT_LSHIFT;
-            off_t ret = part_offset + deltas[idx] + (inner_idx)*local_min;
-            return ret;
+            // return BASE  + deltas[ idx % (page_size) ]
+            off_t part_idx = idx / group_size;
+            off_t inner_idx = idx & (group_size - 1);
+            auto part_offset = partial_offset[part_idx];
+            if (inner_idx) {
+                return part_offset + deltas[idx];
+            }
+            return part_offset;
         }
 
         size_t size() const {
             return deltas.size();
         }
 
-        int build(const uint32_t *ibuf, size_t n, off_t offset_begin) {
-            int part_size = DEFAULT_PART_SIZE;
-            partial_offset.reserve(n / part_size + 1);
+        int build(const uint32_t *ibuf, size_t n, off_t offset_begin, uint32_t block_size) {
+            group_size = (uinttype_max + 1) / block_size;
+            partial_offset.reserve(n / group_size + 1);
             deltas.reserve(n + 1);
-            inttype local_min = 0;
             auto raw_offset = offset_begin;
-            auto lshift = DEFAULT_LSHIFT;
-            partial_offset.push_back((raw_offset << lshift) + local_min);
+            partial_offset.push_back(raw_offset);
             deltas.push_back(0);
             for (ssize_t i = 1; i < (ssize_t)n + 1; i++) {
                 raw_offset += ibuf[i - 1];
-                if ((i % part_size) == 0) {
-                    local_min = inttype_max;
-                    for (ssize_t j = i; j < std::min((ssize_t)n + 1, i + part_size); j++)
-                        local_min = std::min((inttype)ibuf[j - 1], local_min);
-                    partial_offset.push_back((uint64_t(raw_offset) << lshift) + local_min);
+                if ((i % group_size) == 0) {
+                    partial_offset.push_back(raw_offset);
                     deltas.push_back(0);
                     continue;
                 }
-                deltas.push_back(deltas[i - 1] + ibuf[i - 1] - local_min);
-                // LOG_DEBUG("idx `: `", i, this->operator[](i));
+                assert((uint64_t)deltas[i - 1] + ibuf[i - 1] < (uint64_t)uinttype_max);
+                deltas.push_back(deltas[i - 1] + ibuf[i - 1]);
+                LOG_DEBUG("deltas[`]: `, ibuf[`]: `, raw_offset: `", i, deltas[i], i, ibuf[i - 1],
+                          this->operator[](i));
             }
-            LOG_DEBUG("create jump table done. {part_count: `, deltas_count: `, size: `}",
-                      partial_offset.size(), deltas.size(),
-                      deltas.size() * sizeof(deltas[0]) +
-                          partial_offset.size() * sizeof(partial_offset[0]));
+            LOG_INFO("create jump table done. {part_count: `, deltas_count: `, size: `}",
+                     partial_offset.size(), deltas.size(),
+                     deltas.size() * sizeof(deltas[0]) +
+                         partial_offset.size() * sizeof(partial_offset[0]));
             return 0;
         }
 
@@ -247,8 +244,6 @@ public:
             m_idx = m_begin_idx;
             m_end = m_offset + count - 1;
             m_end_idx = (m_offset + count - 1) / m_block_size + 1;
-            // LOG_DEBUG("[ offset: `, length: ` ], begin_blk: `, end_blk: `, enable_verify: `",
-            //           offset, count, m_begin_idx, m_end_idx, m_verify);
         }
 
         int reload(size_t idx) {
@@ -269,8 +264,6 @@ public:
         int read_blocks(size_t begin, size_t end) {
             auto read_size = std::min(MAX_READ_SIZE, get_blocks_length(begin, end));
             auto begin_offset = m_zfile->m_jump_table[begin];
-            // LOG_DEBUG("block idx: [`, `), start_offset: `, read_size: `", begin, end, begin_offset,
-            //           read_size);
             auto readn = m_zfile->m_file->pread(m_buf, read_size, begin_offset);
             if (readn != (ssize_t)read_size) {
                 LOG_ERRNO_RETURN(0, -1, "read compressed blocks failed. (offset: `, len: `)",
@@ -309,7 +302,6 @@ public:
                 LOG_WARN("crc32 not support.");
                 return -1;
             }
-            // LOG_DEBUG("{crc32_offset: `}", compressed_size());
             return *(uint32_t *)&(m_buf[m_buf_offset + compressed_size()]);
         }
 
@@ -352,8 +344,6 @@ public:
                     cp_len = m_reader->get_inblock_offset(m_reader->m_end) + 1;
                 }
                 cp_len -= cp_begin;
-                // LOG_DEBUG("block id: ` cp_begin: `, cp_len: `, compressed_size: `", blk_idx,
-                //           cp_begin, cp_len, compressed_size);
             }
 
             iterator &operator++() {
@@ -454,11 +444,8 @@ public:
                 memcpy(buf, raw + block.cp_begin, block.cp_len);
             }
             readn += block.cp_len;
-            // LOG_DEBUG("append buf, {offset: `, length: `, crc: `}", (off_t)buf - (off_t)start_addr,
-            //           block.cp_len, block.crc32_code());
             buf = (unsigned char *)buf + block.cp_len;
         }
-        // LOG_DEBUG("done. (readn: `)", readn);
         return readn;
     }
 };
@@ -678,7 +665,8 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
     LOG_DEBUG("index_offset: `", pht->index_offset);
     ret = file->pread((void *)(ibuf.get()), index_bytes, pht->index_offset);
     jump_table.build(ibuf.get(), pht->index_size,
-                     CompressionFile::HeaderTrailer::SPACE + pht->opt.dict_size);
+                     CompressionFile::HeaderTrailer::SPACE + pht->opt.dict_size,
+                     pht->opt.block_size);
     if (pheader_trailer)
         *pheader_trailer = *pht;
     return true;
@@ -780,9 +768,9 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     int nbatch = compressor->nbatch();
     LOG_DEBUG("nbatch: `, buffer need allocate: `", nbatch, nbatch * buf_size);
     auto raw_data = new unsigned char[nbatch * buf_size];
-    DEFER(delete [] raw_data);
+    DEFER(delete[] raw_data);
     auto compressed_data = new unsigned char[nbatch * buf_size];
-    DEFER(delete [] compressed_data);
+    DEFER(delete[] compressed_data);
     std::vector<size_t> raw_chunk_len, compressed_len;
     compressed_len.resize(nbatch);
     raw_chunk_len.resize(nbatch);
@@ -804,9 +792,10 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
             raw_chunk_len[n++] = block_size;
             step -= block_size;
         }
-        ret = compressor->compress_batch(raw_data, &(raw_chunk_len[0]), compressed_data, n * buf_size,
-            &(compressed_len[0]), n);
-        if (ret != 0) return -1;
+        ret = compressor->compress_batch(raw_data, &(raw_chunk_len[0]), compressed_data,
+                                         n * buf_size, &(compressed_len[0]), n);
+        if (ret != 0)
+            return -1;
         for (off_t j = 0; j < n; j++) {
             ret = as->write(&compressed_data[j * buf_size], compressed_len[j]);
             if (ret < (ssize_t)compressed_len[j]) {
@@ -815,12 +804,12 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
             if (crc32_verify) {
                 auto crc32_code = crc32c(&compressed_data[j * buf_size], compressed_len[j]);
                 LOG_DEBUG("append ` bytes crc32_code: {offset: `, count: `, crc32: `}",
-                            sizeof(uint32_t), moffset, compressed_len[j], crc32_code);
+                          sizeof(uint32_t), moffset, compressed_len[j], crc32_code);
                 compressed_len[j] += sizeof(uint32_t);
                 ret = as->write(&crc32_code, sizeof(uint32_t));
                 if (ret < sizeof(uint32_t)) {
                     LOG_ERRNO_RETURN(0, -1, "failed to write crc32code, offset: `, crc32: `",
-                        moffset, crc32_code);
+                                     moffset, crc32_code);
                 }
             }
             block_len.push_back(compressed_len[j]);

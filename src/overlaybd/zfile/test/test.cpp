@@ -84,7 +84,7 @@ public:
             fsrc->pread(data0, sizeof(data0), i);
             fzfile->pread(data1, sizeof(data1), i);
             auto r = memcmp(data0, data1, sizeof(data0));
-            EXPECT_EQ(r, 0);
+            ASSERT_EQ(r, 0);
             if (r != 0) {
                 LOG_ERROR("verify failed. offset: `", i);
                 return;
@@ -111,7 +111,7 @@ public:
             fsrc->pread(data0, len * 512, offset * 512);
             fzfile->pread(data1, len * 512, offset * 512);
             auto r = memcmp(data0, data1, len * 512);
-            EXPECT_EQ(r, 0);
+            ASSERT_EQ(r, 0);
             if (r != 0) {
                 LOG_ERROR("verify failed. offset: `", offset * 512);
                 return;
@@ -135,111 +135,64 @@ public:
     }
 };
 
-TEST_F(ZFileTest, verify_lz4) {
-    // log_output_level = 1;
-    auto fn_src = "verify.data";
-    auto fn_lz4 = "verify.zlz4";
-    unique_ptr<IFile> fsrc(lfs->open(fn_src, O_CREAT | O_TRUNC | O_RDWR, 0644));
-    unique_ptr<IFile> fdst(lfs->open(fn_lz4, O_CREAT | O_TRUNC | O_RDWR, 0644));
-    if (!fsrc || !fdst) {
-        LOG_ERROR("err: `(`)", errno, strerror(errno));
-    }
-    randwrite(fsrc.get(), write_times);
-    CompressOptions opt;
-    opt.verify = 1;
-    CompressArgs args(opt);
-    if (zfile_compress(fsrc.get(), fdst.get(), &args) != 0) {
-        LOG_ERROR("err: `(`)", errno, strerror(errno));
-        return;
-    }
-    fdst->close();
-    auto file = lfs->open(fn_lz4, O_RDONLY /*| O_DIRECT*/);
-    auto faligned_dst = file;
-    // auto faligned_dst = new_aligned_file_adaptor(file, ALIGNMENT_4K, true);
-    IFile *flz4 = zfile_open_ro(faligned_dst, /*verify=*/true, false);
-    EXPECT_EQ(is_zfile(faligned_dst), 1);
-    DEFER(flz4->close());
-    seqread(fsrc.get(), flz4);
-    randread(fsrc.get(), flz4);
-}
-
+/*
+testcases:
+  checksum{disable, enable} x algorithm{lz4, zstd} x bs{4K, 8K, 16K, 32K, 64K}
+*/
 TEST_F(ZFileTest, verify_compression) {
     // log_output_level = 1;
     auto fn_src = "verify.data";
-    auto fn_lz4 = "verify.zlz4";
+    auto fn_zfile = "verify.zfile";
     auto fn_dec = "verify.data.0";
     auto src = lfs->open(fn_src, O_CREAT | O_TRUNC | O_RDWR /*| O_DIRECT */, 0644);
-    auto dst = lfs->open(fn_lz4, O_CREAT | O_TRUNC | O_RDWR /*| O_DIRECT */, 0644);
-    auto dec = lfs->open(fn_dec, O_CREAT | O_TRUNC | O_RDWR /*| O_DIRECT */, 0644);
     unique_ptr<IFile> fsrc(src);
-    // unique_ptr<IFile> fdst(new_aligned_file_adaptor(dst, ALIGNMENT_4K, true));
-    unique_ptr<IFile> fdst(dst);
-    unique_ptr<IFile> fdec(dec);
-    if (!fsrc || !fdst || !fdec) {
+    if (!fsrc) {
         LOG_ERROR("err: `(`)", errno, strerror(errno));
     }
+
     randwrite(fsrc.get(), write_times);
-    CompressOptions opt;
-    CompressArgs args(opt);
-    zfile_compress(fsrc.get(), nullptr, &args);
-    int ret = zfile_compress(fsrc.get(), fdst.get(), &args);
-    EXPECT_EQ(ret, 0);
-    ret = zfile_decompress(fdst.get(), fdec.get());
-    EXPECT_EQ(ret, 0);
-    // int read_times = 100000;
-    EXPECT_EQ(is_zfile(fdec.get()), 0);
-    LOG_INFO("start seqread.");
     struct stat _st;
     if (fsrc->fstat(&_st) != 0) {
         LOG_ERROR("err: `(`)", errno, strerror(errno));
         return;
     }
-    auto size = _st.st_size;
-    char data0[16384]{}, data1[16384]{};
-    for (auto i = 0; i < size; i += sizeof(data0)) {
-        fsrc->pread(data0, sizeof(data0), i);
-        fdec->pread(data1, sizeof(data1), i);
-        if (memcmp(data0, data1, sizeof(data0)) != 0) {
-            LOG_ERROR("verify failed.");
-            return;
+    for (auto enable_crc = 0; enable_crc <= 1; enable_crc++) {
+        for (auto algorithm = 1; algorithm <= 2; algorithm++) {
+            for (auto bs = 12; bs <= 16; bs++ ) { // 4K ~ 64K
+                auto dst = lfs->open(fn_zfile, O_CREAT | O_TRUNC | O_RDWR /*| O_DIRECT */, 0644);
+                auto dec = lfs->open(fn_dec, O_CREAT | O_TRUNC | O_RDWR /*| O_DIRECT */, 0644);
+                unique_ptr<IFile> fdst(dst);
+                unique_ptr<IFile> fdec(dec);
+                if (!fdst || !fdec) {
+                    LOG_ERROR("err: `(`)", errno, strerror(errno));
+                }
+                CompressOptions opt;
+                opt.type = algorithm;
+                opt.verify = enable_crc;
+                opt.block_size = 1<<bs;
+                CompressArgs args(opt);
+                zfile_compress(fsrc.get(), nullptr, &args);
+                int ret = zfile_compress(fsrc.get(), fdst.get(), &args);
+                auto fzfile = zfile_open_ro(fdst.get(), opt.verify);
+                EXPECT_EQ(ret, 0);
+                seqread(fsrc.get(), fzfile);
+                randread(fsrc.get(), fzfile);
+                ret = zfile_decompress(fdst.get(), fdec.get());
+                EXPECT_EQ(ret, 0);
+                EXPECT_EQ(is_zfile(fdec.get()), 0);
+                LOG_INFO("start seqread.");
+                auto size = _st.st_size;
+                char data0[16384]{}, data1[16384]{};
+                for (auto i = 0; i < size; i += sizeof(data0)) {
+                    fsrc->pread(data0, sizeof(data0), i);
+                    fdec->pread(data1, sizeof(data1), i);
+                    if (memcmp(data0, data1, sizeof(data0)) != 0) {
+                        LOG_ERROR("verify failed.");
+                        return;
+                    }
+                }
+            }
         }
-    }
-}
-
-TEST_F(ZFileTest, checksum) {
-    // log_output_level = 0;
-    auto fn_src = "verify.data";
-    auto fn_lz4 = "verify.zlz4";
-    auto fn_dec = "verify.data.0";
-    auto src = lfs->open(fn_src, O_CREAT | O_TRUNC | O_RDWR /*| O_DIRECT */, 0644);
-    auto dst = lfs->open(fn_lz4, O_CREAT | O_TRUNC | O_RDWR /*| O_DIRECT */, 0644);
-    auto dec = lfs->open(fn_dec, O_CREAT | O_TRUNC | O_RDWR /*| O_DIRECT */, 0644);
-
-    randwrite(src, write_times);
-    CompressOptions opt;
-    opt.verify = 1;
-    CompressArgs args(opt);
-    int ret = zfile_compress(src, dst, &args);
-    EXPECT_EQ(ret, 0);
-    ret = zfile_decompress(dst, dec);
-    EXPECT_EQ(ret, 0);
-    // int read_times = 100000;
-    EXPECT_EQ(is_zfile(dec), 0);
-    LOG_INFO("start seqread.");
-    struct stat _st;
-    if (src->fstat(&_st) != 0) {
-        LOG_ERROR("err: `(`)", errno, strerror(errno));
-        return;
-    }
-    auto size = _st.st_size;
-    char data0[16384]{}, data1[16384]{};
-    for (auto i = 0; i < size; i += sizeof(data0)) {
-        auto readn0 = src->pread(data0, sizeof(data0), i);
-        auto readn1 = dec->pread(data1, sizeof(data1), i);
-        ASSERT_EQ(readn0, (ssize_t)sizeof(data0));
-        ASSERT_EQ(readn1, (ssize_t)sizeof(data1));
-        auto r = memcmp(data0, data1, sizeof(data0));
-        ASSERT_EQ(r, 0);
     }
 }
 
