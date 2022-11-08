@@ -38,7 +38,7 @@ endif()
 set (CMAKE_CXX_STANDARD 14)
 
 add_library(zfile_lib STATIC ${SOURCE_ZFILE} ${SOURCE_LZ4})
-target_link_libraries(zfile_lib photon_static crc32_lib ${STATIC_LIBZSTD})
+target_link_libraries(zfile_lib photon_static crc32_lib ${LIBZSTD})
 
 if (ENABLE_QAT)
     target_compile_definitions(zfile_lib PUBLIC -DENABLE_QAT)
