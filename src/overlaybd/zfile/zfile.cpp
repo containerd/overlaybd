@@ -444,12 +444,8 @@ public:
                 memcpy(buf, raw + block.cp_begin, block.cp_len);
             }
             readn += block.cp_len;
-            // LOG_DEBUG("append buf, {offset: `, length: `, crc: `}", (off_t)buf -
-            // (off_t)start_addr,
-            //           block.cp_len, block.crc32_code());
             buf = (unsigned char *)buf + block.cp_len;
         }
-        // LOG_DEBUG("done. (readn: `)", readn);
         return readn;
     }
 };
