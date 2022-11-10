@@ -19,9 +19,9 @@ jobs:
     - name: Install Dependencies
       shell: bash
       run: |
-        sudo apt update -y
-        sudo apt install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev rpm
-        sudo apt install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm libzstd-dev
+        sudo apt-get update -y
+        sudo apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev rpm
+        sudo apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm libzstd-dev
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{github.workspace}}/build
