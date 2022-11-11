@@ -13,17 +13,17 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - name: Install Dependencies
       shell: bash
       run: |
-        sudo apt update -y
-        sudo apt install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libzstd-dev
-        sudo apt install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm
+        sudo apt-get update -y
+        sudo apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libzstd-dev
+        sudo apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm
         wget https://github.com/google/googletest/archive/refs/tags/release-1.11.0.tar.gz
         tar -zxvf release-1.11.0.tar.gz
         cd googletest-release-1.11.0/
@@ -62,7 +62,7 @@ jobs:
         echo -n "naa.123456789abcdef" | sudo tee /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/nexus
         sudo ln -s /sys/kernel/config/target/core/user_1/vol1 /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0/vol1
         lsblk
-        sudo apt install -y lsscsi
+        sudo apt-get install -y lsscsi
         dev=`lsscsi | grep TCMU | awk '{print $7}'`
         echo $dev
         sudo mkdir mp
