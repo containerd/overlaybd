@@ -1157,6 +1157,9 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
     // args.parent_uuid.to_string(parent_uuid, UUID::String::LEN);
     LOG_INFO("Layer Info: { UUID:`, Parent_UUID: `, Sparse: ` Virtual size: `, Version: `.` }", raw,
              args.parent_uuid, args.sparse_rw, rst->m_vsize, tmp.version, tmp.sub_version);
+    if (args.sparse_rw) {
+        fdata->ftruncate(args.virtual_size + HeaderTrailer::SPACE);
+    }
     return rst;
 }
 
