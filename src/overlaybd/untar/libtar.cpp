@@ -33,6 +33,7 @@
 #include <photon/fs/path.h>
 
 #define BIT_ISSET(bitmask, bit) ((bitmask) & (bit))
+static const char ZERO_BLOCK[T_BLOCKSIZE] = {0};
 
 int mkdir_hier(photon::fs::IFileSystem *fs, const std::string_view &dir) {
 	struct stat s;
@@ -57,7 +58,7 @@ int Tar::read_header_internal() {
 
 	while ((i = file->read(&header, T_BLOCKSIZE)) == T_BLOCKSIZE) {
 		/* two all-zero blocks mark EOF */
-		if (header.name[0] == '\0') {
+		if (header.name[0] == '\0' && std::memcmp(&header, ZERO_BLOCK, T_BLOCKSIZE) == 0) {
 			num_zero_blocks++;
 			if (!BIT_ISSET(options, TAR_IGNORE_EOT)
 				&& num_zero_blocks >= 2)
@@ -69,16 +70,19 @@ int Tar::read_header_internal() {
 		/* verify magic and version */
 		if (BIT_ISSET(options, TAR_CHECK_MAGIC)
 			&& strncmp(header.magic, TMAGIC, TMAGLEN - 1) != 0) {
+			LOG_ERROR("failed check magic");
 			return -2;
 		}
 
 		if (BIT_ISSET(options, TAR_CHECK_VERSION)
 		    && strncmp(header.version, TVERSION, TVERSLEN) != 0) {
+			LOG_ERROR("failed check version");
 			return -2;
 		}
 
 		/* check chksum */
 		if (!BIT_ISSET(options, TAR_IGNORE_CRC) && !header.crc_ok()) {
+			LOG_ERROR("failed check crc");
 			return -2;
 		}
 
@@ -142,11 +146,13 @@ int Tar::read_header() {
 		/* check for GNU long link extention */
 		case GNU_LONGLINK_TYPE:	
 			sz = read_sepcial_file(header.gnu_longlink);
+			LOG_DEBUG("found gnu longlink ", VALUE(sz));
 			if (sz < 0) return -1;
 			break;
 		/* check for GNU long name extention */
 		case GNU_LONGNAME_TYPE:
 			sz = read_sepcial_file(header.gnu_longname);
+			LOG_DEBUG("found gnu longname ", VALUE(sz));
 			if (sz < 0) return -1;
 			break;
 		/* check for Pax Format Header */
@@ -154,8 +160,8 @@ int Tar::read_header() {
 			if (pax == nullptr)
 				pax = new PaxHeader();
 			sz = read_sepcial_file(pax->pax_buf);
-			if (sz < 0) return -1;
 			LOG_DEBUG("found pax header ", VALUE(sz));
+			if (sz < 0) return -1;
 			i = pax->read_pax(sz);
 			if (i) {
 				errno = EINVAL;
