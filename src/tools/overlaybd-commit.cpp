@@ -48,6 +48,8 @@ IFile *open_file(const char *fn, int flags, mode_t mode = 0) {
 int main(int argc, char **argv) {
     string commit_msg;
     string parent_uuid;
+    std::string algorithm;
+    int block_size;
     std::string data_file_path, index_file_path, commit_file_path;
     bool compress_zfile = false;
 
@@ -55,6 +57,10 @@ int main(int argc, char **argv) {
     app.add_option("-m", commit_msg, "add some custom message if needed");
     app.add_option("-p", parent_uuid, "parent uuid");
     app.add_flag("-z", compress_zfile, "compress to zfile");
+    app.add_option("--algorithm", algorithm, "compress algorithm, [lz4|zstd]");
+    app.add_option(
+           "--bs", block_size,
+           "The size of a data block in KB. Must be a power of two between 4K~64K [4/8/16/32/64])");
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     app.add_option("commit_file", commit_file_path, "commit file path")->type_name("FILEPATH")->required();
@@ -73,10 +79,33 @@ int main(int argc, char **argv) {
     IFile *zfile_builder = nullptr;
     ZFile::CompressOptions opt;
     opt.verify = 1;
-    ZFile::CompressArgs zfile_args(opt);
     if (compress_zfile) {
+        if (algorithm == "") {
+            algorithm = "lz4";
+        }
+        if (algorithm == "lz4") {
+            opt.type = ZFile::CompressOptions::LZ4;
+        } else if (algorithm == "zstd") {
+            opt.type = ZFile::CompressOptions::ZSTD;
+        } else {
+            fprintf(stderr, "invalid '--algorithm' parameters.\n");
+            exit(-1);
+        }
+        if (block_size == 0) {
+            block_size = 4;
+        }
+        opt.block_size = block_size * 1024;
+        if ((opt.block_size & (opt.block_size - 1)) != 0 || (block_size > 64 || block_size < 4)) {
+            fprintf(stderr, "invalid '--bs' parameters.\n");
+            exit(-1);
+        }
+        ZFile::CompressArgs zfile_args(opt);
         zfile_builder = ZFile::new_zfile_builder(out, &zfile_args, false);
         out = zfile_builder;
+    } else {
+        if (algorithm != "" || block_size != 0) {
+            fprintf(stderr, "WARNING option '--bs' and '--algorithm' will be ignored without '-z'\n");
+        }
     }
 
     CommitArgs args(out);
