@@ -49,7 +49,7 @@ int main(int argc, char **argv) {
     string commit_msg;
     string parent_uuid;
     std::string algorithm;
-    int block_size;
+    int block_size = -1;
     std::string data_file_path, index_file_path, commit_file_path;
     bool compress_zfile = false;
 
@@ -57,10 +57,10 @@ int main(int argc, char **argv) {
     app.add_option("-m", commit_msg, "add some custom message if needed");
     app.add_option("-p", parent_uuid, "parent uuid");
     app.add_flag("-z", compress_zfile, "compress to zfile");
-    app.add_option("--algorithm", algorithm, "compress algorithm, [lz4|zstd]");
+    app.add_option("--algorithm", algorithm, "compress algorithm, [lz4|zstd](default lz4)");
     app.add_option(
            "--bs", block_size,
-           "The size of a data block in KB. Must be a power of two between 4K~64K [4/8/16/32/64])");
+           "The size of a data block in KB. Must be a power of two between 4K~64K [4/8/16/32/64](default 4)");
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     app.add_option("commit_file", commit_file_path, "commit file path")->type_name("FILEPATH")->required();
@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "invalid '--algorithm' parameters.\n");
             exit(-1);
         }
-        if (block_size == 0) {
+        if (block_size == -1) {
             block_size = 4;
         }
         opt.block_size = block_size * 1024;
