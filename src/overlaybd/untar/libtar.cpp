@@ -290,9 +290,10 @@ int Tar::extract_all() {
 	// change time for all dir
 	for (auto dir : dirs) {
 		std::string path = dir.first;
-		struct utimbuf ut;
-		ut.modtime = ut.actime = dir.second;
-		if (fs->utime(path.c_str(), &ut) == -1) {
+		struct timeval tv[2];
+		tv[0].tv_sec = tv[1].tv_sec = dir.second;
+		tv[0].tv_usec = tv[1].tv_usec = 0;
+		if (fs->lutimes(path.c_str(), tv) == -1) {
 			LOG_ERROR("utime failed, filename `, `", dir.first.c_str(), strerror(errno));
 			return -1;
 		}
@@ -391,7 +392,7 @@ int Tar::extract_regfile(const char *filename) {
 	long size = get_size();
 
 	LOG_DEBUG("  ==> extracting: ` (` bytes)\n", filename, size);
-	photon::fs::IFile *fout = fs->open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+	photon::fs::IFile *fout = fs->open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0666);
 	if (fout == nullptr) {
 		return -1;
 	}
