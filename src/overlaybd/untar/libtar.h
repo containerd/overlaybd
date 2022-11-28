@@ -32,6 +32,8 @@
 #define T_NAMELEN		100
 #define T_PREFIXLEN		155
 #define T_MAXPATHLEN		(T_NAMELEN + T_PREFIXLEN)
+#define T_BLOCKMASK		(~(uint64_t)(T_BLOCKSIZE - 1))
+#define FS_BLOCKSIZE	4096
 
 /* GNU extensions for typeflag */
 #define GNU_LONGNAME_TYPE	'L'
@@ -140,14 +142,18 @@ public:
 	photon::fs::IFileSystem *fs = nullptr; // target
 	photon::fs::IFile *file = nullptr; // source
 	int options;
+	uint64_t fs_blocksize;
+	uint64_t fs_blockmask;
 	TarHeader header;
 	char *th_pathname = nullptr;
 	std::set<std::string> unpackedPaths;
 	std::list<std::pair<std::string, int>> dirs;	// <path, utime>
 	PaxHeader *pax = nullptr;
 
-	Tar(photon::fs::IFile *file, photon::fs::IFileSystem *fs, int options)
-		: file(file), fs(fs), options(options) {
+	Tar(photon::fs::IFile *file, photon::fs::IFileSystem *fs, int options,
+		uint64_t fs_blocksize = FS_BLOCKSIZE)
+		: file(file), fs(fs), options(options), fs_blocksize(fs_blocksize) {
+		fs_blockmask = ~(fs_blocksize - 1);
 	}
 	~Tar() {
 		if (th_pathname != nullptr)
