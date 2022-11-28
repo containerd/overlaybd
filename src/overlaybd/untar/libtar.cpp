@@ -401,15 +401,17 @@ int Tar::extract_regfile(const char *filename) {
 	off_t pos = 0;
 	size_t left = size;
 	while (left > 0) {
-		size_t rsz = T_BLOCKSIZE;
+		size_t rsz;
 		if (left > 1024 * 1024)
 			rsz = 1024 * 1024;
-		else if (left > T_BLOCKSIZE)
-			rsz = left / T_BLOCKSIZE * T_BLOCKSIZE;
+		else if (left > fs_blocksize)
+			rsz = left & fs_blockmask;
+		else
+			rsz = (left & ~T_BLOCKMASK) ? (left & T_BLOCKMASK) + T_BLOCKSIZE : (left & T_BLOCKMASK);
 		if (file->read(buf, rsz) != rsz) {
 			LOG_ERRNO_RETURN(0, -1, "failed to read block");
 		}
-		size_t wsz = (left < T_BLOCKSIZE) ? left : rsz;
+		size_t wsz = (left < rsz) ? left : rsz;
 		if (fout->pwrite(buf, wsz, pos) != wsz) {
 			LOG_ERRNO_RETURN(0, -1, "failed to write file");
 		}
