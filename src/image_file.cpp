@@ -210,7 +210,7 @@ int ImageFile::open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer,
             file = __open_ro_file(opened);
         } else {
             opened = layer.digest();
-            file = __open_ro_remote(layer.dir(), layer.digest(), layer.size(), index);
+            file = __open_ro_remote(layer.dir(), layer.digest(), layer.size());
         }
     }
     if (file != nullptr) {
@@ -259,10 +259,6 @@ LSMT::IFileRO *ImageFile::open_lowers(std::vector<ImageConfigNS::LayerConfig> &l
         goto ERROR_EXIT;
     }
     LOG_INFO("LSMT::open_files_ro(files, `) success", lowers.size());
-
-    if (m_prefetcher != nullptr) {
-        m_prefetcher->replay();
-    }
 
     return ret;
 
@@ -316,11 +312,10 @@ ERROR_EXIT:
 }
 
 int ImageFile::init_image_file() {
-    LSMT::IFileRO *lower_file = nullptr;
-    LSMT::IFileRW *upper_file = nullptr;
-    LSMT::IFileRW *stack_ret = nullptr;
-    ImageConfigNS::UpperConfig upper;
-    bool record_no_download = false;
+    LSMT::IFileRO *lower_file = NULL;
+    LSMT::IFileRW *upper_file = NULL;
+    LSMT::IFileRW *stack_ret = NULL;
+
     bool has_error = false;
     auto lowers = conf.lowers();
 
@@ -379,14 +374,16 @@ int ImageFile::init_image_file() {
     read_only = false;
 
 SUCCESS_EXIT:
-    if (conf.download().enable() && !record_no_download) {
+    if (conf.download().enable() == true) {
         start_bk_dl_thread();
     }
     return 1;
 
 ERROR_EXIT:
-    delete lower_file;
-    delete upper_file;
+    if (lower_file)
+        delete lower_file;
+    if (upper_file)
+        delete upper_file;
     return -1;
 }
 

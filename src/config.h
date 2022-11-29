@@ -56,8 +56,6 @@ struct ImageConfig : public ConfigUtils::Config {
     APPCFG_PARA(upper, UpperConfig);
     APPCFG_PARA(resultFile, std::string, "");
     APPCFG_PARA(download, DownloadConfig);
-    APPCFG_PARA(accelerationLayer, bool, false);
-    APPCFG_PARA(recordTracePath, std::string, "");
 };
 
 struct P2PConfig : public ConfigUtils::Config {

@@ -51,8 +51,9 @@ public:
     }
 
     ~ImageFile() {
-        delete m_file;
-        delete m_prefetcher;
+        if (m_file != nullptr) {
+            delete m_file;
+        }
     }
 
     int close() override {

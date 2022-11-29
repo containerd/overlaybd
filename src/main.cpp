@@ -288,16 +288,15 @@ static char *tcmu_get_path(struct tcmu_device *dev) {
 static int dev_open(struct tcmu_device *dev) {
     char *config = tcmu_get_path(dev);
     LOG_INFO("dev open `", config);
-    if (!config) {
-        LOG_ERROR_RETURN(0, -EPERM, "get image config path failed");
-    }
+    if (!config)
+        return -EPERM;
 
     struct timeval start;
     gettimeofday(&start, NULL);
 
     ImageFile *file = imgservice->create_image_file(config);
     if (file == nullptr) {
-        LOG_ERROR_RETURN(0, -EPERM, "create image file failed");
+        return -EPERM;
     }
 
     obd_dev *odev = new obd_dev;
