@@ -188,8 +188,6 @@ public:
                 }
                 assert((uint64_t)deltas[i - 1] + ibuf[i - 1] < (uint64_t)uinttype_max);
                 deltas.push_back(deltas[i - 1] + ibuf[i - 1]);
-                LOG_DEBUG("deltas[`]: `, ibuf[`]: `, raw_offset: `", i, deltas[i], i, ibuf[i - 1],
-                          this->operator[](i));
             }
             LOG_INFO("create jump table done. {part_count: `, deltas_count: `, size: `}",
                      partial_offset.size(), deltas.size(),
