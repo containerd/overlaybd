@@ -52,9 +52,9 @@ To build overlaybd from source code, the following dependencies are required:
 * gcc/g++ >= 7
 
 * Libaio, libcurl, libnl3, glib2 and openssl runtime and development libraries.
-  * CentOS 7/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel libzstd-static`
-  * CentOS 8: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel libzstd-devel`
-  * Debian/Ubuntu: `sudo apt install libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libgflags-dev libzstd-dev`
+  * CentOS 7/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel libzstd-static e2fsprogs-devel`
+  * CentOS 8: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel libzstd-devel e2fsprogs-devel`
+  * Debian/Ubuntu: `sudo apt install libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libgflags-dev libzstd-dev libext2fs-dev`
 
 #### Build
 
@@ -90,7 +90,7 @@ cmake -D ENABLE_ISAL=1 ..
 
 If you want to use QAT to accelerate compression/decompression.
 
-```bash 
+```bash
 cmake -D ENABLE_QAT=1 ..
 ```
 
@@ -143,7 +143,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | registryCacheSizeGB | The max size of cache, in GB.                                                                         |
 | cacheType           | Cache type used, `file` and `ocf` are supported, `file` is the default.                               |
 | credentialFilePath(legacy)  | The credential used for fetching images on registry. `/opt/overlaybd/cred.json` is the default value. |
-| credentialConfig.mode | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` | 
+| credentialConfig.mode | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` |
 credentialConfig.path | credential file path or url which is determined by `mode`
 | download.enable     | Whether background downloading is enabled or not.                                                     |
 | download.delay      | The seconds waiting to start downloading task after the overlaybd device launched.                    |
@@ -194,7 +194,7 @@ Overlaybd supports serveral credential mode. Here are some example `credentialCo
 ```
 
 - mode **http**
-  
+
   the `credentialConfig.path` should be a server listening address implemented by developers and can reply to credential information.
 
 ```json
