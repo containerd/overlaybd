@@ -276,9 +276,12 @@ int ImageService::init() {
             }
         }
 
-        LOG_INFO("create registryfs with cafile:`", cafile);
+        LOG_INFO("create registryfs with cafile:`, version:`", cafile, global_conf.registryFsVersion());
+        auto registryfs_creator = new_registryfs_v1;
+        if (global_conf.registryFsVersion() == "v2")
+            registryfs_creator = new_registryfs_v2;
 
-        auto registry_fs = new_registryfs_with_credential_callback(
+        auto registry_fs = registryfs_creator(
             {this, &ImageService::reload_auth}, cafile, 30UL * 1000000);
         if (registry_fs == nullptr) {
             LOG_ERROR_RETURN(0, -1, "create registryfs failed.");

@@ -153,6 +153,7 @@ credentialConfig.path | credential file path or url which is determined by `mode
 | download.maxMBps    | The speed limit in MB/s for a downloading task.                                                       |
 | enableAudit         | Enable audit or not.                                                                                  |
 | auditPath           | The path for audit file, `/var/log/overlaybd-audit.log` is the default value.                         |
+| registryFsVersion   | registry client version, 'v1' libcurl based, 'v2' is photon http based. 'v1' is the default value.    |
 
 > NOTE: `download` is the config for background downloading. After an overlaybd device is lauched, a background task will be running to fetch the whole blobs into local directories. After downloading, I/O requests are directed to local files. Unlike other options, download config is reloaded when a device launching.
 

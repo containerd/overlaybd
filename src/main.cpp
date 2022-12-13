@@ -327,7 +327,6 @@ static int close_cnt = 0;
 static void dev_close(struct tcmu_device *dev) {
     obd_dev *odev = (obd_dev *)tcmu_dev_get_private(dev);
     delete odev->loop;
-    odev->file->close();
     delete odev->file;
     delete odev;
     close_cnt++;

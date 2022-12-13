@@ -1,7 +1,7 @@
 FetchContent_Declare(
   rapidjson
   GIT_REPOSITORY https://github.com/Tencent/rapidjson.git
-  GIT_TAG master
+  GIT_TAG 80b6d1c83402a5785c486603c5611923159d0894
 )
 FetchContent_GetProperties(rapidjson)
 if (NOT rapidjson_POPULATED)
