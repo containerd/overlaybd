@@ -1,0 +1,23 @@
+{
+    "logLevel": 1,
+    "registryCacheDir": "/opt/overlaybd/registry_cache",
+    "registryCacheSizeGB": 4,
+    "credentialConfig": {
+        "mode": "file",
+        "path": "/opt/overlaybd/cred.json"
+    },
+    "ioEngine": 0,
+    "download": {
+        "enable": true,
+        "delay": 600,
+        "delayExtra": 30,
+        "maxMBps": 100
+    },
+    "p2pConfig": {
+        "enable": false,
+        "address": "localhost:9731/accelerator"
+    },
+    "enableAudit": true,
+    "auditPath": "/var/log/overlaybd-audit.log",
+    "registryFsVersion": "v2"
+}

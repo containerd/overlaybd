@@ -94,8 +94,7 @@ public:
         }
 
         if (m_trace_file != nullptr) {
-            m_trace_file->close();
-            m_trace_file = nullptr;
+            safe_delete(m_trace_file);
         }
     }
 

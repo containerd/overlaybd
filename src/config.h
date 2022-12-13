@@ -88,6 +88,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(enableAudit, bool, true);
     APPCFG_PARA(p2pConfig, P2PConfig);
     APPCFG_PARA(auditPath, std::string, "/var/log/overlaybd-audit.log");
+    APPCFG_PARA(registryFsVersion, std::string, "v1");
 };
 
 struct AuthConfig : public ConfigUtils::Config {
@@ -101,6 +102,6 @@ struct ImageAuthResponse : public ConfigUtils::Config {
     APPCFG_PARA(traceId, std::string, "");
 	APPCFG_PARA(success, bool, false);
 	APPCFG_PARA(data, AuthConfig);
-}; 
+};
 
 } // namespace ImageConfigNS

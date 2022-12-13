@@ -26,9 +26,7 @@
 
 #include <photon/common/utility.h>
 #include <photon/common/timeout.h>
-#include <photon/net/curl.h>
 #include <photon/common/iovector.h>
-#include <photon/common/identity-pool.h>
 #include <photon/common/estring.h>
 #include <photon/common/expirecontainer.h>
 #include <photon/common/callback.h>
@@ -36,19 +34,23 @@
 #include <photon/common/alog.h>
 #include <photon/fs/filesystem.h>
 #include <photon/fs/virtual-file.h>
+#include <photon/net/http/client.h>
+#include <photon/net/utils.h>
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 
 using namespace photon::fs;
+using namespace photon::net::http;
 
 static const estring kDockerRegistryAuthChallengeKeyValuePrefix = "www-authenticate";
 static const estring kAuthHeaderKey = "Authorization";
 static const estring kBearerAuthPrefix = "Bearer ";
-static const estring kDockerRegistryBlobReaderFailPrefix = "DockerRegistryBolbReader Failure: ";
 static const uint64_t kMinimalTokenLife = 30L * 1000 * 1000; // token lives atleast 30s
 static const uint64_t kMinimalAUrlLife = 300L * 1000 * 1000; // actual_url lives atleast 300s
 static const uint64_t kMinimalMetaLife = 300L * 1000 * 1000; // actual_url lives atleast 300s
+
+using HTTP_OP = photon::net::http::Client::OperationOnStack<64 * 1024 - 1>;
 
 static std::unordered_map<estring_view, estring_view> str_to_kvmap(const estring &src) {
     std::unordered_map<estring_view, estring_view> ret;
@@ -70,7 +72,7 @@ struct UrlInfo {
     estring info;
 };
 
-class RegistryFSImpl : public RegistryFS {
+class RegistryFSImpl_v2 : public RegistryFS {
 public:
     UNIMPLEMENTED_POINTER(IFile *creat(const char *, mode_t) override);
     UNIMPLEMENTED(int mkdir(const char *, mode_t) override);
@@ -101,63 +103,51 @@ public:
         return open(pathname, flags); // ignore mode
     }
 
-    RegistryFSImpl(PasswordCB callback, const char *caFile, uint64_t timeout)
+    RegistryFSImpl_v2(PasswordCB callback, const char *caFile, uint64_t timeout)
         : m_callback(callback), m_caFile(caFile), m_timeout(timeout),
           m_meta_size(kMinimalMetaLife), m_scope_token(kMinimalTokenLife),
           m_url_info(kMinimalAUrlLife) {
+        m_client = new_http_client();
     }
 
-    ~RegistryFSImpl() {
+    ~RegistryFSImpl_v2() {
+        delete m_client;
     }
 
-    long GET(const char *url, photon::net::HeaderMap *headers, off_t offset, size_t count,
-             photon::net::IOVWriter *writer, uint64_t timeout) {
+    long get_data(const estring &url, off_t offset, size_t count, uint64_t timeout, HTTP_OP &op) {
         Timeout tmo(timeout);
         long ret = 0;
         UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
-            return getActualUrl(url, tmo.timeout(), ret);
+            return get_actual_url(url, tmo.timeout(), ret);
         });
+
         if (actual_info == nullptr)
             return ret;
 
-        const char *actual_url = url;
+        estring *actual_url = (estring*)&url;
         if (actual_info->mode == UrlMode::Redirect)
-            actual_url = actual_info->info.data();
+            actual_url = &actual_info->info;
         //use p2p proxy
         estring accelerate_url;
         if(m_accelerate.size() > 0) {
-            accelerate_url = m_accelerate + "/" + actual_url;
-            actual_url = accelerate_url.data();
-            LOG_DEBUG("p2p_url: `", actual_url);
+            accelerate_url = m_accelerate + "/" + *actual_url;
+            actual_url = &accelerate_url;
+            LOG_DEBUG("p2p_url: `", *actual_url);
         }
 
-        {
-            auto curl = get_cURL();
-            DEFER({ release_cURL(curl); });
-            curl->set_redirect(10);
-            // set token if needed
-            if (actual_info->mode == UrlMode::Self && !actual_info->info.empty())
-                curl->append_header(kAuthHeaderKey, actual_info->info);
-            if (offset >= 0) {
-                curl->set_range(offset, offset + count - 1);
-            } else {
-                curl->set_range(0, 0);
-            }
-            if (headers) {
-                curl->set_header_container(headers);
-            }
-            // going to challenge
-            if (writer) {
-                ret = curl->GET(actual_url, writer, tmo.timeout_us());
-            } else {
-                photon::net::DummyReaderWriter dummy;
-                ret = curl->GET(actual_url, &dummy, tmo.timeout_us());
-            }
-        }
-        if (ret == 200 || ret == 206) {
+
+        op.req.reset(Verb::GET, *actual_url);
+        op.req.headers.range(offset, offset + count - 1);
+        op.set_enable_proxy(m_client->has_proxy());
+        op.retry = 0;
+        op.timeout = tmo.timeout();
+        m_client->call(&op);
+
+        if (op.status_code == 200 || op.status_code == 206) {
             m_url_info.release(url);
             return ret;
         }
+
         m_url_info.release(url, true);
         LOG_ERROR_RETURN(0, ret, "Failed to fetch data ", VALUE(ret), VALUE(url));
     }
@@ -183,24 +173,19 @@ public:
         return 0;
     }
 
-    UrlInfo* getActualUrl(const char *url, uint64_t timeout, long &code) {
-        Timeout tmo(timeout);
-        auto curl = get_cURL();
-        DEFER({ release_cURL(curl); });
-        photon::net::HeaderMap headers;
-        photon::net::DummyReaderWriter dummy;
-        long ret = 0;
+    UrlInfo* get_actual_url(const estring &url, uint64_t timeout, long &code) {
 
+        Timeout tmo(timeout);
         estring authurl, scope;
         estring *token = nullptr;
-        if (getScopeAuth(url, &authurl, &scope, tmo.timeout()) < 0)
+        if (get_scope_auth(url, &authurl, &scope, tmo.timeout()) < 0)
             return nullptr;
 
         if (!scope.empty()) {
             token = m_scope_token.acquire(scope, [&]() -> estring * {
                 estring *token = new estring();
-                auto ret = m_callback(url);
-                if (!authenticate(authurl.c_str(), ret.first, ret.second, token, tmo.timeout())) {
+                auto ret = m_callback(url.data());
+                if (!authenticate(authurl, ret.first, ret.second, token, tmo.timeout())) {
                     code = 401;
                     delete token;
                     return nullptr;
@@ -210,23 +195,25 @@ public:
             if (token == nullptr)
                 LOG_ERROR_RETURN(0, nullptr, "Failed to get token");
         }
-        curl->set_redirect(0).set_nobody().set_header_container(&headers);
-        if (token && !token->empty())
-            curl->append_header(kAuthHeaderKey, kBearerAuthPrefix + *token);
-        // going to challenge
-        ret = curl->GET(url, &dummy, tmo.timeout_us());
-        code = ret;
-        if (ret == 401 || ret == 403) {
+
+        HTTP_OP op(m_client, Verb::GET, url);
+        op.follow = 0;
+        op.retry = 0;
+        op.req.headers.insert(kAuthHeaderKey, "Bearer ");
+        op.req.headers.value_append(*token);
+        op.timeout = tmo.timeout();
+        op.call();
+        if (op.status_code == 401 || op.status_code == 403) {
             LOG_WARN("Token invalid, try refresh password next time");
         }
-        if (300 <= ret && ret < 400) {
+        if (300 <= op.status_code && op.status_code < 400) {
             // pass auth, redirect to source
-            auto url = curl->getinfo<char *>(CURLINFO_REDIRECT_URL);
+            auto location = op.resp.headers["Location"];
             if (!scope.empty())
                 m_scope_token.release(scope);
-            return new UrlInfo{UrlMode::Redirect, url};
+            return new UrlInfo{UrlMode::Redirect, location};
         }
-        if (ret == 200) {
+        if (op.status_code == 200) {
             UrlInfo *info = new UrlInfo{UrlMode::Self, ""};
             if (token && !token->empty())
                 info->info = kBearerAuthPrefix + *token;
@@ -238,7 +225,7 @@ public:
         // unexpected situation
         if (!scope.empty())
             m_scope_token.release(scope, true);
-        LOG_ERROR_RETURN(0, nullptr, "Failed to get actual url ", VALUE(url), VALUE(ret));
+        LOG_ERROR_RETURN(0, nullptr, "Failed to get actual url, status_code=` ", op.status_code, VALUE(url));
     }
 
     virtual int setAccelerateAddress(const char* addr = "") override {
@@ -247,48 +234,54 @@ public:
     }
 
 protected:
-    using CURLPool = IdentityPool<photon::net::cURL, 4>;
-    CURLPool m_curl_pool;
     PasswordCB m_callback;
     estring m_accelerate;
     estring m_caFile;
     uint64_t m_timeout;
+    photon::net::http::Client* m_client;
     ObjectCache<estring, size_t *> m_meta_size;
     ObjectCache<estring, estring *> m_scope_token;
     ObjectCache<estring, UrlInfo *> m_url_info;
 
-    photon::net::cURL *get_cURL() {
-        auto curl = m_curl_pool.get();
-        curl->reset_error();
-        curl->reset().clear_header().set_cafile(m_caFile.c_str());
-        return curl;
-    };
-
-    void release_cURL(photon::net::cURL *curl) {
-        m_curl_pool.put(curl);
-    };
-
-    int getScopeAuth(const char *url, estring *authurl, estring *scope, uint64_t timeout) {
-        // need authorize;
+    int get_scope_auth(const estring &url, estring *authurl, estring *scope, uint64_t timeout) {
         Timeout tmo(timeout);
-        auto curl = get_cURL();
-        DEFER({ release_cURL(curl); });
-        photon::net::HeaderMap headers;
-        photon::net::DummyReaderWriter dummy;
-        curl->set_redirect(0).set_nobody().set_header_container(&headers);
+
+        HTTP_OP op(m_client, Verb::GET, url);
+        op.follow = 0;
+        op.retry = 0;
+        op.req.headers.range(0, 0);
+        op.timeout = tmo.timeout();
+        op.call();
+        if (op.status_code == -1)
+            LOG_ERROR_RETURN(ENOENT, -1, "connection failed");
+
         // going to challenge
-        auto ret = curl->GET(url, &dummy, tmo.timeout_us());
-        if (ret != 401 && ret != 403) {
+        if (op.status_code != 401 && op.status_code != 403) {
             // no token request accepted, seems token not need;
             return 0;
         }
-        if (!getAuthUrl(&headers, authurl, scope)) {
-            LOG_ERROR_RETURN(0, -1, "Failed to get auth url.");
+
+        auto it = op.resp.headers.find(kDockerRegistryAuthChallengeKeyValuePrefix);
+        if (it == op.resp.headers.end())
+            LOG_ERROR_RETURN(EINVAL, -1, "no auth header in response");
+        estring challengeLine = it.second();
+        if (!challengeLine.starts_with(kBearerAuthPrefix))
+            LOG_ERROR_RETURN(EINVAL, -1, "auth string shows not bearer auth, ",
+                             VALUE(challengeLine));
+        challengeLine = challengeLine.substr(kBearerAuthPrefix.length());
+        auto kv = str_to_kvmap(challengeLine);
+        if (kv.find("realm") == kv.end() || kv.find("service") == kv.end() ||
+            kv.find("scope") == kv.end()) {
+            LOG_ERROR_RETURN(EINVAL, -1, "authentication challenge failed with `",
+                             challengeLine);
         }
+        *scope = estring(kv["scope"]);
+        *authurl = estring(kv["realm"]) + "?service=" + estring(kv["service"]) +
+                    "&scope=" + estring(kv["scope"]);
         return 0;
     }
 
-    int parseToken(const estring &jsonStr, estring *token) {
+    int parse_token(const estring &jsonStr, estring *token) {
         rapidjson::Document d;
         if (d.Parse(jsonStr.c_str()).HasParseError())
             LOG_ERROR_RETURN(0, -1, "JSON parse failed");
@@ -298,66 +291,47 @@ protected:
             *token = d["access_token"].GetString();
         else
             LOG_ERROR_RETURN(0, -1, "JSON has no 'token' or 'access_token' member");
-        LOG_DEBUG("Get token", VALUE(*token));
+        LOG_DEBUG("get token", VALUE(*token));
         return 0;
     }
 
-    bool authenticate(const char *auth_url, std::string &username, std::string &password,
+    bool authenticate(const estring &authurl, std::string &username, std::string &password,
                       estring *token, uint64_t timeout) {
         Timeout tmo(timeout);
-        photon::net::cURL *req = get_cURL();
-        DEFER({ release_cURL(req); });
-        photon::net::StringWriter writer;
+        estring userpwd_b64;
+        photon::net::Base64Encode(estring().appends(username, ":", password), userpwd_b64);
+        HTTP_OP op(m_client, Verb::GET, authurl);
+        op.follow = 0;
+        op.retry = 0;
         if (!username.empty()) {
-            req->set_user_passwd(username.c_str(), password.c_str()).set_redirect(3);
+            op.req.headers.insert(kAuthHeaderKey, "Basic ");
+            op.req.headers.value_append(userpwd_b64);
         }
-        auto ret = req->GET(auth_url, &writer, tmo.timeout_us());
-
-        LOG_DEBUG(VALUE(writer.string));
-
-        if (ret == 200 && parseToken(writer.string, token) == 0) {
+        op.timeout = tmo.timeout();
+        op.call();
+        if (op.status_code != 200) {
+            LOG_ERROR_RETURN(EPERM, false, "invalid key");
+        }
+        estring body;
+        body.resize(16 *1024);
+        auto len = op.resp.read((void*)body.data(), 16 *1024);
+        body.resize(len);
+        if (op.status_code == 200 && parse_token(body, token) == 0)
             return true;
-        } else {
-            LOG_ERROR_RETURN(0, false, "AUTH failed, response code=` ", ret, VALUE(auth_url));
-        }
+        LOG_ERROR_RETURN(EPERM, false, "auth failed, response code=` ", op.status_code, VALUE(authurl));
     }
 
-    bool getAuthUrl(const photon::net::HeaderMap *headers, estring *auth_url, estring *scope) {
-        auto it = headers->find(kDockerRegistryAuthChallengeKeyValuePrefix);
-        if (it == headers->end())
-            LOG_ERROR_RETURN(EINVAL, false, "no auth header in response");
-        estring challengeLine = it->second;
-
-        if (!challengeLine.starts_with(kBearerAuthPrefix))
-            LOG_ERROR_RETURN(EINVAL, false, "auth string shows not bearer auth, ",
-                             VALUE(challengeLine));
-        challengeLine = challengeLine.substr(kBearerAuthPrefix.length());
-
-        auto kv = str_to_kvmap(challengeLine);
-        if (kv.find("realm") == kv.end() || kv.find("service") == kv.end() ||
-            kv.find("scope") == kv.end()) {
-            LOG_ERROR_RETURN(EINVAL, false, "authentication challenge failed with `",
-                             challengeLine);
-        }
-        *scope = estring(kv["scope"]);
-        *auth_url = estring(kv["realm"]) + "?service=" + estring(kv["service"]) +
-                    "&scope=" + estring(kv["scope"]);
-        return true;
-    }
 }; // namespace FileSystem
 
-class RegistryFileImpl : public photon::fs::VirtualReadOnlyFile {
+class RegistryFileImpl_v2 : public photon::fs::VirtualReadOnlyFile {
 public:
-    estring m_filename;
     estring m_url;
-    RegistryFSImpl *m_fs;
-    uint64_t m_timeout;
-    size_t m_filesize;
+    RegistryFSImpl_v2 *m_fs;
+    uint64_t m_timeout = -1;
+    size_t m_filesize = 0;
 
-    RegistryFileImpl(const char *filename, const char *url, RegistryFSImpl *fs, uint64_t timeout)
-        : m_filename(filename), m_url(url), m_fs(fs), m_timeout(timeout) {
-        m_filesize = 0;
-    }
+    RegistryFileImpl_v2(const char *url, RegistryFSImpl_v2 *fs, uint64_t timeout)
+        : m_url(url), m_fs(fs), m_timeout(timeout) {}
 
     virtual IFileSystem *filesystem() override {
         return m_fs;
@@ -373,33 +347,25 @@ public:
         }
         auto filesize = m_filesize;
         int retry = 3;
-        Timeout timeout(m_timeout);
+        Timeout tmo(m_timeout);
 
     again:
-        photon::net::IOVWriter container(iov, iovcnt);
-        auto count = container.sum();
+        iovector_view view((struct iovec*)iov, iovcnt);
+        auto count = view.sum();
         if ((ssize_t)count + offset > filesize)
             count = filesize - offset;
-        LOG_DEBUG("pulling blob from docker registry: ", VALUE(m_url), VALUE(offset), VALUE(count));
+        LOG_DEBUG("pulling blob from registry: ", VALUE(m_url), VALUE(offset), VALUE(count));
 
-        photon::net::HeaderMap headers;
-        long code =
-            m_fs->GET(m_url.c_str(), &headers, offset, count, &container, timeout.timeout());
-
-        if (code != 200 && code != 206) {
+        HTTP_OP op;
+        auto ret = m_fs->get_data(m_url, offset, count, tmo.timeout(), op);
+        if (op.status_code != 200 && op.status_code != 206) {
             ERRNO eno;
-            if (timeout.expire() < photon::now) {
-                LOG_ERROR_RETURN(ETIMEDOUT, -1, "timed out in preadv ", VALUE(m_url),
-                                 VALUE(offset));
+            if (tmo.expire() < photon::now) {
+                LOG_ERROR_RETURN(ETIMEDOUT, -1, "timed out in preadv ", VALUE(m_url), VALUE(offset));
             }
             if (retry--) {
-                ssize_t ret_len;
-                for (auto &line : headers) {
-                    LOG_DEBUG(VALUE(line.first), VALUE(line.second));
-                }
-                LOG_WARN("failed to perform HTTP GET, going to retry ", VALUE(code), VALUE(offset),
-                         VALUE(count), VALUE(ret_len), eno);
-
+                LOG_WARN("failed to perform HTTP GET, going to retry ", VALUE(op.status_code), VALUE(offset),
+                         VALUE(count), VALUE(ret), eno);
                 photon::thread_usleep(1000);
                 goto again;
             } else {
@@ -407,29 +373,20 @@ public:
                                  VALUE(offset));
             }
         }
-        ssize_t ret = count;
-        for (auto &line : headers) {
-            LOG_DEBUG(VALUE(line.first), VALUE(line.second));
-        }
-        headers.try_get("content-length", ret);
-        return ret;
+        return op.resp.readv(iov, iovcnt);
     }
 
-    /**
-     * read meta data for the docker image layer. E.g. the content length in
-     * bytes
-     */
-    int64_t getMetaLength(uint64_t timeout = -1) {
-        photon::net::HeaderMap headers;
+    int64_t get_length(uint64_t timeout = -1) {
         Timeout tmo(timeout);
         int retry = 3;
     again:
-        auto code = m_fs->GET(m_url.c_str(), &headers, -1, -1, nullptr, tmo.timeout());
-        if (code != 200 && code != 206) {
+        HTTP_OP op;
+        auto ret = m_fs->get_data(m_url, 0, 1, tmo.timeout(), op);
+        if (op.status_code != 200 && op.status_code != 206) {
             if (tmo.expire() < photon::now)
                 LOG_ERROR_RETURN(ETIMEDOUT, -1, "get meta timedout");
 
-            if (code == 401 || code == 403) {
+            if (op.status_code == 401 || op.status_code == 403) {
                 if (retry--)
                     goto again;
                 LOG_ERROR_RETURN(EPERM, -1, "Authorization failed");
@@ -438,26 +395,12 @@ public:
                 goto again;
             LOG_ERROR_RETURN(ENOENT, -1, "failed to get meta from server");
         }
-        char buffer[64];
-        uint64_t ret = 0;
-        if (headers.try_get("content-range", buffer) < 0) { // part of data must have content-range
-            if (headers.try_get("content-length", ret) < 0) { // or this is full data
-                LOG_ERROR_RETURN(EIO, -1, "unexpected response header returned from head request");
-            }
-        } else { // if there is part data, get last number as result
-            estring es(buffer);
-            auto p = es.view().find_last_of(charset('/'));
-            if (p == estring::npos) { // if not as standard http header
-                LOG_ERROR_RETURN(EIO, -1, "unexpected response header content range");
-            }
-            ret = std::atoll(es.data() + p + 1);
-        }
-        return ret;
+        return op.resp.resource_size();
     }
 
     virtual int fstat(struct stat *buf) override {
         if (m_filesize == 0) {
-            auto ret = getMetaLength(m_timeout);
+            auto ret = get_length(m_timeout);
             if (ret < 0)
                 return -1;
             m_filesize = ret;
@@ -470,27 +413,19 @@ public:
 
 };
 
-inline IFile *RegistryFSImpl::open(const char *pathname, int) {
-    std::string url = pathname;
-    std::string path = pathname;
-    if (*pathname != '/')
-        path = std::string("/") + pathname;
-
-    auto file = new RegistryFileImpl(path.c_str(), url.c_str(), (RegistryFSImpl *)this, m_timeout);
+inline IFile *RegistryFSImpl_v2::open(const char *pathname, int) {
+    auto file = new RegistryFileImpl_v2(pathname, (RegistryFSImpl_v2 *)this, m_timeout);
     struct stat buf;
     int ret = file->fstat(&buf);
     if (ret < 0) {
         delete file;
-        LOG_ERROR_RETURN(0, nullptr, "failed to open and stat registry file `, ret `", pathname,
-                         ret);
+        LOG_ERROR_RETURN(0, nullptr, "failed to open and stat registry file `, ret `", pathname, ret);
     }
     return file;
 }
 
-IFileSystem *new_registryfs_v1(PasswordCB callback, const char *caFile,
-                                                     uint64_t timeout) {
+IFileSystem *new_registryfs_v2(PasswordCB callback, const char *caFile, uint64_t timeout) {
     if (!callback)
         LOG_ERROR_RETURN(EINVAL, nullptr, "password callback not set");
-    return new RegistryFSImpl(callback, caFile ? caFile : "", timeout);
+    return new RegistryFSImpl_v2(callback, caFile ? caFile : "", timeout);
 }
-

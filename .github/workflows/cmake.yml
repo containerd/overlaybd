@@ -52,6 +52,7 @@ jobs:
       shell: bash
       run: |
         sudo make install
+        sudo cp ${{github.workspace}}/src/example_config/overlaybd-registryv2.json /etc/overlaybd/overlaybd.json
         sudo systemctl enable /opt/overlaybd/overlaybd-tcmu.service
         sudo systemctl start overlaybd-tcmu
         sudo systemctl status overlaybd-tcmu
