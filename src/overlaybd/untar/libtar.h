@@ -86,7 +86,7 @@ public:
 	uid_t get_uid();
 	int get_mtime() { return oct_to_int(mtime); }
 	int get_crc() { return oct_to_int(chksum); }
-	int get_size() { return oct_to_size(size); }
+	size_t get_size() { return oct_to_size(size); }
 	int get_devmajor() { return oct_to_int(devmajor); }
 	int get_devminor() { return oct_to_int(devminor); }
 	char *get_linkname() { return gnu_longlink ? gnu_longlink : linkname; }
@@ -163,7 +163,7 @@ public:
 	}
 	char* get_pathname();
 	char* get_linkname();
-	long get_size();
+	size_t get_size();
 	int extract_all();
 
 private:

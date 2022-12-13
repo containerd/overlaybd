@@ -95,7 +95,7 @@ int Tar::read_header_internal() {
 int Tar::read_sepcial_file(char *&buf) {
 	size_t j, blocks;
 	char *ptr;
-	int sz = header.get_size();
+	size_t sz = header.get_size();
 	blocks = (sz / T_BLOCKSIZE) + (sz % T_BLOCKSIZE ? 1 : 0);
 	if (blocks > ((size_t)-1 / T_BLOCKSIZE)) {
 		errno = E2BIG;
@@ -389,7 +389,7 @@ int Tar::extract_file() {
 }
 
 int Tar::extract_regfile(const char *filename) {
-	long size = get_size();
+	size_t size = get_size();
 
 	LOG_DEBUG("  ==> extracting: ` (` bytes)\n", filename, size);
 	photon::fs::IFile *fout = fs->open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0666);
