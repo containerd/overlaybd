@@ -116,7 +116,7 @@ char* Tar::get_linkname() {
 	}
 }
 
-long Tar::get_size() {
+size_t Tar::get_size() {
 	if (pax && pax->size > 0) {
 		return pax->size;
 	} else {
