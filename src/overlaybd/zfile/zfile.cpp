@@ -485,9 +485,10 @@ public:
         if (m_compressor == nullptr) {
             LOG_ERRNO_RETURN(0, -1, "create compressor failed.");
         }
-        m_ht->set_compress_option(m_opt);
+        auto pht = new (m_ht)(CompressionFile::HeaderTrailer);
+        pht->set_compress_option(m_opt);
         LOG_INFO("write header.");
-        auto ret = write_header_trailer(m_dest, true, false, true, m_ht);
+        auto ret = write_header_trailer(m_dest, true, false, true, pht);
         if (ret < 0) {
             LOG_ERRNO_RETURN(0, -1, "failed to write header");
         }
@@ -528,15 +529,16 @@ public:
         if (m_dest->write(&m_block_len[0], index_bytes) != index_bytes) {
             LOG_ERRNO_RETURN(0, -1, "failed to write index.");
         }
-        m_ht->index_offset = index_offset;
-        m_ht->index_size = index_size;
-        m_ht->raw_data_size = raw_data_size;
+        auto pht = (CompressionFile::HeaderTrailer*)m_ht;
+        pht->index_offset = index_offset;
+        pht->index_size = index_size;
+        pht->raw_data_size = raw_data_size;
         LOG_INFO("write trailer.");
-        auto ret = write_header_trailer(m_dest, false, true, true, m_ht);
+        auto ret = write_header_trailer(m_dest, false, true, true, pht);
         if (ret < 0)
             LOG_ERRNO_RETURN(0, -1, "failed to write trailer");
         LOG_INFO("overwrite file header.");
-        ret = write_header_trailer(m_dest, true, false, true, m_ht, 0);
+        ret = write_header_trailer(m_dest, true, false, true, pht, 0);
         if (ret < 0) {
             LOG_ERRNO_RETURN(0, -1, "failed to overwrite header");
         }
@@ -600,7 +602,7 @@ public:
     unsigned char *compressed_data = nullptr;
     unsigned char *reserved_buf = nullptr;
     size_t reserved_size = 0;
-    CompressionFile::HeaderTrailer m_ht[CompressionFile::HeaderTrailer::SPACE]{};
+    char m_ht[CompressionFile::HeaderTrailer::SPACE]{};
 
     UNIMPLEMENTED_POINTER(IFileSystem *filesystem() override);
     UNIMPLEMENTED(int fstat(struct stat *buf) override);
