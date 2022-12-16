@@ -76,6 +76,14 @@ make -j
 sudo make install
 ```
 
+If you want to use the [original libext2fs](https://github.com/tytso/e2fsprogs) instead of our [customized libext2fs](https://github.com/data-accelerator/e2fsprogs).
+
+```bash
+cmake -D ORIGIN_EXT2FS=1 ..
+```
+
+For more information about `ORIGIN_EXT2FS` go to [USERSPACE_CONVERTOR](https://github.com/containerd/accelerated-container-image/blob/main/docs/USERSPACE_CONVERTOR.md#libext2fs).
+
 If you want to use DSA hardware to accelerate CRC calculation.
 
 ```bash
@@ -94,7 +102,7 @@ If you want to use QAT to accelerate compression/decompression.
 cmake -D ENABLE_QAT=1 ..
 ```
 
-For more informations go to `overlaybd/src/overlaybd/zfile/README.md`.
+For more information go to `overlaybd/src/overlaybd/zfile/README.md`.
 
 Finally, setup a systemd service for overlaybd-tcmu backstore.
 
