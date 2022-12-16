@@ -76,6 +76,14 @@ make -j
 sudo make install
 ```
 
+If you want to use our [customized libext2fs](https://github.com/data-accelerator/e2fsprogs) to accelerate image conversion.
+
+```bash
+cmake -D CUSTOM_EXT2FS=1 ..
+```
+
+For more informations go to `overlaybd/docs/USERSPACE_CONVENTOR.md`. We provide a performance comparison with and without CUSTOM_EXT2FS for reference.
+
 If you want to use DSA hardware to accelerate CRC calculation.
 
 ```bash
