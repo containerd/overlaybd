@@ -1,7 +1,7 @@
 file(GLOB SOURCE_TAR "*.cpp")
 add_library(extfs_lib STATIC ${SOURCE_TAR})
 
-if(CUSTOM_EXT2FS)
+if(NOT ORIGIN_EXT2FS)
   find_package(ext2fs REQUIRED)
   target_include_directories(extfs_lib PUBLIC ${EXT2FS_INCLUDE_DIR})
   set(LIB_EXT2FS ${EXT2FS_LIBRARY})
