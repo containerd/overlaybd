@@ -55,8 +55,10 @@ public:
         if (dl_thread_jh != nullptr)
             photon::thread_join(dl_thread_jh);
         delete m_prefetcher;
-        m_file->close();
-        delete m_file;
+        if (m_file) {
+            m_file->close();
+            delete m_file;
+        }
     }
 
     int fstat(struct stat *buf) override {

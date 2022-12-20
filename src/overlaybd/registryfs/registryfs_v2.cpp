@@ -135,8 +135,12 @@ public:
             LOG_DEBUG("p2p_url: `", *actual_url);
         }
 
-
         op.req.reset(Verb::GET, *actual_url);
+        // set token if needed
+        if (actual_info->mode == UrlMode::Self && !actual_info->info.empty()) {
+            op.req.headers.insert(kAuthHeaderKey, "Bearer ");
+            op.req.headers.value_append(actual_info->info);
+        }
         op.req.headers.range(offset, offset + count - 1);
         op.set_enable_proxy(m_client->has_proxy());
         op.retry = 0;
@@ -149,7 +153,7 @@ public:
         }
 
         m_url_info.release(url, true);
-        LOG_ERROR_RETURN(0, ret, "Failed to fetch data ", VALUE(ret), VALUE(url));
+        LOG_ERROR_RETURN(0, ret, "Failed to fetch data ", VALUE(url), VALUE(op.status_code), VALUE(ret));
     }
 
     int stat(const char *path, struct stat *buf) override {
