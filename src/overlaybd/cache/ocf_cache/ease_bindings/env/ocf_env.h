@@ -296,69 +296,59 @@ void env_completion_destroy(env_completion *completion);
 
 /* ATOMIC VARIABLES */
 typedef struct {
-    int counter;
+   volatile int counter;
 } env_atomic;
 
 typedef struct {
-    long counter;
+   volatile long counter;
 } env_atomic64;
 
 static inline int env_atomic_read(const env_atomic* a) {
-    return a->counter;
+    return a->counter; /* TODO */
 }
 
 static inline void env_atomic_set(env_atomic* a, int i) {
-    a->counter = i;
+    a->counter = i; /* TODO */
 }
 
 static inline void env_atomic_add(int i, env_atomic* a) {
-    a->counter += i;
+    __sync_add_and_fetch(&a->counter, i);
 }
 
 static inline void env_atomic_sub(int i, env_atomic* a) {
-    a->counter -= i;
+    __sync_sub_and_fetch(&a->counter, i);
 }
 
 static inline void env_atomic_inc(env_atomic* a) {
-    a->counter++;
+    env_atomic_add(1, a);
 }
 
 static inline void env_atomic_dec(env_atomic* a) {
-    a->counter--;
+    env_atomic_sub(1, a);
 }
 
 static inline bool env_atomic_dec_and_test(env_atomic* a) {
-    a->counter--;
-    return a->counter == 0;
+    return __sync_sub_and_fetch(&a->counter, 1) == 0;
 }
 
 static inline int env_atomic_add_return(int i, env_atomic* a) {
-    a->counter += i;
-    return a->counter;
+    return __sync_add_and_fetch(&a->counter, i);
 }
 
 static inline int env_atomic_sub_return(int i, env_atomic* a) {
-    a->counter -= i;
-    return a->counter;
+    return __sync_sub_and_fetch(&a->counter, i);
 }
 
 static inline int env_atomic_inc_return(env_atomic* a) {
-    a->counter++;
-    return a->counter;
+    return env_atomic_add_return(1, a);
 }
 
 static inline int env_atomic_dec_return(env_atomic* a) {
-    a->counter--;
-    return a->counter;
+    return env_atomic_sub_return(1, a);
 }
 
 static inline int env_atomic_cmpxchg(env_atomic* a, int old, int new_value) {
-    if (a->counter == old) {
-        a->counter = new_value;
-        return old;
-    } else {
-        return new_value;
-    }
+    return __sync_val_compare_and_swap(&a->counter, old, new_value);
 }
 
 static inline int env_atomic_add_unless(env_atomic* a, int i, int u) {
@@ -376,41 +366,35 @@ static inline int env_atomic_add_unless(env_atomic* a, int i, int u) {
 }
 
 static inline long env_atomic64_read(const env_atomic64* a) {
-    return a->counter;
+    return a->counter; /* TODO */
 }
 
 static inline void env_atomic64_set(env_atomic64* a, long i) {
-    a->counter = i;
+    a->counter = i; /* TODO */
 }
 
 static inline void env_atomic64_add(long i, env_atomic64* a) {
-    a->counter += i;
+    __sync_add_and_fetch(&a->counter, i);
 }
 
 static inline void env_atomic64_sub(long i, env_atomic64* a) {
-    a->counter -= i;
+    __sync_sub_and_fetch(&a->counter, i);
 }
 
 static inline void env_atomic64_inc(env_atomic64* a) {
-    a->counter++;
+    env_atomic64_add(1, a);
 }
 
 static inline void env_atomic64_dec(env_atomic64* a) {
-    a->counter--;
+    env_atomic64_sub(1, a);
 }
 
 static inline long env_atomic64_inc_return(env_atomic64* a) {
-    a->counter--;
-    return a->counter;
+    return __sync_add_and_fetch(&a->counter, 1);
 }
 
 static inline long env_atomic64_cmpxchg(env_atomic64* a, long old_v, long new_v) {
-    if (a->counter == old_v) {
-        a->counter = new_v;
-        return old_v;
-    } else {
-        return new_v;
-    }
+    return __sync_val_compare_and_swap(&a->counter, old_v, new_v);
 }
 
 /* SPIN LOCKS */

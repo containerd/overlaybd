@@ -42,6 +42,8 @@ struct obd_dev {
     TCMUDevLoop *loop;
     uint32_t aio_pending_wakeups;
     uint32_t inflight;
+    std::thread *work;
+    photon::semaphore start, end;
 };
 
 struct handle_args {
@@ -312,8 +314,28 @@ static int dev_open(struct tcmu_device *dev) {
     tcmu_dev_set_write_cache_enabled(dev, false);
     tcmu_dev_set_write_protect_enabled(dev, file->read_only);
 
-    odev->loop = new TCMUDevLoop(dev);
-    odev->loop->run();
+    if (imgservice->global_conf.enableThread()) {
+        auto obd_th = [](obd_dev *odev, struct tcmu_device *dev) {
+            photon::init(photon::INIT_EVENT_EPOLL, photon::INIT_IO_LIBCURL);
+            DEFER(photon::fini());
+
+            odev->loop = new TCMUDevLoop(dev);
+            odev->loop->run();
+            LOG_INFO("obd device running");
+            odev->start.signal(1);
+
+            odev->end.wait(1);
+            delete odev->loop;
+            delete odev->file;
+            LOG_INFO("obd device exit");
+        };
+
+        odev->work = new std::thread(obd_th, odev, dev);
+        odev->start.wait(1);
+    } else {
+        odev->loop = new TCMUDevLoop(dev);
+        odev->loop->run();
+    }
 
     struct timeval end;
     gettimeofday(&end, NULL);
@@ -326,8 +348,16 @@ static int dev_open(struct tcmu_device *dev) {
 static int close_cnt = 0;
 static void dev_close(struct tcmu_device *dev) {
     obd_dev *odev = (obd_dev *)tcmu_dev_get_private(dev);
-    delete odev->loop;
-    delete odev->file;
+    if (imgservice->global_conf.enableThread()) {
+        odev->end.signal(1);
+        if (odev->work->joinable()) {
+            odev->work->join();
+        }
+        delete odev->work;
+    } else {
+        delete odev->loop;
+        delete odev->file;
+    }
     delete odev;
     close_cnt++;
     if (close_cnt == 500) {

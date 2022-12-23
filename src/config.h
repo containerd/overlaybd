@@ -86,6 +86,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(logPath, std::string, "/var/log/overlaybd.log");
     APPCFG_PARA(download, DownloadConfig);
     APPCFG_PARA(enableAudit, bool, true);
+    APPCFG_PARA(enableThread, bool, false);
     APPCFG_PARA(p2pConfig, P2PConfig);
     APPCFG_PARA(auditPath, std::string, "/var/log/overlaybd-audit.log");
     APPCFG_PARA(registryFsVersion, std::string, "v1");
