@@ -256,16 +256,21 @@ protected:
     ObjectCache<estring, size_t *> m_meta_size;
     ObjectCache<estring, estring *> m_scope_token;
     ObjectCache<estring, UrlInfo *> m_url_info;
+    photon::mutex mutex;
 
     photon::net::cURL *get_cURL() {
+        mutex.lock();
         auto curl = m_curl_pool.get();
+        mutex.unlock();
         curl->reset_error();
         curl->reset().clear_header().set_cafile(m_caFile.c_str());
         return curl;
     };
 
     void release_cURL(photon::net::cURL *curl) {
+        mutex.lock();
         m_curl_pool.put(curl);
+        mutex.unlock();
     };
 
     int getScopeAuth(const char *url, estring *authurl, estring *scope, uint64_t timeout) {

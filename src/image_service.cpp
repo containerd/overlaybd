@@ -299,6 +299,9 @@ int ImageService::init() {
             global_fs.remote_fs = registry_fs;
             return 0;
         }
+        if (global_conf.enableThread() == true && global_conf.cacheType() == "file") {
+            LOG_ERROR_RETURN(0, -1, "multi-thread has not been valid for file cache");
+        }
         if (global_conf.cacheType() == "file") {
             auto registry_cache_fs = new_localfs_adaptor(
                 global_conf.registryCacheDir().c_str());
@@ -342,7 +345,7 @@ int ImageService::init() {
             }
             global_fs.media_file = media_file;
 
-            global_fs.remote_fs = FileSystem::new_ocf_cached_fs(tar_fs, namespace_fs, 65536, 0,
+            global_fs.remote_fs = FileSystem::new_ocf_cached_fs(tar_fs, namespace_fs, 65536, 262144,
                                                                 media_file, reload_media, io_alloc);
         }
 
