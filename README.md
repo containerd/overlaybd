@@ -160,6 +160,7 @@ credentialConfig.path | credential file path or url which is determined by `mode
 | p2pConfig.address   | The proxy for p2p download.                                                                           |
 | download.maxMBps    | The speed limit in MB/s for a downloading task.                                                       |
 | enableAudit         | Enable audit or not.                                                                                  |
+| enableThread        | Enable overlaybd device run in seprate thread or not. Note `cacheType` should be `ocf`. `false` is default. |
 | auditPath           | The path for audit file, `/var/log/overlaybd-audit.log` is the default value.                         |
 | registryFsVersion   | registry client version, 'v1' libcurl based, 'v2' is photon http based. 'v1' is the default value.    |
 
