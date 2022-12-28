@@ -147,9 +147,10 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | logLevel            | DEBUG 0, INFO  1, WARN  2, ERROR 3                                                                    |
 | ioEngine            | IO engine used to open local files: psync 0, libaio 1, posix aio 2.                                   |
 | logPath             | The path for log file, `/var/log/overlaybd.log` is the default value.                                 |
-| registryCacheDir    | The cache directory for remote image data.                                                            |
-| registryCacheSizeGB | The max size of cache, in GB.                                                                         |
-| cacheType           | Cache type used, `file` and `ocf` are supported, `file` is the default.                               |
+| cacheConfig.cacheType   | Cache type used, `file` and `ocf` are supported.                                                  |
+| cacheConfig.cacheDir    | The cache directory for remote image data.                                                        |
+| cacheConfig.cacheSizeGB | The max size of cache, in GB.                                                                     |
+| cacheConfig.refillSize  | The refill size from source, in byte. `262144` is default (256 KB).                               |
 | credentialFilePath(legacy)  | The credential used for fetching images on registry. `/opt/overlaybd/cred.json` is the default value. |
 | credentialConfig.mode | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` |
 credentialConfig.path | credential file path or url which is determined by `mode`

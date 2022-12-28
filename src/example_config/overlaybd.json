@@ -1,7 +1,10 @@
 {
     "logLevel": 1,
-    "registryCacheDir": "/opt/overlaybd/registry_cache",
-    "registryCacheSizeGB": 4,
+    "cacheConfig": {
+        "cacheType": "file",
+        "cacheDir": "/opt/overlaybd/registry_cache",
+        "cacheSizeGB": 4
+    },
     "credentialConfig": {
         "mode": "file",
         "path": "/opt/overlaybd/cred.json"
