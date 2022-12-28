@@ -20,6 +20,8 @@
 #include <utime.h>
 #include <sys/sysmacros.h>
 #include <sys/time.h>
+#include <sys/statvfs.h>
+#include <sys/vfs.h>
 #include <photon/photon.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/path.h>
@@ -42,7 +44,7 @@ void print_stat(const char *path, struct stat *st) {
 }
 
 photon::fs::IFile *new_file(photon::fs::IFileSystem *fs, const char *path) {
-    auto file = fs->open(path, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    auto file = fs->open(path, O_RDWR | O_CREAT | O_TRUNC, 0755);
     if (!file) {
         LOG_ERRNO_RETURN(0, nullptr, "failed open file ", VALUE(path));
     }
@@ -205,6 +207,22 @@ int walkdir(photon::fs::IFileSystem *fs, const char *path) {
         count++;
     }
     return count;
+}
+
+int readlink(photon::fs::IFileSystem *fs, const char *path, char *buf, size_t bufsize) {
+    auto ret = fs->readlink(path, buf, bufsize);
+    if (ret < 0) {
+        LOG_ERRNO_RETURN(0, ret, "failed readlink ", VALUE(path), VALUE(buf));
+    }
+    return ret;
+}
+
+int access(photon::fs::IFileSystem *fs, const char *path, mode_t mode) {
+    auto ret = fs->access(path, mode);
+    if (ret) {
+        LOG_ERRNO_RETURN(0, ret, "failed access ", VALUE(path), VALUE(mode));
+    }
+    return 0;
 }
 
 int remove_all(photon::fs::IFileSystem *fs, const std::string &path) {
@@ -610,6 +628,7 @@ TEST_F(ExtfsTest, Rename) {
     EXPECT_EQ(0, ret);
     auto file = new_file(fs, "/file2");
     EXPECT_NE(nullptr, file);
+    delete file;
     ret = rename(fs, "/file2", "/dir2/file2");
     EXPECT_EQ(0, ret);
     ret = rename(fs, "/dir2", "/dir1");
@@ -642,6 +661,154 @@ TEST_F(ExtfsTest, Readdir) {
     EXPECT_EQ(0, ret);
     ret = walkdir(fs, "/");
     LOG_INFO("found ` file", ret);
+    EXPECT_EQ(0, ret);
+}
+
+TEST_F(ExtfsTest, Readlink) {
+    auto file = fs->creat("/file_to_readlink", 0755);
+    EXPECT_NE(nullptr, file);
+    delete file;
+    auto ret = mkdir(fs, "/dir_to_readlink");
+    EXPECT_EQ(0, ret);
+    ret = symlink(fs, "/file_to_readlink", "/dir_to_readlink/short_readlink");
+    EXPECT_EQ(0, ret);
+
+    char buf[256] = {0};
+    size_t len = sizeof("/file_to_readlink");
+    ret = readlink(fs, "/dir_to_readlink/short_readlink", buf, sizeof(buf));
+    EXPECT_EQ(len, ret);
+    EXPECT_EQ(0, strncmp("/file_to_readlink", buf, ret-1));
+
+    std::string long_name = "/bcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz";
+    file = fs->creat(long_name.c_str(), 0755);
+    EXPECT_NE(nullptr, file);
+    delete file;
+    ret = symlink(fs, long_name.c_str(), "/dir_to_readlink/long_readlink");
+    EXPECT_EQ(0, ret);
+    memset(buf, 0 ,sizeof(buf));
+    ret = readlink(fs, "/dir_to_readlink/long_readlink", buf, sizeof(buf));
+    EXPECT_EQ(long_name.length() + 1, ret);
+    EXPECT_EQ(0, strncmp(long_name.c_str(), buf, ret-1));
+    memset(buf, 0 ,sizeof(buf));
+    ret = readlink(fs, "/dir_to_readlink/long_readlink", buf, 128);
+    EXPECT_EQ(128, ret);
+    EXPECT_EQ(0, strncmp(long_name.c_str(), buf, ret-1));
+
+    memset(buf, 0 ,sizeof(buf));
+    ret = readlink(fs, "/dir_to_readlink/long_readlink_1", buf, sizeof(buf));
+    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(ENOENT, errno);
+    ret = link(fs, "/file_to_readlink", "/dir_to_readlink/link");
+    EXPECT_EQ(0, ret);
+    memset(buf, 0 ,sizeof(buf));
+    ret = readlink(fs, "/dir_to_readlink/link", buf, sizeof(buf));
+    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(EINVAL, errno);
+}
+
+TEST_F(ExtfsTest, Statfs) {
+    struct statvfs statv = {0};
+    auto ret = fs->statvfs("/test_statfs", &statv);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(4096, statv.f_bsize);
+
+    memset(&statv, 0, sizeof(struct statvfs));
+    ret = fs->statvfs(nullptr, &statv);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(4096, statv.f_bsize);
+
+    struct statfs stat = {0};
+    ret = fs->statfs("/test_statfs", &stat);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(4096, stat.f_bsize);
+}
+
+TEST_F(ExtfsTest, Access) {
+    auto file = fs->creat("/test_access", 0755);
+    EXPECT_NE(nullptr, file);
+    delete file;
+    auto ret = access(fs, "/test_access", 0755);
+    EXPECT_EQ(0, ret);
+    ret = access(fs, "/test_access", 0700);
+    EXPECT_EQ(0, ret);
+    ret = access(fs, "/test_access", 0050);
+    EXPECT_EQ(0, ret);
+    ret = access(fs, "/test_access", 0070);
+    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(EACCES, errno);
+    ret = access(fs, "/test_access", 0);
+    EXPECT_EQ(0, ret);
+
+    ret = chmod(fs, "/test_access", 0644);
+    EXPECT_EQ(0, ret);
+    ret = access(fs, "/test_access", 0700);
+    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(EACCES, errno);
+    ret = access(fs, "/test_access_1", 0);
+    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(ENOENT, errno);
+}
+
+TEST_F(ExtfsTest, Truncate) {
+    auto file = fs->creat("/test_truncate", 0755);
+    EXPECT_NE(nullptr, file);
+    delete file;
+
+    struct stat st;
+    auto ret = stat(fs, "/test_truncate", &st);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(0, st.st_size);
+
+    ret = fs->truncate("/test_truncate", 2048);
+    EXPECT_EQ(0, ret);
+    ret = stat(fs, "/test_truncate", &st);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(2048, st.st_size);
+
+    file = fs->open("/test_truncate", O_RDWR, 0);
+    EXPECT_NE(nullptr, file);
+    ret = file->ftruncate(1024);
+    EXPECT_EQ(0, ret);
+    ret = file->fstat(&st);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(1024, st.st_size);
+    delete file;
+
+    file = fs->open("/test_truncate", O_RDONLY, 0);
+    EXPECT_NE(nullptr, file);
+    ret = file->ftruncate(4096);
+    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(EBADF, errno);
+    delete file;
+    ret = fs->truncate("/test_truncate_1", 2048);
+    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(ENOENT, errno);
+}
+
+TEST_F(ExtfsTest, Sync) {
+    auto file = fs->creat("/test_sync", 0755);
+    EXPECT_NE(nullptr, file);
+    delete file;
+
+    auto ret = fs->syncfs();
+    EXPECT_EQ(0, ret);
+
+    file = fs->open("/test_sync", O_RDWR, 0);
+    ret = file->fsync();
+    EXPECT_EQ(0, ret);
+    ret = write_file(file);
+    EXPECT_EQ(0, ret);
+    ret = file->fdatasync();
+    EXPECT_EQ(0, ret);
+    delete file;
+
+    file = fs->open("/test_sync", O_RDONLY, 0);
+    ret = file->fsync();
+    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(EBADF, errno);
+    delete file;
+
+    ret = fs->syncfs();
     EXPECT_EQ(0, ret);
 }
 

@@ -24,6 +24,8 @@
 #include <unistd.h>
 #include <vector>
 #include <sys/sysmacros.h>
+#include <sys/statvfs.h>
+#include <sys/vfs.h>
 
 #include <photon/photon.h>
 #include <photon/common/alog.h>
@@ -107,6 +109,12 @@ ext2_file_t do_ext2fs_open_file(ext2_filsys fs, const char *path, unsigned int f
     return file;
 }
 
+int do_ext2fs_file_close(ext2_file_t file) {
+    errcode_t ret = ext2fs_file_close(file);
+    if (ret) return parse_extfs_error(nullptr, 0, ret);
+    return 0;
+}
+
 long do_ext2fs_read(
     ext2_file_t file,
     int flags,
@@ -120,7 +128,7 @@ long do_ext2fs_read(
         return -EBADF;
     }
     if (offset != -1) {
-        ret = ext2fs_file_llseek(file, offset, EXT2_SEEK_SET, NULL);
+        ret = ext2fs_file_llseek(file, offset, EXT2_SEEK_SET, nullptr);
         if (ret) return parse_extfs_error(nullptr, 0, ret);
     }
     unsigned int got;
@@ -149,9 +157,9 @@ long do_ext2fs_write(
     errcode_t ret = 0;
     if ((flags & O_APPEND) != 0) {
         // append mode: seek to the end before each write
-        ret = ext2fs_file_llseek(file, 0, EXT2_SEEK_END, NULL);
+        ret = ext2fs_file_llseek(file, 0, EXT2_SEEK_END, nullptr);
     } else if (offset != -1) {
-        ret = ext2fs_file_llseek(file, offset, EXT2_SEEK_SET, NULL);
+        ret = ext2fs_file_llseek(file, offset, EXT2_SEEK_SET, nullptr);
     }
 
     if (ret) return parse_extfs_error(nullptr, 0, ret);
@@ -448,7 +456,7 @@ int do_ext2fs_rename(ext2_filsys fs, const char *from, const char *to) {
     if (LINUX_S_ISDIR(inode.i_mode)) {
         ud.new_dotdot = to_dir_ino;
         LOG_DEBUG("updating .. entry for dir=`", to_dir_ino);
-        ret = ext2fs_dir_iterate2(fs, from_ino, 0, NULL, update_dotdot_helper, &ud);
+        ret = ext2fs_dir_iterate2(fs, from_ino, 0, nullptr, update_dotdot_helper, &ud);
         if (ret) return parse_extfs_error(fs, from_ino, ret);
 
         /* Decrease from_dir_ino's links_count */
@@ -727,9 +735,8 @@ int do_ext2fs_stat(ext2_filsys fs, const char *path, struct stat *statbuf, int f
 
 int do_ext2fs_readdir(ext2_filsys fs, const char *path, std::vector<::dirent> *dirs) {
     ext2_ino_t ino = string_to_inode(fs, path, 1);
-    if (ino == 0) {
-        return -ENOENT;
-    }
+    if (!ino) return -ENOENT;
+
     ext2_file_t file;
     errcode_t ret = ext2fs_file_open(
         fs,
@@ -753,6 +760,144 @@ int do_ext2fs_readdir(ext2_filsys fs, const char *path, std::vector<::dirent> *d
     return 0;
 }
 
+int do_ext2fs_truncate(ext2_filsys fs, const char *path, off_t length) {
+    ext2_ino_t ino = string_to_inode(fs, path, 1);
+    if (!ino) return -ENOENT;
+
+    ext2_file_t file;
+    errcode_t ret = ext2fs_file_open(fs, ino, EXT2_FILE_WRITE, &file);
+    if (ret) return parse_extfs_error(fs, ino, ret);
+
+    ret = ext2fs_file_set_size2(file, length);
+    if (ret) {
+        ext2fs_file_close(file);
+        return parse_extfs_error(fs, ino, ret);
+    }
+
+    ret = ext2fs_file_close(file);
+    if (ret) return parse_extfs_error(fs, ino, ret);
+    ret = update_xtime(fs, ino, nullptr, EXT_CTIME | EXT_MTIME);
+    if (ret) return ret;
+
+    return 0;
+}
+
+int do_ext2fs_ftruncate(ext2_file_t file, int flags, off_t length) {
+    if ((flags & (O_WRONLY | O_RDWR)) == 0) {
+        return -EBADF;
+    }
+    errcode_t ret = 0;
+    ret = ext2fs_file_set_size2(file, length);
+    if (ret) return parse_extfs_error(nullptr, 0, ret);
+    ret = update_xtime(file, EXT_CTIME | EXT_MTIME);
+    if (ret) return ret;
+    ret = ext2fs_file_flush(file);
+    if (ret) return parse_extfs_error(nullptr, 0, ret);
+
+    return 0;
+}
+
+int do_ext2fs_access(ext2_filsys fs, const char *path, int mode) {
+    ext2_ino_t ino = string_to_inode(fs, path, 1);
+    if (!ino) return -ENOENT;
+    // existence check
+    if (mode == 0) return 0;
+
+    struct ext2_inode inode;
+    errcode_t ret = ext2fs_read_inode(fs, ino, &inode);
+    if (ret) return parse_extfs_error(fs, ino, ret);
+
+    mode_t perms = inode.i_mode & 0777;
+    if ((mode & W_OK) && (inode.i_flags & EXT2_IMMUTABLE_FL))
+        return -EACCES;
+    if ((mode & perms) == mode)
+        return 0;
+    return -EACCES;
+}
+
+int do_ext2fs_statvfs(ext2_filsys fs, const char *path, struct statvfs *buf) {
+    auto dblk = fs->desc_blocks + (blk64_t)fs->group_desc_count * (fs->inode_blocks_per_group + 2);
+    auto rblk = ext2fs_r_blocks_count(fs->super);
+    if (!rblk) rblk = ext2fs_blocks_count(fs->super) / 10;
+    auto fblk = ext2fs_free_blocks_count(fs->super);
+
+    buf->f_bsize = fs->blocksize;
+    buf->f_frsize = fs->blocksize;
+    buf->f_blocks = ext2fs_blocks_count(fs->super) - dblk;
+    buf->f_bfree = fblk;
+    buf->f_bavail = (fblk < rblk) ? 0 : (fblk - rblk);
+    buf->f_files = fs->super->s_inodes_count;
+    buf->f_ffree = fs->super->s_free_inodes_count;
+    buf->f_favail = fs->super->s_free_inodes_count;
+    auto fptr = (uint64_t *)fs->super->s_uuid;
+    buf->f_fsid = *(fptr++) ^ *fptr;
+    buf->f_flag = 0;
+    if (!(fs->flags & EXT2_FLAG_RW)) buf->f_flag |= ST_RDONLY;
+    buf->f_namemax = EXT2_NAME_LEN;
+
+    return 0;
+}
+
+int do_ext2fs_statfs(ext2_filsys fs, const char *path, struct statfs *buf) {
+    auto dblk = fs->desc_blocks + (blk64_t)fs->group_desc_count * (fs->inode_blocks_per_group + 2);
+    auto rblk = ext2fs_r_blocks_count(fs->super);
+    if (!rblk) rblk = ext2fs_blocks_count(fs->super) / 10;
+    auto fblk = ext2fs_free_blocks_count(fs->super);
+
+    buf->f_type = fs->magic;
+    buf->f_bsize = fs->blocksize;
+    buf->f_frsize = fs->blocksize;
+    buf->f_blocks = ext2fs_blocks_count(fs->super) - dblk;
+    buf->f_bfree = fblk;
+    buf->f_bavail = (fblk < rblk) ? 0 : (fblk - rblk);
+    buf->f_files = fs->super->s_inodes_count;
+    buf->f_ffree = fs->super->s_free_inodes_count;
+    auto fptr = (uint64_t *)fs->super->s_uuid;
+    auto fsid = *(fptr++) ^ *fptr;
+    memcpy(&(buf->f_fsid), &fsid, sizeof(buf->f_fsid));
+    buf->f_flags = 0;
+    if (!(fs->flags & EXT2_FLAG_RW)) buf->f_flags |= ST_RDONLY;
+    buf->f_namelen = EXT2_NAME_LEN;
+
+    return 0;
+}
+
+ssize_t do_ext2fs_readlink(ext2_filsys fs, const char *path, char *buf, size_t bufsize) {
+    ext2_ino_t ino = string_to_inode(fs, path, 0);
+    if (!ino) return -ENOENT;
+
+    struct ext2_inode inode;
+    errcode_t ret = ext2fs_read_inode(fs, ino, &inode);
+    if (ret) return parse_extfs_error(fs, ino, ret);
+
+    if (!LINUX_S_ISLNK(inode.i_mode))
+        return -EINVAL;
+
+    size_t len = bufsize - 1;
+    if (inode.i_size < len)
+        len = inode.i_size;
+
+    if (ext2fs_is_fast_symlink(&inode)) {
+        memcpy(buf, (char *)inode.i_block, len);
+    } else {
+        ext2_file_t file;
+        unsigned int got;
+        ret = ext2fs_file_open(fs, ino, 0, &file);
+        if (ret) return parse_extfs_error(fs, ino, ret);
+        ret = ext2fs_file_read(file, buf, len, &got);
+        if (ret) {
+            ext2fs_file_close(file);
+            return parse_extfs_error(fs, ino, ret);
+        }
+        ret = ext2fs_file_close(file);
+        if (ret) return parse_extfs_error(fs, ino, ret);
+        if (got != len) return -EINVAL;
+    }
+    buf[len] = 0;
+
+    return (len + 1);
+}
+
 #define DO_EXT2FS(func) \
     auto ret = func;    \
     if (ret < 0) {      \
@@ -761,9 +906,11 @@ int do_ext2fs_readdir(ext2_filsys fs, const char *path, std::vector<::dirent> *d
     }                   \
     return ret;
 
+class ExtFileSystem;
 class ExtFile : public photon::fs::VirtualFile {
 public:
-    ExtFile(ext2_file_t _file) : file(_file) {
+    ExtFile(ext2_file_t _file, int _flags, ExtFileSystem *_fs) :
+        file(_file), flags(_flags), m_fs(_fs) {
         fs = ext2fs_file_get_fs(file);
         ino = ext2fs_file_get_inode_num(file);
     }
@@ -773,10 +920,10 @@ public:
     }
 
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
-        DO_EXT2FS(do_ext2fs_read(file, O_RDONLY, (char *)buf, count, offset))
+        DO_EXT2FS(do_ext2fs_read(file, flags, (char *)buf, count, offset))
     }
     virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
-        DO_EXT2FS(do_ext2fs_write(file, O_RDWR, (const char *)buf, count, offset))
+        DO_EXT2FS(do_ext2fs_write(file, flags, (const char *)buf, count, offset))
     }
     virtual int fchmod(mode_t mode) override {
         DO_EXT2FS(do_ext2fs_chmod(fs, ino, mode))
@@ -791,18 +938,36 @@ public:
         DO_EXT2FS(do_ext2fs_stat(fs, ino, buf))
     }
     virtual int close() override {
-        DO_EXT2FS(ext2fs_file_close(file))
+        DO_EXT2FS(do_ext2fs_file_close(file))
     }
+    virtual int fsync() override {
+        if ((flags & (O_WRONLY | O_RDWR)) == 0) {
+            errno = EBADF;
+            return -1;
+        }
+        errcode_t ret = ext2fs_file_flush(file);
+        if (ret) {
+            errno = -parse_extfs_error(fs, ino, ret);
+            return -1;
+        }
+        return flush_buffer();
+    }
+    virtual int fdatasync() override {
+        return this->fsync();
+    }
+    virtual int ftruncate(off_t length) override {
+        DO_EXT2FS(do_ext2fs_ftruncate(file, flags, length))
+    }
+    virtual photon::fs::IFileSystem *filesystem() override;
 
-    UNIMPLEMENTED_POINTER(photon::fs::IFileSystem *filesystem() override);
-    UNIMPLEMENTED(int fsync() override);
-    UNIMPLEMENTED(int fdatasync() override);
-    UNIMPLEMENTED(int ftruncate(off_t length) override);
+    int flush_buffer();
 
 private:
     ext2_file_t file;
     ext2_filsys fs;
     ext2_ino_t ino;
+    int flags;
+    ExtFileSystem *m_fs;
 };
 
 class ExtDIR : public photon::fs::DIR {
@@ -876,22 +1041,24 @@ public:
         delete buffer_file;
         LOG_INFO(VALUE(total_read_cnt), VALUE(total_write_cnt));
     }
-    photon::fs::IFile *open(const char *pathname, int flags, mode_t mode) override {
-        ext2_file_t file = do_ext2fs_open_file(fs, pathname, flags, mode);
+    photon::fs::IFile *open(const char *path, int flags, mode_t mode) override {
+        ext2_file_t file = do_ext2fs_open_file(fs, path, flags, mode);
         if (!file) {
             return nullptr;
         }
-        return new ExtFile(file);
+        return new ExtFile(file, flags, this);
     }
-    photon::fs::IFile *open(const char *pathname, int flags) override {
-        return open(pathname, flags, 0666);
+    photon::fs::IFile *open(const char *path, int flags) override {
+        return open(path, flags, 0666);
     }
-
-    int mkdir(const char *pathname, mode_t mode) override {
-        DO_EXT2FS(do_ext2fs_mkdir(fs, pathname, mode))
+    photon::fs::IFile *creat(const char *path, mode_t mode) override {
+        return open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
     }
-    int rmdir(const char *pathname) override {
-        DO_EXT2FS(do_ext2fs_rmdir(fs, pathname))
+    int mkdir(const char *path, mode_t mode) override {
+        DO_EXT2FS(do_ext2fs_mkdir(fs, path, mode))
+    }
+    int rmdir(const char *path) override {
+        DO_EXT2FS(do_ext2fs_rmdir(fs, path))
     }
     int symlink(const char *oldname, const char *newname) override {
         DO_EXT2FS(do_ext2fs_symlink(fs, oldname, newname))
@@ -902,8 +1069,8 @@ public:
     int rename(const char *oldname, const char *newname) override {
         DO_EXT2FS(do_ext2fs_rename(fs, oldname, newname))
     }
-    int unlink(const char *filename) override {
-        DO_EXT2FS(do_ext2fs_unlink(fs, filename))
+    int unlink(const char *path) override {
+        DO_EXT2FS(do_ext2fs_unlink(fs, path))
     }
     int mknod(const char *path, mode_t mode, dev_t dev) override {
         DO_EXT2FS(do_ext2fs_mknod(fs, path, mode, dev))
@@ -922,20 +1089,43 @@ public:
     int lutimes(const char *path, const struct timeval tv[2]) override {
         DO_EXT2FS(do_ext2fs_utimes(fs, path, tv, 0));
     }
-    int chown(const char *pathname, uid_t owner, gid_t group) override {
-        DO_EXT2FS(do_ext2fs_chown(fs, pathname, owner, group, 1))
+    int chown(const char *path, uid_t owner, gid_t group) override {
+        DO_EXT2FS(do_ext2fs_chown(fs, path, owner, group, 1))
     }
-    int lchown(const char *pathname, uid_t owner, gid_t group) override {
-        DO_EXT2FS(do_ext2fs_chown(fs, pathname, owner, group, 0))
+    int lchown(const char *path, uid_t owner, gid_t group) override {
+        DO_EXT2FS(do_ext2fs_chown(fs, path, owner, group, 0))
     }
-    int chmod(const char *pathname, mode_t mode) override {
-        DO_EXT2FS(do_ext2fs_chmod(fs, pathname, mode))
+    int chmod(const char *path, mode_t mode) override {
+        DO_EXT2FS(do_ext2fs_chmod(fs, path, mode))
     }
     int stat(const char *path, struct stat *buf) override {
         DO_EXT2FS(do_ext2fs_stat(fs, path, buf, 1))
     }
-    int lstat(const char *path, struct stat *buf) override{
+    int lstat(const char *path, struct stat *buf) override {
         DO_EXT2FS(do_ext2fs_stat(fs, path, buf, 0))
+    }
+    ssize_t readlink(const char *path, char *buf, size_t bufsize) override {
+        DO_EXT2FS(do_ext2fs_readlink(fs, path, buf, bufsize))
+    }
+    int statfs(const char *path, struct statfs *buf) override {
+        DO_EXT2FS(do_ext2fs_statfs(fs, path, buf))
+    }
+    int statvfs(const char *path, struct statvfs *buf) override {
+        DO_EXT2FS(do_ext2fs_statvfs(fs, path, buf))
+    }
+    int access(const char *path, int mode) override {
+        DO_EXT2FS(do_ext2fs_access(fs, path, mode))
+    }
+    int truncate(const char *path, off_t length) override {
+        DO_EXT2FS(do_ext2fs_truncate(fs, path, length))
+    }
+    int syncfs() override {
+        errcode_t ret = ext2fs_flush(fs);
+        if (ret) {
+            errno = -parse_extfs_error(fs, 0, ret);
+            return -1;
+        }
+        return flush_buffer();
     }
 
     photon::fs::DIR *opendir(const char *path) override {
@@ -951,14 +1141,6 @@ public:
     IFileSystem *filesystem() {
         return this;
     }
-
-    UNIMPLEMENTED_POINTER(photon::fs::IFile *creat(const char *, mode_t) override);
-    UNIMPLEMENTED(ssize_t readlink(const char *filename, char *buf, size_t bufsize) override);
-    UNIMPLEMENTED(int statfs(const char *path, struct statfs *buf) override);
-    UNIMPLEMENTED(int statvfs(const char *path, struct statvfs *buf) override);
-    UNIMPLEMENTED(int access(const char *pathname, int mode) override);
-    UNIMPLEMENTED(int truncate(const char *path, off_t length) override);
-    UNIMPLEMENTED(int syncfs() override);
 
     ext2_ino_t get_inode(const char *str, int follow, bool release) {
         ext2_ino_t ino = 0;
@@ -1009,11 +1191,21 @@ public:
 
         return ino;
     }
+    int flush_buffer() {
+        return buffer_file ? buffer_file->fdatasync() : 0;
+    }
 
 private:
     ObjectCache<estring, ext2_ino_t *> ino_cache;
     photon::fs::IFile *buffer_file = nullptr;
 };
+
+photon::fs::IFileSystem *ExtFile::filesystem() {
+    return m_fs;
+}
+int ExtFile::flush_buffer() {
+    return m_fs->flush_buffer();
+}
 
 photon::fs::IFileSystem *new_extfs(photon::fs::IFile *file, bool buffer) {
     auto extfs = new ExtFileSystem(file, buffer);

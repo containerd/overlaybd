@@ -87,6 +87,18 @@ public:
         mem_write += count;
         return std::copy_n((char*) buf, count, buffer + buffer_offset) - (buffer + buffer_offset);
     }
+    virtual int fdatasync() override {
+        auto write = disk_write;
+        for (auto &it : mp) {
+            int ret = flush_node(it.second);
+            if (ret) {
+                return -1;
+            }
+        }
+        write = disk_write - write;
+        LOG_DEBUG("flush data: `", write);
+        return 0;
+    }
 
 private:
     size_t cache_hit = 0;
@@ -175,6 +187,7 @@ private:
         if (ret != block_size) {
             LOG_ERRNO_RETURN(0, -1, "BufferFile: failed to flush node");
         }
+        x->is_dif = false;
         return 0;
     }
 
