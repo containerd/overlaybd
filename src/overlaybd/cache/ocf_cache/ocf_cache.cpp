@@ -256,7 +256,7 @@ IFile *OcfCachedFs::open(const char *pathname, int flags, mode_t mode) {
             LOG_ERROR_RETURN(0, nullptr, "OCF: failed to locate src_file in namespace, path `",
                              path_str);
         }
-        return new OcfSrcFileCtx(src_file, info, m_provider);
+        return new OcfSrcFileCtx(src_file, info, m_provider, path_str);
     };
 
     auto src_file_ctx = m_src_file_pool.acquire(path_str, ctor);

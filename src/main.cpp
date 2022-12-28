@@ -326,7 +326,6 @@ static int dev_open(struct tcmu_device *dev) {
 
             odev->end.wait(1);
             delete odev->loop;
-            delete odev->file;
             LOG_INFO("obd device exit");
         };
 
@@ -356,8 +355,8 @@ static void dev_close(struct tcmu_device *dev) {
         delete odev->work;
     } else {
         delete odev->loop;
-        delete odev->file;
     }
+    delete odev->file;
     delete odev;
     close_cnt++;
     if (close_cnt == 500) {

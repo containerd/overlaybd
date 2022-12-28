@@ -73,10 +73,20 @@ struct CredentialConfig : public ConfigUtils::Config {
     APPCFG_PARA(path, std::string, "");
 };
 
+struct CacheConfig : public ConfigUtils::Config {
+    APPCFG_CLASS
+
+    APPCFG_PARA(cacheType, std::string, "");
+    APPCFG_PARA(cacheDir, std::string, "/opt/overlaybd/registry_cache");
+    APPCFG_PARA(cacheSizeGB, uint32_t, 4);
+    APPCFG_PARA(refillSize, uint32_t, 262144);
+    APPCFG_PARA(blockSize, uint32_t, 65536);
+};
+
 struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_CLASS
 
-    APPCFG_PARA(registryCacheDir, std::string, "/opt/overlaybd/registryfs_cache");
+    APPCFG_PARA(registryCacheDir, std::string, "/opt/overlaybd/registry_cache");
     APPCFG_PARA(credentialFilePath, std::string, "/opt/overlaybd/cred.json");
     APPCFG_PARA(credentialConfig, CredentialConfig)
     APPCFG_PARA(registryCacheSizeGB, uint32_t, 4);
@@ -90,6 +100,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(p2pConfig, P2PConfig);
     APPCFG_PARA(auditPath, std::string, "/var/log/overlaybd-audit.log");
     APPCFG_PARA(registryFsVersion, std::string, "v1");
+    APPCFG_PARA(cacheConfig, CacheConfig);
 };
 
 struct AuthConfig : public ConfigUtils::Config {
