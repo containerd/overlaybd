@@ -28,7 +28,7 @@
  *		4. Eliminate .. elements that begin a rooted path, that is, replace /.. by / at the beginning of a path.
  *		5. Leave intact .. elements that begin a non-rooted path.
  * If the result of this process is a null string, cleanname returns the string ".", representing the current directory.
- * 
+ *
  * See also Rob Pike, “Lexical File Names in Plan 9 or Getting Dot-Dot Right,”
  * https://9p.io/sys/doc/lexnames.html
  */
@@ -160,20 +160,12 @@ mode_t TarHeader::get_mode() {
 }
 
 gid_t TarHeader::get_gid() {
-	struct group *gr = getgrnam(gname);
-	if (gr != NULL)
-		return gr->gr_gid;
-	/* if the group entry doesn't exist */
 	int ret;
 	sscanf(gid, "%o", &ret);
 	return ret;
 }
 
 uid_t TarHeader::get_uid() {
-	struct passwd *pw = getpwnam(uname);
-	if (pw != NULL)
-		return pw->pw_uid;
-	/* if the password entry doesn't exist */
 	int ret;
 	sscanf(uid, "%o", &ret);
 	return ret;
