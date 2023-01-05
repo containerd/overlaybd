@@ -101,6 +101,12 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
     if (!remote_file) {
         if (errno == EPERM)
             set_auth_failed();
+        else if (errno == ETIMEDOUT)
+            set_failed("get meta from " + url + " timedout");
+        else if (errno == ENOENT)
+            set_failed("failed to get meta from server, no such file or directory");
+        else if (errno == EIO)
+            set_failed("unexpected response header");
         else
             set_failed("failed to open remote file " + url);
         LOG_ERROR_RETURN(0, nullptr, "failed to open remote file `", url);
