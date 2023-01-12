@@ -391,6 +391,7 @@ public:
     };
 
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
+
         if (!valid) {
             LOG_ERROR_RETURN(EBADF, -1, "object invalid.");
         }
@@ -398,7 +399,12 @@ public:
             LOG_ERROR_RETURN(ENOMEM, -1, "block_size: ` > MAX_READ_SIZE (`)", m_ht.opt.block_size,
                              MAX_READ_SIZE);
         }
-        if (count == 0)
+        if (offset + count > m_ht.raw_data_size) {
+            LOG_WARN("the read range exceeds raw_file_size.(`>`)", count + offset,
+                     m_ht.raw_data_size);
+            count = m_ht.raw_data_size - offset;
+        }
+        if (count <= 0)
             return 0;
         assert(offset + count <= m_ht.raw_data_size);
         ssize_t readn = 0; // final will equal to count
@@ -529,7 +535,7 @@ public:
         if (m_dest->write(&m_block_len[0], index_bytes) != index_bytes) {
             LOG_ERRNO_RETURN(0, -1, "failed to write index.");
         }
-        auto pht = (CompressionFile::HeaderTrailer*)m_ht;
+        auto pht = (CompressionFile::HeaderTrailer *)m_ht;
         pht->index_offset = index_offset;
         pht->index_size = index_size;
         pht->raw_data_size = raw_data_size;
