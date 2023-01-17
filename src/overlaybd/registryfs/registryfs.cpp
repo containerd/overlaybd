@@ -432,16 +432,18 @@ public:
         auto code = m_fs->GET(m_url.c_str(), &headers, -1, -1, nullptr, tmo.timeout());
         if (code != 200 && code != 206) {
             if (tmo.expire() < photon::now)
-                LOG_ERROR_RETURN(ETIMEDOUT, -1, "get meta timedout");
-
-            if (code == 401 || code == 403) {
-                if (retry--)
-                    goto again;
-                LOG_ERROR_RETURN(EPERM, -1, "Authorization failed");
-            }
+                LOG_ERROR_RETURN(ETIMEDOUT, -1, "Get meta timedout");
             if (retry--)
                 goto again;
-            LOG_ERROR_RETURN(ENOENT, -1, "failed to get meta from server");
+            if (code == 401 || code == 403) {
+                LOG_ERROR_RETURN(EPERM, -1, "Authorization failed");
+            } else if (code == 404) {
+                LOG_ERROR_RETURN(ENOENT, -1, "No such file or directory");
+            } else if (code == 429) {
+                LOG_ERROR_RETURN(EBUSY, -1, "Too many request");
+            } else {
+                LOG_ERROR_RETURN(ENOENT, -1, "failed to get meta from server");
+            }
         }
         char buffer[64];
         uint64_t ret = 0;
