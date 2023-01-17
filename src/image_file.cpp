@@ -99,11 +99,24 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
     LOG_DEBUG("open file from remotefs: `, size: `", url, size);
     IFile *remote_file = image_service.global_fs.remote_fs->open(url.c_str(), O_RDONLY);
     if (!remote_file) {
-        if (errno == EPERM)
-            set_auth_failed();
-        else
-            set_failed("failed to open remote file " + url);
-        LOG_ERROR_RETURN(0, nullptr, "failed to open remote file `", url);
+        std::string err_msg = "failed to open remote file " + url + ": ";
+        if (errno == EPERM || errno == EACCES) {
+            err_msg += "Authentication failed";
+        } else if (errno == ENOTCONN) {
+            err_msg += "Connection failed";
+        } else if (errno == ETIMEDOUT) {
+            err_msg += "Get meta timedout";
+        } else if (errno == ENOENT) {
+            err_msg += "No such file or directory";
+        } else if (errno == EBUSY) {
+            err_msg += "Too many requests";
+        } else if (errno == EIO) {
+            err_msg += "Unexpected response";
+        } else {
+            err_msg += std::string(strerror(errno));
+        }
+        set_failed(err_msg);
+        LOG_ERRNO_RETURN(0, nullptr, err_msg);
     }
 
     ISwitchFile *switch_file = new_switch_file(remote_file);
