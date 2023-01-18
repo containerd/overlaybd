@@ -3,6 +3,7 @@ add_subdirectory(lsmt)
 add_subdirectory(zfile)
 add_subdirectory(cache)
 add_subdirectory(untar)
+add_subdirectory(extfs)
 
 file(GLOB SOURCE_OBD "*.cpp")
 add_library(overlaybd_lib STATIC ${SOURCE_OBD})
@@ -16,4 +17,5 @@ target_link_libraries(overlaybd_lib
     zfile_lib
     cache_lib
     untar_lib
+    extfs_lib
 )

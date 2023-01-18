@@ -1,7 +1,7 @@
 FetchContent_Declare(
   rapidjson
-  URL https://github.com/Tencent/rapidjson/archive/v1.1.0.tar.gz
-  URL_MD5 badd12c511e081fec6c89c43a7027bce
+  GIT_REPOSITORY https://github.com/Tencent/rapidjson.git
+  GIT_TAG 80b6d1c83402a5785c486603c5611923159d0894
 )
 FetchContent_GetProperties(rapidjson)
 if (NOT rapidjson_POPULATED)

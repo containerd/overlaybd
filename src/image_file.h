@@ -51,15 +51,14 @@ public:
     }
 
     ~ImageFile() {
-        delete m_file;
-        delete m_prefetcher;
-    }
-
-    int close() override {
         m_status = -1;
         if (dl_thread_jh != nullptr)
             photon::thread_join(dl_thread_jh);
-        return m_file->close();
+        delete m_prefetcher;
+        if (m_file) {
+            m_file->close();
+            delete m_file;
+        }
     }
 
     int fstat(struct stat *buf) override {

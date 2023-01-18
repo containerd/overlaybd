@@ -4,6 +4,7 @@
 
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
+#include <photon/common/alog-audit.h>
 #include <photon/fs/localfs.h>
 #include <photon/common/io-alloc.h>
 #include <photon/common/iovector.h>
@@ -111,6 +112,7 @@ static void volume_submit_io(struct ocf_io *io) {
                 photon::thread_create11(prefetch_read, vol_io->data->ctx, local_iov.sum(), offset,
                                         vol_io->data->blk_addr);
             }
+            SCOPE_AUDIT("download", AU_FILEOP(src_file->path, offset, ret));
             ret = src_file->src_file->preadv(local_iov.iovec(), local_iov.iovcnt(), offset);
         }
     }

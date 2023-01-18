@@ -174,9 +174,6 @@ int ImageService::read_global_config_and_set() {
     if (ioengine > 2) {
         LOG_ERROR_RETURN(0, -1, "unknown io_engine: `", ioengine);
     }
-    if (global_conf.cacheType() != "file" && global_conf.cacheType() != "ocf") {
-        LOG_ERROR_RETURN(0, -1, "unknown cache type `", global_conf.cacheType());
-    }
 
     if (global_conf.enableAudit()) {
         std::string auditPath = global_conf.auditPath();
@@ -201,8 +198,6 @@ int ImageService::read_global_config_and_set() {
         }
     }
 
-    LOG_INFO("global config: cache_dir: `, cache_size_GB: `, cache_type: `",
-             global_conf.registryCacheDir(), global_conf.registryCacheSizeGB(), global_conf.cacheType());
     return 0;
 }
 
@@ -264,7 +259,27 @@ int ImageService::init() {
         return -1;
     }
 
-    if (!create_dir(global_conf.registryCacheDir().c_str()))
+    std::string cache_type, cache_dir;
+    uint32_t cache_size_GB, refill_size, block_size;
+    if (global_conf.cacheConfig().cacheType().empty()) {
+        cache_type = global_conf.cacheType();
+        cache_dir = global_conf.registryCacheDir();
+        cache_size_GB = global_conf.registryCacheSizeGB();
+    } else {
+        cache_type = global_conf.cacheConfig().cacheType();
+        cache_dir = global_conf.cacheConfig().cacheDir();
+        cache_size_GB = global_conf.cacheConfig().cacheSizeGB();
+    }
+    refill_size = global_conf.cacheConfig().refillSize();
+    block_size = global_conf.cacheConfig().blockSize();
+
+    if (cache_type != "file" && cache_type != "ocf") {
+        LOG_ERROR_RETURN(0, -1, "unknown cache type `", cache_type);
+    }
+    LOG_INFO("cache config: ", VALUE(cache_type), VALUE(cache_dir),
+                               VALUE(cache_size_GB), VALUE(refill_size));
+
+    if (!create_dir(cache_dir.c_str()))
         return -1;
 
     if (global_fs.remote_fs == nullptr) {
@@ -276,9 +291,12 @@ int ImageService::init() {
             }
         }
 
-        LOG_INFO("create registryfs with cafile:`", cafile);
+        LOG_INFO("create registryfs with cafile:`, version:`", cafile, global_conf.registryFsVersion());
+        auto registryfs_creator = new_registryfs_v1;
+        if (global_conf.registryFsVersion() == "v2")
+            registryfs_creator = new_registryfs_v2;
 
-        auto registry_fs = new_registryfs_with_credential_callback(
+        auto registry_fs = registryfs_creator(
             {this, &ImageService::reload_auth}, cafile, 30UL * 1000000);
         if (registry_fs == nullptr) {
             LOG_ERROR_RETURN(0, -1, "create registryfs failed.");
@@ -305,22 +323,23 @@ int ImageService::init() {
             global_fs.remote_fs = registry_fs;
             return 0;
         }
-        if (global_conf.cacheType() == "file") {
-            auto registry_cache_fs = new_localfs_adaptor(
-                global_conf.registryCacheDir().c_str());
+        if (global_conf.enableThread() == true && cache_type == "file") {
+            LOG_ERROR_RETURN(0, -1, "multi-thread has not been valid for file cache");
+        }
+        if (cache_type == "file") {
+            auto registry_cache_fs = new_localfs_adaptor(cache_dir.c_str());
             if (registry_cache_fs == nullptr) {
                 delete tar_fs;
-                LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed",
-                                 global_conf.registryCacheDir().c_str());
+                LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed", cache_dir.c_str());
             }
             // file cache will delete its src_fs automatically when destructed
             global_fs.remote_fs = FileSystem::new_full_file_cached_fs(
-                tar_fs, registry_cache_fs, 256 * 1024 /* refill unit 256KB */,
-                global_conf.registryCacheSizeGB() /*GB*/, 10000000,
+                tar_fs, registry_cache_fs, refill_size /* refill unit 256KB */,
+                cache_size_GB /*GB*/, 10000000,
                 (uint64_t)1048576 * 4096, nullptr);
 
-        } else if (global_conf.cacheType() == "ocf") {
-            auto namespace_dir = std::string(global_conf.registryCacheDir() + "/namespace");
+        } else if (cache_type == "ocf") {
+            auto namespace_dir = std::string(cache_dir + "/namespace");
             if (::access(namespace_dir.c_str(), F_OK) != 0 && ::mkdir(namespace_dir.c_str(), 0755) != 0) {
                 LOG_ERRNO_RETURN(0, -1, "failed to create namespace_dir");
             }
@@ -335,12 +354,12 @@ int ImageService::init() {
 
             bool reload_media;
             IFile* media_file;
-            auto media_file_path = std::string(global_conf.registryCacheDir() + "/cache_media");
+            auto media_file_path = std::string(cache_dir + "/cache_media");
             if (::access(media_file_path.c_str(), F_OK) != 0) {
                 reload_media = false;
                 media_file = open_localfile_adaptor(media_file_path.c_str(), O_RDWR | O_CREAT, 0644,
                                                                 ioengine_psync);
-                media_file->fallocate(0, 0, global_conf.registryCacheSizeGB() * 1024UL * 1024 * 1024);
+                media_file->fallocate(0, 0, cache_size_GB * 1024UL * 1024 * 1024);
             } else {
                 reload_media = true;
                 media_file = open_localfile_adaptor(media_file_path.c_str(), O_RDWR, 0644,
@@ -348,7 +367,7 @@ int ImageService::init() {
             }
             global_fs.media_file = media_file;
 
-            global_fs.remote_fs = FileSystem::new_ocf_cached_fs(tar_fs, namespace_fs, 65536, 0,
+            global_fs.remote_fs = FileSystem::new_ocf_cached_fs(tar_fs, namespace_fs, block_size, refill_size,
                                                                 media_file, reload_media, io_alloc);
         }
 

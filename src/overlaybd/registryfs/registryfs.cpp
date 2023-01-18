@@ -256,16 +256,21 @@ protected:
     ObjectCache<estring, size_t *> m_meta_size;
     ObjectCache<estring, estring *> m_scope_token;
     ObjectCache<estring, UrlInfo *> m_url_info;
+    photon::mutex mutex;
 
     photon::net::cURL *get_cURL() {
+        mutex.lock();
         auto curl = m_curl_pool.get();
+        mutex.unlock();
         curl->reset_error();
         curl->reset().clear_header().set_cafile(m_caFile.c_str());
         return curl;
     };
 
     void release_cURL(photon::net::cURL *curl) {
+        mutex.lock();
         m_curl_pool.put(curl);
+        mutex.unlock();
     };
 
     int getScopeAuth(const char *url, estring *authurl, estring *scope, uint64_t timeout) {
@@ -427,16 +432,18 @@ public:
         auto code = m_fs->GET(m_url.c_str(), &headers, -1, -1, nullptr, tmo.timeout());
         if (code != 200 && code != 206) {
             if (tmo.expire() < photon::now)
-                LOG_ERROR_RETURN(ETIMEDOUT, -1, "get meta timedout");
-
-            if (code == 401 || code == 403) {
-                if (retry--)
-                    goto again;
-                LOG_ERROR_RETURN(EPERM, -1, "Authorization failed");
-            }
+                LOG_ERROR_RETURN(ETIMEDOUT, -1, "Get meta timedout");
             if (retry--)
                 goto again;
-            LOG_ERROR_RETURN(ENOENT, -1, "failed to get meta from server");
+            if (code == 401 || code == 403) {
+                LOG_ERROR_RETURN(EPERM, -1, "Authorization failed");
+            } else if (code == 404) {
+                LOG_ERROR_RETURN(ENOENT, -1, "No such file or directory");
+            } else if (code == 429) {
+                LOG_ERROR_RETURN(EBUSY, -1, "Too many request");
+            } else {
+                LOG_ERROR_RETURN(ENOENT, -1, "failed to get meta from server");
+            }
         }
         char buffer[64];
         uint64_t ret = 0;
@@ -487,7 +494,7 @@ inline IFile *RegistryFSImpl::open(const char *pathname, int) {
     return file;
 }
 
-IFileSystem *new_registryfs_with_credential_callback(PasswordCB callback, const char *caFile,
+IFileSystem *new_registryfs_v1(PasswordCB callback, const char *caFile,
                                                      uint64_t timeout) {
     if (!callback)
         LOG_ERROR_RETURN(EINVAL, nullptr, "password callback not set");

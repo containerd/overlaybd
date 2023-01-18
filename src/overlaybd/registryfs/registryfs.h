@@ -28,8 +28,12 @@ public:
 using PasswordCB = Delegate<std::pair<std::string, std::string>, const char *>;
 
 extern "C" {
-photon::fs::IFileSystem *new_registryfs_with_credential_callback(PasswordCB callback,
-                                                     const char *caFile = nullptr,
-                                                     uint64_t timeout = -1);
+photon::fs::IFileSystem *new_registryfs_v1(PasswordCB callback,
+                                           const char *caFile = nullptr,
+                                           uint64_t timeout = -1);
+
+photon::fs::IFileSystem *new_registryfs_v2(PasswordCB callback,
+                                           const char *caFile = nullptr,
+                                           uint64_t timeout = -1);
 }
 

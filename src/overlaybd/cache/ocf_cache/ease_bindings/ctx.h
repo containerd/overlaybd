@@ -19,8 +19,8 @@ class ease_ocf_provider;
 /* Src file context */
 struct OcfSrcFileCtx {
     OcfSrcFileCtx(photon::fs::IFile *src_file_, const OcfNamespace::NsInfo &ns_info_,
-                  ease_ocf_provider *provider_)
-        : src_file(src_file_), ns_info(ns_info_), provider(provider_) {
+                  ease_ocf_provider *provider_, const estring &path_)
+        : src_file(src_file_), ns_info(ns_info_), provider(provider_), path(path_) {
     }
 
     ~OcfSrcFileCtx() {
@@ -30,6 +30,7 @@ struct OcfSrcFileCtx {
     photon::fs::IFile *src_file;
     OcfNamespace::NsInfo ns_info;
     ease_ocf_provider *provider;
+    estring path;
 };
 
 /* IO data */
