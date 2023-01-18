@@ -17,6 +17,12 @@
         "enable": false,
         "address": "localhost:9731/accelerator"
     },
+    "exporterConfig": {
+        "enable": false,
+        "uriPrefix": "/metrics",
+        "port": 9863,
+        "updateInterval": 60000000
+    },
     "enableAudit": true,
     "auditPath": "/var/log/overlaybd-audit.log"
 }

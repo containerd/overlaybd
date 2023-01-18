@@ -129,6 +129,12 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
         "enable": false,
         "address": "http://localhost:9731/accelerator"
     },
+    "exporterConfig": {
+        "enable": false,
+        "uriPrefix": "/metrics",
+        "port": 9863,
+        "updateInterval": 60000000
+    },
     "enableAudit": true,
     "auditPath": "/var/log/overlaybd-audit.log"
 }
@@ -143,14 +149,18 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | registryCacheSizeGB | The max size of cache, in GB.                                                                         |
 | cacheType           | Cache type used, `file` and `ocf` are supported, `file` is the default.                               |
 | credentialFilePath(legacy)  | The credential used for fetching images on registry. `/opt/overlaybd/cred.json` is the default value. |
-| credentialConfig.mode | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` | 
-credentialConfig.path | credential file path or url which is determined by `mode`
+| credentialConfig.mode | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` |
+| credentialConfig.path | credential file path or url which is determined by `mode` |
 | download.enable     | Whether background downloading is enabled or not.                                                     |
 | download.delay      | The seconds waiting to start downloading task after the overlaybd device launched.                    |
 | download.delayExtra | A random extra delay is attached to delay, avoiding too many tasks started at the same time.          |
+| download.maxMBps    | The speed limit in MB/s for a downloading task.                                                       |
 | p2pConfig.enable    | Whether p2p proxy is enabled or not.                                                                  |
 | p2pConfig.address   | The proxy for p2p download.                                                                           |
-| download.maxMBps    | The speed limit in MB/s for a downloading task.                                                       |
+| exporterConfig.enable | whether or not create a server to show Prometheus metrics. |
+| exporterConfig.uriPrefix | URI prefix for export metrics. |
+| exporterConfig.port | port for http server to show metrics. |
+| exporterConfig.updateInterval | Time interval to update metrics in microseconds. |
 | enableAudit         | Enable audit or not.                                                                                  |
 | auditPath           | The path for audit file, `/var/log/overlaybd-audit.log` is the default value.                         |
 

@@ -283,6 +283,15 @@ int ImageService::init() {
         if (registry_fs == nullptr) {
             LOG_ERROR_RETURN(0, -1, "create registryfs failed.");
         }
+        if (global_conf.exporterConfig().enable()) {
+            metrics.reset(new OverlayBDMetric());
+            metrics->interval(global_conf.exporterConfig().updateInterval());
+            metrics->start();
+            registry_fs = new MetricFS(registry_fs, &metrics->download);
+            exporter = new ExporterServer(global_conf, metrics.get());
+            if (!exporter->ready)
+                LOG_ERROR_RETURN(0, -1, "Failed to start http server for metrics exporter");
+        }
 
         auto tar_fs = new_tar_fs_adaptor(registry_fs);
         if (tar_fs == nullptr) {
