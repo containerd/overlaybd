@@ -178,12 +178,31 @@ public:
 class FileTest2 : public FileTest {
 public:
     const char *fn_verify = "verify.img";
-    IFile *fimg = nullptr;
-    char *data = nullptr;
+    IFile *fcheck = nullptr;
+    // char *data = nullptr;
     photon::mutex mtx;
     vector<size_t> clayer_size{};
 
 #define DO_ALIGN(x) ((x) / ALIGNMENT * ALIGNMENT)
+
+    size_t gen_write_data(char *buf, size_t vsize, size_t len, off_t &offset) {
+        offset = DO_ALIGN(rand() % vsize);
+        off_t length = DO_ALIGN(rand() % len);
+        if ((uint64_t)(offset + length) > vsize)
+            length = DO_ALIGN(vsize - offset);
+        if (length == 0) {
+            offset -= ALIGNMENT;
+            length = ALIGNMENT;
+            // return 0;
+        }
+        memset(buf, 0, length);
+        for (auto j = 0; j < length; j++) {
+            auto k = rand() % 256;
+            buf[j] = k; // j  & 0xff;
+        }
+        return length;
+    }
+
     void randwrite(LSMT::IFileRW *file, size_t nwrites) {
         timeval start_time, end_time;
         gettimeofday(&start_time, 0);
@@ -191,23 +210,15 @@ public:
         ALIGNED_MEM4K(buf, 1 << 20)
         struct iovec iov[8]{};
         for (size_t i = 0; i < nwrites; ++i) {
-            off_t offset = DO_ALIGN(rand() % vsize);
-            off_t length = DO_ALIGN(rand() % (128 * 1024));
-            if ((uint64_t)(offset + length) > vsize)
-                length = DO_ALIGN(vsize - offset);
-            if (length == 0) {
-                offset -= ALIGNMENT;
-                length = ALIGNMENT;
-                continue;
-            }
-            memset(buf, 0, length);
+            off_t offset = 0;
+            off_t length = gen_write_data(buf, vsize, (128 * 1024), offset);
             auto roll = rand() % 4;
             if (roll != 0) {
-                for (auto j = 0; j < length; j++) {
-                    auto k = rand() % 256;
-                    buf[j] = k; // j  & 0xff;
-                }
                 LOG_DEBUG("offset: `, length: `", offset, length);
+                if (FLAGS_verify) {
+                    // memcpy(data + offset, buf, length);
+                    fcheck->pwrite(buf, length, offset);
+                }
                 auto slice_count = rand() % 4 + 1;
                 vector<int> seg_offset{0};
                 for (int i = 0; i < slice_count - 1; i++) {
@@ -226,9 +237,10 @@ public:
                 EXPECT_EQ(ret, length);
             } else {
                 file->fallocate(3, offset, length);
-            }
-            if (FLAGS_verify) {
-                memcpy(data + offset, buf, length);
+                if (FLAGS_verify) {
+                    // memcpy(data + offset, buf, length);
+                    fcheck->fallocate(3, offset, length);
+                }
             }
         }
         gettimeofday(&end_time, 0);
@@ -245,6 +257,9 @@ public:
         ALIGNED_MEM4K(buf, 1 << 20)
         struct iovec iov[8]{};
         for (size_t i = 0; i < nwrites; ++i) {
+            // off_t offset = 0;
+            // off_t length =  gen_write_data(buf, vsize, (128 * 1024), offset);
+            // LOG_DEBUG("offset: `, length: `", offset, length);
             off_t offset = DO_ALIGN(rand() % vsize);
             off_t length = DO_ALIGN(rand() % (128 * 1024));
             if ((uint64_t)(offset + length) > vsize)
@@ -255,40 +270,38 @@ public:
                 continue;
             }
             memset(buf, 0, length);
-            {
-                for (auto j = 0; j < length; j++) {
-                    auto k = rand() % 256;
-                    buf[j] = k; // j  & 0xff;
-                }
-                LOG_DEBUG("offset: `, length: `", offset, length);
-                auto slice_count = rand() % 4 + 1;
-                vector<int> seg_offset{0};
-                for (int i = 0; i < slice_count - 1; i++) {
-                    seg_offset.push_back(rand() % length);
-                }
-                seg_offset.push_back(length);
-                for (auto i = 0; i < slice_count; i++) {
-                    iov[i].iov_base = &buf[seg_offset[i]];
-                    iov[i].iov_len = seg_offset[i + 1] - seg_offset[i];
-                }
-                ssize_t ret = file0->pwritev(iov, slice_count, offset);
-                // ssize_t ret = file->pwrite(buf, length, offset);
-                if (ret != length) {
-                    LOG_ERROR("`(`)", errno, strerror(errno));
-                    exit(-1);
-                }
-                EXPECT_EQ(ret, length);
-
-                ret = file1->pwritev(iov, slice_count, offset);
-                if (ret != length) {
-                    LOG_ERROR("`(`)", errno, strerror(errno));
-                    exit(-1);
-                }
-                EXPECT_EQ(ret, length);
+            for (auto j = 0; j < length; j++) {
+                auto k = rand() % 256;
+                buf[j] = k; // j  & 0xff;
             }
+            LOG_DEBUG("offset: `, length: `", offset, length);
             if (FLAGS_verify) {
-                memcpy(data + offset, buf, length);
+                fcheck->pwrite(buf, length, offset);
             }
+            auto slice_count = rand() % 4 + 1;
+            vector<int> seg_offset{0};
+            for (int i = 0; i < slice_count - 1; i++) {
+                seg_offset.push_back(rand() % length);
+            }
+            seg_offset.push_back(length);
+            for (auto i = 0; i < slice_count; i++) {
+                iov[i].iov_base = &buf[seg_offset[i]];
+                iov[i].iov_len = seg_offset[i + 1] - seg_offset[i];
+            }
+            ssize_t ret = file0->pwritev(iov, slice_count, offset);
+            // ssize_t ret = file->pwrite(buf, length, offset);
+            if (ret != length) {
+                LOG_ERROR("`(`)", errno, strerror(errno));
+                exit(-1);
+            }
+            EXPECT_EQ(ret, length);
+
+            ret = file1->pwritev(iov, slice_count, offset);
+            if (ret != length) {
+                LOG_ERROR("`(`)", errno, strerror(errno));
+                exit(-1);
+            }
+            EXPECT_EQ(ret, length);
         }
         gettimeofday(&end_time, 0);
         auto elapsed_time = end_time.tv_sec * 1000000 + end_time.tv_usec -
@@ -297,38 +310,42 @@ public:
     }
 
     void reset_verify_file() {
+        if (fcheck) {
+            delete fcheck;
+        }
         LOG_INFO("create verify image.");
         auto fn_verify_path = string("/tmp/") + fn_verify;
-        int fd = ::open(fn_verify_path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0644);
-        if (fd == -1) {
+        fcheck = open_localfile_adaptor(fn_verify_path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0644);
+        if (fcheck == nullptr) {
             LOG_ERROR("create ` failed.", fn_verify_path.c_str());
             return;
         }
         LOG_INFO("fallocate ` MB size.", vsize >> 20);
-        if (posix_fallocate(fd, 0, vsize) == -1) {
-            LOG_ERROR("err: `(`)", errno, strerror(errno));
+        if (fcheck->fallocate(0, 0, vsize) != 0) {
+            LOG_ERROR("fallocate verify file failed.");
             return;
         }
+
         struct stat st;
-        fstat(fd, &st);
+        fcheck->fstat(&st);
         EXPECT_EQ((uint64_t)st.st_size, vsize);
-        if (vsize > 512 << 20) {
-            LOG_INFO("do mmap...");
-            data = (char *)mmap(nullptr, vsize, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
-            if (data == MAP_FAILED) {
-                LOG_ERROR("err: `(`)", errno, strerror(errno));
-                return;
-            }
-        } else {
-            data = new char[vsize]{};
-        }
-        ::close(fd);
-        memset(data, 0, vsize);
+        // if (vsize > 512 << 20) {
+        //     LOG_INFO("do mmap...");
+        //     data = (char *)mmap(nullptr, vsize, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
+        //     if (data == MAP_FAILED) {
+        //         LOG_ERROR("err: `(`)", errno, strerror(errno));
+        //         return;
+        //     }
+        // } else {
+        //     data = new char[vsize]{};
+        // }
+        // ::close(fd);
+        // memset(data, 0, vsize);
     }
 
     IFileRW *create_file(bool sparse = false) {
         cout << "creating a file, by randwrite()" << endl;
-        memset(data, 0, PREAD_LEN);
+        // memset(data, 0, PREAD_LEN);
         cout << "create_file_rw" << endl;
         auto file = create_file_rw(sparse);
         cout << "randwrite" << endl;
@@ -355,7 +372,10 @@ public:
             }
             if (!FLAGS_verify)
                 continue;
-            char *v = (data + o);
+            auto v = new char[buf_len];
+            DEFER(delete[] v);
+            auto ret_v = fcheck->pread(v, buf_len, o);
+            EXPECT_EQ(ret, ret_v);
             for (auto i = 0; i < buf_len; i++) {
                 EXPECT_EQ(buf[i], v[i]);
                 if (buf[i] != v[i]) {
@@ -468,23 +488,6 @@ public:
         lfs->unlink(data_name.back().c_str());
         lfs->unlink(idx_name.back().c_str());
         delete file;
-        // // auto tmp = ::open_file_ro(as);
-        // // UUID uuid;
-        // // tmp->get_uuid(uuid, 0);
-        // // parent_uuid = UUID::String(uuid).c_str();
-        // // LOG_INFO("reset parent_uuid: `", parent_uuid.c_str());
-        // if (compress) {
-        //     LOG_INFO("compress commit file and enable checksum.");
-        //     CompressOptions opt;
-        //     opt.verify = verify;
-        //     CompressArgs zfile_args(opt);
-        //     int ret = zfile_compress(as, dst, &zfile_args);
-        //     if (ret != 0) {
-        //         LOG_ERRNO_RETURN(0, nullptr, "compress commmit file failed.");
-        //     }
-        //     dst = ZFile::zfile_open_ro(dst, true);
-        //     return dst;
-        // }
         dst->close();
 
         dst = lfs->open(layer_name.back().c_str(), O_RDONLY);
@@ -553,7 +556,7 @@ public:
 
     virtual void TearDown() override {
         if (FLAGS_verify) {
-            munmap(data, vsize);
+            delete fcheck;
         }
         return;
         printf("Tear Down....\n");
@@ -562,4 +565,11 @@ public:
         if (lfs->access(fn_merged, 0) == 0)
             lfs->unlink(fn_merged);
     }
+};
+
+class WarpFileTest : public FileTest3 {
+public:
+    void randwrite_warpfile(IFile *file, size_t nwrites);
+    IFileRW *create_warpfile_rw(int io_engine = 0);
+    IFileRO *create_commit_warpfile(int io_engine = 0);
 };
