@@ -16,18 +16,14 @@
 #pragma once
 #include <list>
 #include <string>
-#include "switch_file.h"
+#include <photon/fs/filesystem.h>
 
 class ImageFile;
+class ISwitchFile;
 
-namespace photon {
-    namespace fs {
-        class IFile;
-    }
-}
 namespace BKDL {
 
-static std::string DOWNLOAD_TMP_NAME = "overlaybd.download";
+static std::string DOWNLOAD_TMP_NAME = ".download";
 static std::string COMMIT_FILE_NAME = "overlaybd.commit";
 
 bool check_downloaded(const std::string &dir);
@@ -46,10 +42,11 @@ public:
         unlock_file();
         delete src_file;
     }
-    BkDownload(ISwitchFile *sw_file, photon::fs::IFile *src_file, const std::string dir,
-               int32_t limit_MB_ps, int32_t try_cnt, ImageFile *image_file, std::string digest)
-        : sw_file(sw_file), src_file(src_file), dir(dir), limit_MB_ps(limit_MB_ps),
-          try_cnt(try_cnt), image_file(image_file), digest(digest) {
+    BkDownload(ISwitchFile *sw_file, photon::fs::IFile *src_file, size_t file_size,
+               const std::string dir, int32_t limit_MB_ps, int32_t try_cnt, ImageFile *image_file,
+               std::string digest)
+        : sw_file(sw_file), src_file(src_file), file_size(file_size), dir(dir),
+          limit_MB_ps(limit_MB_ps), try_cnt(try_cnt), image_file(image_file), digest(digest) {
     }
 
 private:
@@ -62,6 +59,8 @@ private:
     int32_t limit_MB_ps;
     ImageFile *image_file;
     std::string digest;
+    size_t file_size;
+    bool force_download = false;
 };
 
 void bk_download_proc(std::list<BKDL::BkDownload *> &, uint64_t, int &);

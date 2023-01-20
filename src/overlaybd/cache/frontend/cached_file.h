@@ -45,10 +45,10 @@ using namespace FileSystem;
 class CachedFile : public ICachedFile {
 public:
     CachedFile(IFile *src_file, ICacheStore *cache_store, off_t size, uint64_t pageSize,
-               uint64_t refillUnit, IOAlloc *allocator, IFileSystem *fs);
+               uint64_t refillUnit, IOAlloc *allocator, photon::fs::IFileSystem *fs);
     ~CachedFile();
 
-    IFileSystem *filesystem();
+    photon::fs::IFileSystem *filesystem();
 
     ssize_t pread(void *buf, size_t count, off_t offset) override;
     ssize_t preadv(const struct iovec *iov, int iovcnt, off_t offset) override;
@@ -71,7 +71,7 @@ public:
     ssize_t write(const void *buf, size_t count) override;
     ssize_t writev(const struct iovec *iov, int iovcnt) override;
 
-    int fiemap(struct fiemap *map) override;
+    int fiemap(struct photon::fs::fiemap *map) override;
 
     int query(off_t offset, size_t count) override;
 
@@ -115,13 +115,13 @@ private:
     RangeLock rangeLock_;
 
     IOAlloc *allocator_;
-    IFileSystem *fs_;
+    photon::fs::IFileSystem *fs_;
 
     off_t readOffset_;
     off_t writeOffset_;
 };
 
-ICachedFile *new_cached_file(IFile *src, ICacheStore *store, uint64_t pageSize, uint64_t refillUnit,
-                             IOAlloc *allocator, IFileSystem *fs);
+ICachedFile *new_cached_file(photon::fs::IFile *src, ICacheStore *store, uint64_t pageSize,
+                             uint64_t refillUnit, IOAlloc *allocator, photon::fs::IFileSystem *fs);
 
 } //  namespace Cache

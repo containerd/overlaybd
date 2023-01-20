@@ -20,28 +20,26 @@
 #include <photon/fs/filesystem.h>
 #include "pool_store.h"
 
-using namespace photon::fs;
-
 struct IOAlloc;
 namespace FileSystem {
-class ICachedFileSystem : public IFileSystem {
+class ICachedFileSystem : public photon::fs::IFileSystem {
 public:
     // get the source file system
-    UNIMPLEMENTED_POINTER(IFileSystem *get_source());
+    UNIMPLEMENTED_POINTER(photon::fs::IFileSystem *get_source());
 
     // set the source file system
-    UNIMPLEMENTED(int set_source(IFileSystem *src));
+    UNIMPLEMENTED(int set_source(photon::fs::IFileSystem *src));
 
     UNIMPLEMENTED_POINTER(ICachePool *get_pool());
 };
 
-class ICachedFile : public IFile {
+class ICachedFile : public photon::fs::IFile {
 public:
     // get the source file system
-    UNIMPLEMENTED_POINTER(IFile *get_source());
+    UNIMPLEMENTED_POINTER(photon::fs::IFile *get_source());
 
     // set the source file system, and enable `auto_refill`
-    UNIMPLEMENTED(int set_source(IFile *src));
+    UNIMPLEMENTED(int set_source(photon::fs::IFile *src));
 
     UNIMPLEMENTED_POINTER(ICacheStore *get_store());
 
@@ -102,24 +100,16 @@ public:
 };
 
 extern "C" {
-ICachedFileSystem *new_cached_fs(IFileSystem *src, ICachePool *pool, uint64_t pageSize,
+ICachedFileSystem *new_cached_fs(photon::fs::IFileSystem *src, ICachePool *pool, uint64_t pageSize,
                                  uint64_t refillUnit, IOAlloc *allocator);
 
 /** Full file cache will automatically delete its media_fs when destructed */
-ICachedFileSystem *new_full_file_cached_fs(IFileSystem *srcFs, IFileSystem *media_fs,
+ICachedFileSystem *new_full_file_cached_fs(photon::fs::IFileSystem *srcFs,
+                                           photon::fs::IFileSystem *media_fs,
                                            uint64_t refillUnit, uint64_t capacityInGB,
                                            uint64_t periodInUs, uint64_t diskAvailInBytes,
-                                           IOAlloc *allocator);
-
-ICachedFile *new_mem_cached_file(IFile *src, uint64_t mem_size, uint64_t refillUnit,
-                                 IOAlloc *allocator);
-
-ICachedFileSystem *new_mem_cached_fs(IFileSystem *src, uint64_t mem_size, uint64_t refillUnit,
-                                     IOAlloc *allocator);
-
-ICachedFileSystem *new_block_cached_fs(IFileSystem *srcFs, uint64_t refillUnit,
-                                       uint64_t memoryCapacityInGB, uint64_t diskCapacityInGB,
-                                       IOAlloc *allocator, bool shm, bool ipc = false);
+                                           IOAlloc *allocator,
+                                           Fn_trans_func name_trans = ICachePool::same_name_trans);
 
 /**
  * @param blk_size The proper size for cache metadata and IO efficiency.
@@ -127,14 +117,13 @@ ICachedFileSystem *new_block_cached_fs(IFileSystem *srcFs, uint64_t refillUnit,
  * @param prefetch_unit Controls the expand prefetch size from src file. 0 means to disable this
  * feature.
  */
-IFileSystem *new_ocf_cached_fs(IFileSystem *src_fs, IFileSystem *namespace_fs, size_t blk_size,
-                               size_t prefetch_unit, IFile *media_file, bool reload_media,
-                               IOAlloc *io_alloc);
+photon::fs::IFileSystem *new_ocf_cached_fs(photon::fs::IFileSystem *src_fs,
+                                           photon::fs::IFileSystem *namespace_fs, size_t blk_size,
+                                           size_t prefetch_unit, photon::fs::IFile *media_file,
+                                           bool reload_media, IOAlloc *io_alloc);
 
-IFileSystem *new_short_circuit_fs(IFileSystem *syncFs, const std::string &params);
-
-IFileSystem *new_read_ahead_fs(IFileSystem *externFs, bool ownership = true,
-                               size_t ahead = 2 * 1024 * 1024);
+photon::fs::IFileSystem *new_download_cached_fs(photon::fs::IFileSystem *src_fs, size_t blk_size,
+                                                size_t refill_size, IOAlloc *io_alloc);
 } // extern "C"
 
 } // namespace FileSystem

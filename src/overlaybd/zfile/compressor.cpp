@@ -55,7 +55,7 @@ public:
         }
 
         src_blk_size = opt->block_size;
-        LOG_INFO("create batch buffer, size: `", nbatch());
+        LOG_DEBUG("create batch buffer, size: `", nbatch());
         // raw_data.resize(nbatch());
         compressed_data.resize(nbatch());
         uncompressed_data.resize(nbatch());

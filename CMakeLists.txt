@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.15)
 
 project(
   overlaybd
-  VERSION 0.5.3
+  VERSION 0.6.0
   LANGUAGES C CXX
 )
 enable_language(C)

@@ -23,6 +23,8 @@
 #include "full_file_cache/cache_pool.h"
 
 namespace FileSystem {
+using namespace photon::fs;
+
 ICacheStore::try_preadv_result ICacheStore::try_preadv(const struct iovec *iov, int iovcnt,
                                                        off_t offset) {
     try_preadv_result rst;
@@ -60,7 +62,7 @@ ssize_t ICacheStore::pwritev_mutable(struct iovec *iov, int iovcnt, off_t offset
 ICachedFileSystem *new_full_file_cached_fs(IFileSystem *srcFs, IFileSystem *mediaFs,
                                            uint64_t refillUnit, uint64_t capacityInGB,
                                            uint64_t periodInUs, uint64_t diskAvailInBytes,
-                                           IOAlloc *allocator) {
+                                           IOAlloc *allocator, Fn_trans_func name_trans) {
     if (refillUnit % 4096 != 0) {
         LOG_ERROR_RETURN(EINVAL, nullptr, "refill Unit need to be aligned to 4KB")
     }
@@ -69,7 +71,7 @@ ICachedFileSystem *new_full_file_cached_fs(IFileSystem *srcFs, IFileSystem *medi
     }
     Cache::FileCachePool *pool = nullptr;
     pool =
-        new ::Cache::FileCachePool(mediaFs, capacityInGB, periodInUs, diskAvailInBytes, refillUnit);
+        new ::Cache::FileCachePool(mediaFs, capacityInGB, periodInUs, diskAvailInBytes, refillUnit, name_trans);
     pool->Init();
     return new_cached_fs(srcFs, pool, 4096, refillUnit, allocator);
 }

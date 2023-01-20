@@ -40,7 +40,7 @@ namespace Cache {
 class FileCachePool : public FileSystem::ICachePool {
 public:
     FileCachePool(photon::fs::IFileSystem *mediaFs, uint64_t capacityInGB, uint64_t periodInUs,
-                  uint64_t diskAvailInBytes, uint64_t refillUnit);
+                  uint64_t diskAvailInBytes, uint64_t refillUnit, Fn_trans_func name_trans = nullptr);
     ~FileCachePool();
 
     static const uint64_t kDiskBlockSize = 512; // stat(2)
@@ -111,6 +111,7 @@ protected:
     LRUContainer lru_;
     // filename -> lruEntry
     FileNameMap fileIndex_;
+    Fn_trans_func file_name_trans = &same_name_trans;
 };
 
 } //  namespace Cache

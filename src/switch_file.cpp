@@ -13,27 +13,27 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
+#include "switch_file.h"
 #include <fcntl.h>
-#include <mutex>
+#include <photon/common/alog.h>
 #include <photon/common/alog-audit.h>
 #include <photon/common/alog-stdstring.h>
-#include <photon/common/alog.h>
-#include <photon/fs/localfs.h>
 #include <photon/thread/thread.h>
+#include <photon/fs/filesystem.h>
+#include <photon/fs/localfs.h>
 #include "overlaybd/tar_file.h"
-#include "photon/common/alog.h"
-#include "photon/fs/filesystem.h"
-#include "switch_file.h"
 #include "overlaybd/zfile/zfile.h"
 
 using namespace std;
 using namespace photon::fs;
 
 #define FORWARD(func)                                                                              \
-    check_switch();                                                                                \
-    ++io_count;                                                                                    \
-    DEFER({ --io_count; });                                                                        \
-    return m_file->func;
+    if (m_local_file != nullptr) {                                                                 \
+        return m_local_file->func;                                                                 \
+    } else {                                                                                       \
+        return m_file->func;                                                                       \
+    }
+
 
 // check if the `file` is zfile format
 static IFile *try_open_zfile(IFile *file, bool verify, const char *file_path) {
@@ -56,77 +56,39 @@ static IFile *try_open_zfile(IFile *file, bool verify, const char *file_path) {
 
 class SwitchFile : public ISwitchFile {
 public:
-    int state; /* 0. normal state; 1. ready to switch; 2. in processing */
-    int io_count;
-    bool local_path;
     IFile *m_file = nullptr;
-    IFile *m_old = nullptr;
-    string m_filepath;
+    IFile *m_local_file = nullptr;
+    std::string m_filepath;
 
-    SwitchFile(IFile *source, bool local = false, const char *filepath = nullptr)
-        : m_file(source), local_path(local) {
-        state = 0;
-        io_count = 0;
+    SwitchFile(IFile *source, bool local = false, const char *filepath = nullptr) {
+        if (local)
+            m_local_file = source;
+        else m_file = source;
+
         if (filepath != nullptr)
             m_filepath = filepath;
     };
 
-    virtual ~SwitchFile() override {
-        if (m_file != nullptr) {
-            safe_delete(m_file);
-        }
-        if (m_old != nullptr) {
-            safe_delete(m_old);
-        }
+    ~SwitchFile() {
+        safe_delete(m_local_file);
+        safe_delete(m_file);
     }
 
     void set_switch_file(const char *filepath) override {
         m_filepath = filepath;
-        state = 1;
-    }
-
-    int do_switch() {
-        int flags = O_RDONLY;
-        // TODO support libaio
-        auto file = open_localfile_adaptor(m_filepath.c_str(), flags, 0644, 0);
+        auto file = open_localfile_adaptor(m_filepath.c_str(), O_RDONLY, 0644, 0);
         if (file == nullptr) {
-            LOG_ERROR_RETURN(0, -1, "failed to open commit file, path: `, error: `(`)", m_filepath,
-                             errno, strerror(errno));
+            LOG_ERROR("failed to open commit file, path: `", m_filepath);
+            return;
         }
 
-        // if tar file, open tar file
         file = try_open_zfile(new_tar_file_adaptor(file), false, m_filepath.c_str());
         LOG_INFO("switch to localfile '`' success.", m_filepath);
-        m_old = m_file;
-        m_file = file;
-        local_path = true;
-        return 0;
-    }
-
-    int check_switch() {
-        if (state == 0) {
-            return 0;
-        }
-        if (state == 2) {
-            while (state != 0) {
-                photon::thread_usleep(1000);
-            }
-            return 0;
-        }
-        // state == 1
-        state = 2;
-        while (io_count > 0) {
-            photon::thread_usleep(1000);
-        }
-        // set set to 0, even do_switch failed
-        if (do_switch() == 0) {
-            state = 0;
-        }
-        return 0;
+        m_local_file = file;
     }
 
     virtual int close() override {
-        FORWARD(close());
+        return 0;
     }
     virtual ssize_t read(void *buf, size_t count) override {
         FORWARD(read(buf, count));
@@ -141,11 +103,11 @@ public:
         FORWARD(writev(iov, iovcnt));
     }
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
-        if (local_path) {
+        if (m_local_file != nullptr) {
             SCOPE_AUDIT_THRESHOLD(10UL * 1000, "file:pread", AU_FILEOP(m_filepath, offset, count));
-            FORWARD(pread(buf, count, offset));
+            return m_local_file->pread(buf, count, offset);
         } else {
-            FORWARD(pread(buf, count, offset));
+            return m_file->pread(buf, count, offset);
         }
     }
     virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
@@ -191,7 +153,13 @@ public:
 
 ISwitchFile *new_switch_file(IFile *source, bool local, const char *file_path) {
     // if tar file, open tar file
+    int retry = 1;
+again:
     auto file = try_open_zfile(new_tar_file_adaptor(source), !local, file_path);
-
+    if (file == nullptr) {
+        if (retry--) // may retry after cache evict
+            goto again;
+        return nullptr;
+    }
     return new SwitchFile(file, local, file_path);
 };
