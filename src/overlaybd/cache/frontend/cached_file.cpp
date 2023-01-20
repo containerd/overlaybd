@@ -26,11 +26,12 @@
 
 namespace Cache {
 
+using namespace photon::fs;
+
 const off_t kMaxPrefetchSize = 16 * 1024 * 1024;
 
-CachedFile::CachedFile(photon::fs::IFile *src_file, FileSystem::ICacheStore *cache_store,
-                       off_t size, size_t pageSize, size_t refillUnit, IOAlloc *allocator,
-                       IFileSystem *fs)
+CachedFile::CachedFile(IFile *src_file, FileSystem::ICacheStore *cache_store, off_t size,
+                       size_t pageSize, size_t refillUnit, IOAlloc *allocator, IFileSystem *fs)
     : src_file_(src_file), cache_store_(cache_store), size_(size), pageSize_(pageSize),
       refillUnit_(refillUnit), allocator_(allocator), fs_(fs), readOffset_(0), writeOffset_(0){};
 
@@ -286,7 +287,7 @@ int CachedFile::query(off_t offset, size_t count) {
 
 int CachedFile::fallocate(int mode, off_t offset, off_t len) {
     if (len == -1) {
-        return cache_store_->evict(offset, len);
+        len = size_ - offset;
     }
     range_split_power2 rs(offset, len, pageSize_);
     auto aligned_offset = rs.aligned_begin_offset();

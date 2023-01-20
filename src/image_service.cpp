@@ -22,13 +22,14 @@
 #include <photon/fs/localfs.h>
 #include <photon/net/curl.h>
 #include <photon/thread/thread.h>
+#include <photon/common/alog.h>
+#include <photon/net/curl.h>
+#include <photon/fs/path.h>
 #include "overlaybd/cache/cache.h"
 #include "overlaybd/registryfs/registryfs.h"
 #include "overlaybd/tar_file.h"
 #include "overlaybd/zfile/zfile.h"
 #include "overlaybd/base64.h"
-#include "photon/common/alog.h"
-#include "photon/net/curl.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -254,6 +255,10 @@ void ImageService::set_result_file(std::string &filename, std::string &data) {
               data.c_str());
 }
 
+static std::string cache_fn_trans_sha256(std::string_view path) {
+    return std::string(photon::fs::Path(path).basename());
+}
+
 int ImageService::init() {
     if (read_global_config_and_set() < 0) {
         return -1;
@@ -273,8 +278,8 @@ int ImageService::init() {
     refill_size = global_conf.cacheConfig().refillSize();
     block_size = global_conf.cacheConfig().blockSize();
 
-    if (cache_type != "file" && cache_type != "ocf") {
-        LOG_ERROR_RETURN(0, -1, "unknown cache type `", cache_type);
+    if (cache_type != "file" && cache_type != "ocf" && cache_type != "download") {
+        LOG_ERROR_RETURN(0, -1, "unknown cache type: `", cache_type);
     }
     LOG_INFO("cache config: ", VALUE(cache_type), VALUE(cache_dir),
                                VALUE(cache_size_GB), VALUE(refill_size));
@@ -302,11 +307,6 @@ int ImageService::init() {
             LOG_ERROR_RETURN(0, -1, "create registryfs failed.");
         }
 
-        auto tar_fs = new_tar_fs_adaptor(registry_fs);
-        if (tar_fs == nullptr) {
-            delete registry_fs;
-            LOG_ERROR_RETURN(0, -1, "create tar_fs failed.");
-        }
         global_fs.srcfs = registry_fs;
 
         if (global_conf.p2pConfig().enable() == true) {
@@ -320,14 +320,13 @@ int ImageService::init() {
         if (cache_type == "file") {
             auto registry_cache_fs = new_localfs_adaptor(cache_dir.c_str());
             if (registry_cache_fs == nullptr) {
-                delete tar_fs;
+                delete global_fs.srcfs;
                 LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed", cache_dir.c_str());
             }
             // file cache will delete its src_fs automatically when destructed
             global_fs.remote_fs = FileSystem::new_full_file_cached_fs(
-                tar_fs, registry_cache_fs, refill_size /* refill unit 256KB */,
-                cache_size_GB /*GB*/, 10000000,
-                (uint64_t)1048576 * 4096, nullptr);
+                global_fs.srcfs, registry_cache_fs, refill_size, cache_size_GB, 10000000,
+                (uint64_t)1048576 * 4096, nullptr, cache_fn_trans_sha256);
 
         } else if (cache_type == "ocf") {
             auto namespace_dir = std::string(cache_dir + "/namespace");
@@ -358,8 +357,12 @@ int ImageService::init() {
             }
             global_fs.media_file = media_file;
 
-            global_fs.remote_fs = FileSystem::new_ocf_cached_fs(tar_fs, namespace_fs, block_size, refill_size,
+            global_fs.remote_fs = FileSystem::new_ocf_cached_fs(global_fs.srcfs, namespace_fs, block_size, refill_size,
                                                                 media_file, reload_media, io_alloc);
+        } else if (cache_type == "download") {
+            auto io_alloc = new IOAlloc;
+            global_fs.io_alloc = io_alloc;
+            global_fs.remote_fs = FileSystem::new_download_cached_fs(global_fs.srcfs, 4096, refill_size, io_alloc);
         }
 
         if (global_fs.remote_fs == nullptr) {

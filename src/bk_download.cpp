@@ -13,6 +13,7 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
+#include "bk_download.h"
 #include <errno.h>
 #include <list>
 #include <set>
@@ -24,13 +25,11 @@
 #include <photon/fs/localfs.h>
 #include <photon/fs/throttled-file.h>
 #include <photon/thread/thread.h>
-#include <photon/common/event-loop.h>
-#include <photon/io/fd-events.h>
-#include "bk_download.h"
-
 #include <openssl/sha.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "switch_file.h"
+
 using namespace photon::fs;
 
 static constexpr size_t ALIGNMENT = 4096;
@@ -90,57 +89,10 @@ bool check_downloaded(const std::string &dir) {
 
 static std::set<std::string> lock_files;
 
-ssize_t filecopy(IFile *infile, IFile *outfile, size_t bs, int retry_limit, int &running) {
-    if (bs == 0)
-        LOG_ERROR_RETURN(EINVAL, -1, "bs should not be 0");
-    void *buff = nullptr;
-
-    // buffer allocate, with 4K alignment
-    ::posix_memalign(&buff, ALIGNMENT, bs);
-    if (buff == nullptr)
-        LOG_ERROR_RETURN(ENOMEM, -1, "Fail to allocate buffer with ", VALUE(bs));
-    DEFER(free(buff));
-    off_t offset = 0;
-    ssize_t count = bs;
-    while (count == (ssize_t)bs) {
-        if (running != 1) {
-            LOG_INFO("image file exit when background downloading");
-            return -1;
-        }
-
-        int retry = retry_limit;
-    again_read:
-        if (!(retry--))
-            LOG_ERROR_RETURN(EIO, -1, "Fail to read at ", VALUE(offset), VALUE(count));
-        auto rlen = infile->pread(buff, bs, offset);
-        if (rlen < 0) {
-            LOG_DEBUG("Fail to read at ", VALUE(offset), VALUE(count), " retry...");
-            goto again_read;
-        }
-        retry = retry_limit;
-    again_write:
-        if (!(retry--))
-            LOG_ERROR_RETURN(EIO, -1, "Fail to write at ", VALUE(offset), VALUE(count));
-        // cause it might write into file with O_DIRECT
-        // keep write length as bs
-        auto wlen = outfile->pwrite(buff, bs, offset);
-        // but once write lenth larger than read length treats as OK
-        if (wlen < rlen) {
-            LOG_DEBUG("Fail to write at ", VALUE(offset), VALUE(count), " retry...");
-            goto again_write;
-        }
-        count = rlen;
-        offset += count;
-    }
-    // truncate after write, for O_DIRECT
-    outfile->ftruncate(offset);
-    return offset;
-}
-
 void BkDownload::switch_to_local_file() {
     std::string path = dir + "/" + COMMIT_FILE_NAME;
     ((ISwitchFile *)sw_file)->set_switch_file(path.c_str());
-    LOG_DEBUG("set switch tag done. (localpath: `)", path);
+    LOG_DEBUG("set switch done. (localpath: `)", path);
 }
 
 bool BkDownload::download_done() {
@@ -166,6 +118,7 @@ bool BkDownload::download_done() {
     photon::thread_usleep(-1UL);
     if (shares != digest) {
         LOG_ERROR("verify checksum ` failed (expect: `, got: `)", old_name, digest, shares);
+        force_download = true; // force redownload next time
         return false;
     }
 
@@ -224,13 +177,59 @@ bool BkDownload::download_blob(int &running) {
 
     auto dst = open_localfile_adaptor(dl_file_path.c_str(), O_RDWR | O_CREAT, 0644);
     if (dst == nullptr) {
-        LOG_ERRNO_RETURN(0, -1, "failed to open dst file `", dl_file_path.c_str());
+        LOG_ERRNO_RETURN(0, false, "failed to open dst file `", dl_file_path.c_str());
     }
     DEFER(delete dst;);
+    dst->ftruncate(file_size);
 
-    auto res = filecopy(src, dst, 1024UL * 1024, 1, running);
-    if (res < 0)
-        return false;
+    size_t bs = 256 * 1024;
+    off_t offset = 0;
+    void *buff = nullptr;
+    // buffer allocate, with 4K alignment
+    ::posix_memalign(&buff, ALIGNMENT, bs);
+    if (buff == nullptr)
+        LOG_ERRNO_RETURN(0, false, "failed to allocate buffer with ", VALUE(bs));
+    DEFER(free(buff));
+
+    while (offset < file_size) {
+        if (running != 1) {
+            LOG_INFO("image file exit when background downloading");
+            return false;
+        }
+        if (!force_download) {
+            // check aleady downloaded.
+            auto hole_pos = dst->lseek(offset, SEEK_HOLE);
+            if (hole_pos >= offset + bs) {
+                // alread downloaded
+                offset += bs;
+                continue;
+            }
+        }
+
+        int retry = 2;
+        auto count = bs;
+        if (offset + count > file_size)
+            count = file_size - offset;
+    again_read:
+        if (!(retry--))
+            LOG_ERROR_RETURN(EIO, false, "failed to read at ", VALUE(offset), VALUE(count));
+        auto rlen = src->pread(buff, bs, offset);
+        if (rlen < 0) {
+            LOG_WARN("failed to read at ", VALUE(offset), VALUE(count), VALUE(errno), " retry...");
+            goto again_read;
+        }
+        retry = 2;
+    again_write:
+        if (!(retry--))
+            LOG_ERROR_RETURN(EIO, false, "failed to write at ", VALUE(offset), VALUE(count));
+        auto wlen = dst->pwrite(buff, count, offset);
+        // but once write lenth larger than read length treats as OK
+        if (wlen < rlen) {
+            LOG_WARN("failed to write at ", VALUE(offset), VALUE(count), VALUE(errno), " retry...");
+            goto again_write;
+        }
+        offset += count;
+    }
     return true;
 }
 

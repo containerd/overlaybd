@@ -411,6 +411,11 @@ public:
         auto start_addr = buf;
         unsigned char raw[MAX_READ_SIZE];
         for (auto &block : BlockReader(this, offset, count)) {
+            if (buf == nullptr) {
+                //used for prefetch; no copy, no decompress;
+                readn += block.cp_len;
+                continue;
+            }
             if (m_ht.opt.verify) {
                 int retry = 2;
             again:

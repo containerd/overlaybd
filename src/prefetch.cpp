@@ -127,7 +127,6 @@ public:
     }
 
     int replay_worker_thread() {
-        static char buf[MAX_IO_SIZE]; // multi threads reuse one buffer
         while (!m_replay_queue.empty() && !m_replay_stopped) {
             auto trace = m_replay_queue.front();
             m_replay_queue.pop();
@@ -137,18 +136,13 @@ public:
             }
             auto src_file = iter->second;
             if (trace.op == PrefetcherImpl::TraceOp::READ) {
-                ssize_t n_read = src_file->pread(buf, trace.count, trace.offset);
+                ssize_t n_read = src_file->pread(nullptr, trace.count, trace.offset);
                 if (n_read != (ssize_t)trace.count) {
-                    LOG_ERROR("Prefetch: replay pread failed: `, `, respect: `, got: `", ERRNO(),
+                    LOG_WARN("Prefetch: replay pread failed: `, `, respect: `, got: `", ERRNO(),
                               trace, trace.count, n_read);
                     continue;
                 }
             }
-        }
-        photon::thread_sleep(3);
-        if (!m_buffer_released) {
-            m_buffer_released = true;
-            madvise(buf, MAX_IO_SIZE, MADV_DONTNEED);
         }
         return 0;
     }

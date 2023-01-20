@@ -37,6 +37,9 @@
 #define PARALLEL_LOAD_INDEX 32
 using namespace photon::fs;
 
+#define SET_LOCAL_DIR 118
+#define SET_SIZE 119
+
 IFile *ImageFile::__open_ro_file(const std::string &path) {
     int flags = O_RDONLY;
 
@@ -82,7 +85,7 @@ IFile *ImageFile::__open_ro_file(const std::string &path) {
 }
 
 IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &digest,
-                                               const uint64_t size, int layer_index) {
+                                   const uint64_t size, int layer_index) {
     std::string url;
     int64_t extra_range, rand_wait;
 
@@ -118,6 +121,8 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
         set_failed(err_msg);
         LOG_ERRNO_RETURN(0, nullptr, err_msg);
     }
+    remote_file->ioctl(SET_SIZE, size);
+    remote_file->ioctl(SET_LOCAL_DIR, dir);
 
     ISwitchFile *switch_file = new_switch_file(remote_file);
     if (!switch_file) {
@@ -145,7 +150,7 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
             LOG_WARN("failed to open source file, ignore download");
         } else {
             BKDL::BkDownload *obj =
-                new BKDL::BkDownload(switch_file, srcfile, dir, conf.download().maxMBps(),
+                new BKDL::BkDownload(switch_file, srcfile, size, dir, conf.download().maxMBps(),
                                      conf.download().tryCnt(), this, digest);
             LOG_DEBUG("add to download list for `", dir);
             dl_list.push_back(obj);

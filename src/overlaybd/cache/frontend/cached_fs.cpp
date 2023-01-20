@@ -26,6 +26,7 @@
 namespace Cache {
 
 using namespace FileSystem;
+using namespace photon::fs;
 
 class CachedFs : public ICachedFileSystem {
 public:
@@ -134,6 +135,7 @@ private:
 } //  namespace Cache
 
 namespace FileSystem {
+using namespace photon::fs;
 ICachedFileSystem *new_cached_fs(IFileSystem *src, ICachePool *pool, uint64_t pageSize,
                                  uint64_t refillUnit, IOAlloc *allocator) {
     if (!allocator) {

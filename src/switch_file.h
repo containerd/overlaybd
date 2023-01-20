@@ -14,12 +14,7 @@
    limitations under the License.
 */
 #pragma once
-
-namespace photon {
-    namespace fs {
-        class IFile;
-    }
-}
+#include <photon/fs/filesystem.h>
 
 // switch to local file after background download finished, and audit for local file pread
 // operations. if initialized with local file, only audit for pread.

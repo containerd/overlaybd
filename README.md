@@ -147,7 +147,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | logLevel            | DEBUG 0, INFO  1, WARN  2, ERROR 3                                                                    |
 | ioEngine            | IO engine used to open local files: psync 0, libaio 1, posix aio 2.                                   |
 | logPath             | The path for log file, `/var/log/overlaybd.log` is the default value.                                 |
-| cacheConfig.cacheType   | Cache type used, `file` and `ocf` are supported.                                                  |
+| cacheConfig.cacheType   | Cache type used, `file`, `ocf` and `download` are supported.                                      |
 | cacheConfig.cacheDir    | The cache directory for remote image data.                                                        |
 | cacheConfig.cacheSizeGB | The max size of cache, in GB.                                                                     |
 | cacheConfig.refillSize  | The refill size from source, in byte. `262144` is default (256 KB).                               |

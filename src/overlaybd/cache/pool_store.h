@@ -25,6 +25,8 @@
 
 struct iovector;
 
+typedef std::string (*Fn_trans_func)(std::string_view name);
+
 namespace FileSystem {
 class ICacheStore;
 struct CacheStat {
@@ -54,6 +56,7 @@ public:
 
     ICacheStore *find_store_map(std::string_view pathname);
 
+    static std::string same_name_trans(std::string_view filename) { return std::string(filename); }
 protected:
     unordered_map_string_key<ICacheStore *> m_stores;
 };

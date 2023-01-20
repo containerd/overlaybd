@@ -35,7 +35,7 @@ const uint64_t kMaxFreeSpace = 50 * kGB;
 const int64_t kEvictionMark = 5ll * kGB;
 
 FileCachePool::FileCachePool(photon::fs::IFileSystem *mediaFs, uint64_t capacityInGB, uint64_t periodInUs,
-                             uint64_t diskAvailInBytes, uint64_t refillUnit)
+                             uint64_t diskAvailInBytes, uint64_t refillUnit, Fn_trans_func name_trans)
     : mediaFs_(mediaFs), capacityInGB_(capacityInGB), periodInUs_(periodInUs),
       diskAvailInBytes_(diskAvailInBytes), refillUnit_(refillUnit), totalUsed_(0), timer_(nullptr),
       running_(false), exit_(false), isFull_(false) {
@@ -44,6 +44,9 @@ FileCachePool::FileCachePool(photon::fs::IFileSystem *mediaFs, uint64_t capacity
     // keep this relation : waterMark < riskMark < capacity
     riskMark_ = std::max(capacityInBytes - kEvictionMark,
                          (static_cast<int64_t>(waterMark_) + capacityInBytes) >> 1);
+    if (name_trans != nullptr) {
+        file_name_trans = name_trans;
+    }
 }
 
 FileCachePool::~FileCachePool() {
@@ -63,8 +66,7 @@ void FileCachePool::Init() {
 }
 
 ICacheStore *FileCachePool::do_open(std::string_view pathname, int flags, mode_t mode) {
-    // use filename (sha256 in overlaybd image) as the key, it's not a universal file cache any more
-    auto filename = photon::fs::Path(pathname.data()).basename();
+    auto filename = file_name_trans(pathname);
     auto localFile = openMedia(filename, flags, mode);
     if (!localFile) {
         return nullptr;
