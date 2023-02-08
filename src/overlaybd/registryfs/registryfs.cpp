@@ -26,7 +26,6 @@
 
 #include <photon/common/utility.h>
 #include <photon/common/timeout.h>
-#include <photon/net/curl.h>
 #include <photon/common/iovector.h>
 #include <photon/common/identity-pool.h>
 #include <photon/common/estring.h>
@@ -34,6 +33,8 @@
 #include <photon/common/callback.h>
 #include <photon/common/alog-stdstring.h>
 #include <photon/common/alog.h>
+#include <photon/net/curl.h>
+#include <photon/net/http/url.h>
 #include <photon/fs/filesystem.h>
 #include <photon/fs/virtual-file.h>
 #include <rapidjson/document.h>
@@ -125,7 +126,7 @@ public:
             actual_url = actual_info->info.data();
         //use p2p proxy
         estring accelerate_url;
-        if(m_accelerate.size() > 0) {
+        if (m_accelerate.size() > 0) {
             accelerate_url = m_accelerate + "/" + actual_url;
             actual_url = accelerate_url.data();
             LOG_DEBUG("p2p_url: `", actual_url);
@@ -133,6 +134,9 @@ public:
 
         {
             auto curl = get_cURL();
+            if (photon::net::http::what_protocol(actual_url) == 2) {
+                curl->reset().clear_header().setopt(CURLOPT_SSL_VERIFYPEER, 0L);
+            }
             DEFER({ release_cURL(curl); });
             curl->set_redirect(10);
             // set token if needed
