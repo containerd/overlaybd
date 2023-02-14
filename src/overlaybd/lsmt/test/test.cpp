@@ -23,8 +23,14 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 
 */
 #include "lsmt-filetest.h"
+#include "photon/fs/localfs.h"
+#include <fcntl.h>
 #include <sys/time.h>
 #include <photon/photon.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <string.h>
 
 #define USE_PTH true // use pthread
 
@@ -697,14 +703,7 @@ TEST_F(FileTest3, photon_verify) {
     randwrite(flsmt.get(), FLAGS_nwrites);
     vector<photon::thread *> threads;
     errno = 0;
-    // race in concurrency write
-    // for (int i = 0; i < thread_cnt; i++) {
-    //     threads.push_back(photon::thread_create11(&FileTest2::randwrite, (FileTest2 *)this,
-    //                                               flsmt.get(), FLAGS_nwrites / thread_cnt));
-    //     photon::thread_enable_join(threads.back());
-    // }
-    // for (auto thd : threads)
-    //     thread_join((photon::join_handle *)thd);
+
     if (errno != 0) {
         LOG_INFO("previous err: `(`)", errno, strerror(errno));
     }
@@ -725,6 +724,170 @@ TEST_F(FileTest3, photon_verify) {
         thread_join((photon::join_handle *)thd);
 }
 
+void WarpFileTest::randwrite_warpfile(IFile *file, size_t nwrites) {
+    LOG_INFO("start randwrite ` times", nwrites);
+    ALIGNED_MEM4K(buf, 1 << 20)
+    auto vsize = FLAGS_vsize << 20;
+    for (size_t i = 0; i < nwrites; ++i) {
+        off_t offset = 0;
+        off_t length = gen_write_data(buf, vsize, 128 * 1024, offset);
+        auto roll = rand() % 4;
+        if (roll == 0) {
+            LOG_DEBUG("offset: `, length: `", offset, length);
+
+            ssize_t ret = file->pwrite(buf, length, offset);
+            if (ret != length) {
+                LOG_ERROR("`(`)", errno, strerror(errno));
+                exit(-1);
+            }
+            EXPECT_EQ(ret, length);
+        } else {
+            RemoteMapping lba;
+            lba.count = length;
+            lba.offset = offset;
+            lba.roffset = offset;
+            file->ioctl(IFileRW::RemoteData, lba);
+        }
+        if (FLAGS_verify) {
+            // memcpy(data + offset, buf, length);
+            fcheck->pwrite(buf, length, offset);
+        }
+    }
+}
+
+IFileRW *WarpFileTest::create_warpfile_rw(int io_engine) {
+    name_next_layer();
+    auto findex = lfs->open("rwtmp.index", O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto flba = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto fmeta = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    LOG_INFO("create warpfile { fn_lba: `, fn_meta `}", data_name.back().c_str(),
+             idx_name.back().c_str());
+    WarpFileArgs args(findex, fmeta, fcheck, flba);
+    args.virtual_size = FLAGS_vsize << 20;
+    memcpy(args.parent_uuid.data, parent_uuid.c_str(), parent_uuid.length());
+    auto file = create_warpfile(args, true);
+    randwrite_warpfile(file, FLAGS_nwrites);
+    return file;
+}
+
+IFileRO *WarpFileTest::create_commit_warpfile(int io_engine) {
+    auto warpfile = create_warpfile_rw(io_engine);
+    LOG_INFO("commit warpfile as `", layer_name.back().c_str());
+    auto fcommit = lfs->open(layer_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    UUID uu;
+    uu.parse(parent_uuid.c_str(), parent_uuid.size());
+    CommitArgs c(fcommit);
+    c.parent_uuid = uu;
+    ((IFileRW *)warpfile)->commit(c);
+    delete warpfile;
+    fcommit->close();
+    fcommit = lfs->open(layer_name.back().c_str(), O_RDONLY);
+    auto ret = open_warpfile_ro(fcommit, fcheck, true);
+    ret->get_uuid(uu);
+    parent_uuid = UUID::String(uu).c_str();
+    return ret;
+}
+
+TEST_F(WarpFileTest, randwrite) {
+    CleanUp();
+    log_output_level = FLAGS_log_level;
+    LOG_INFO("log level: `", log_output_level);
+    auto file = create_warpfile_rw(ut_io_engine);
+    verify_file(file);
+    file->close();
+    auto findex = lfs->open("rwtmp.index", O_RDWR | O_CREAT, S_IRWXU);
+    auto flba = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT, S_IRWXU);
+    auto fmeta = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT, S_IRWXU);
+    file = open_warpfile_rw(findex, fmeta, flba, fcheck, false);
+    verify_file(file);
+    file->close();
+    LOG_INFO("commit warpfile as `", layer_name.back().c_str());
+    auto fcommit = lfs->open(layer_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    file = open_warpfile_rw(findex, fmeta, flba, nullptr, true);
+    CommitArgs c(fcommit);
+    ((IFileRW *)file)->commit(c);
+    file->close();
+    verify_file(open_warpfile_ro(fcommit, fcheck, true));
+    fcheck = nullptr;
+    delete file;
+}
+
+TEST_F(WarpFileTest, commit) {
+    CleanUp();
+    auto file = create_commit_warpfile(ut_io_engine);
+    verify_file(file);
+    fcheck = nullptr; // delete by warpfile.
+    delete file;
+}
+
+TEST_F(WarpFileTest, large_lba) {
+    CleanUp();
+    log_output_level = FLAGS_log_level;
+    LOG_INFO("log level: `", log_output_level);
+    auto fidx = open_localfile_adaptor("/tmp/warpfile.idx", O_TRUNC | O_CREAT | O_RDWR);
+    auto flba = open_localfile_adaptor("/tmp/warpfile.lba", O_TRUNC | O_CREAT | O_RDWR);
+    auto fmeta = open_localfile_adaptor("/tmp/warpfile.meta", O_TRUNC | O_CREAT | O_RDWR);
+    WarpFileArgs args(fidx, fmeta, fcheck, flba);
+    args.virtual_size = FLAGS_vsize << 20;
+    // Set memory file
+    auto file = create_warpfile(args, true);
+    DEFER(delete file);
+    RemoteMapping lba;
+    lba.count = 26 << 20; // 26MB
+    lba.offset = 0;
+    lba.roffset = 0;
+    file->ioctl(IFileRW::RemoteData, lba);
+    EXPECT_EQ(((LSMTWarpFile *)file)->m_index->size(), 4);
+    uint32_t LEN = Segment::MAX_LENGTH;
+    const static SegmentMapping check[] = {{0, LEN, 0, 1},
+                                           {LEN, LEN, LEN, 1},
+                                           {LEN * 2, LEN, LEN * 2, 1},
+                                           {LEN * 3, lba.count / ALIGNMENT - LEN * 3, LEN * 3, 1}};
+    auto p = ((IMemoryIndex0 *)(((LSMTWarpFile *)file)->m_index))->dump();
+    for (int i = 0; i < 4; i++) {
+        LOG_INFO("check: `, mapping: `", check[i], p[i]);
+    }
+    EXPECT_EQ(memcmp((void *)check, (void *)p, 4 * sizeof(SegmentMapping)), 0);
+}
+
+TEST_F(WarpFileTest, multi_layer) {
+    CleanUp();
+    log_output_level = FLAGS_log_level;
+    LOG_INFO("log level: `", log_output_level);
+    for (int i = 0; i < FLAGS_layers; ++i) {
+        files[i] = create_commit_warpfile(ut_io_engine);
+    }
+    auto file = open_files_ro(files, FLAGS_layers);
+    verify_file(file);
+    delete file;
+    fcheck = nullptr;
+}
+
+TEST_F(WarpFileTest, stack_files) {
+    CleanUp();
+    log_output_level = FLAGS_log_level;
+    LOG_INFO("log level: `", log_output_level);
+    int k = 0;
+    for (int i = 0; i < FLAGS_layers; ++i) {
+        auto roll = rand() % 2;
+        if (roll || i == FLAGS_layers - 1) {
+            k++;
+            files[i] = create_commit_warpfile(ut_io_engine);
+        } else {
+            files[i] = create_commit_layer();
+        }
+    }
+    LOG_INFO("creat ` layers with ` warp layers.", FLAGS_layers, k);
+    auto lower = open_files_ro(files, FLAGS_layers);
+    verify_file(lower);
+    LOG_INFO("create top RW layer by randwrite()");
+    auto upper = create_file_rw();
+    auto file = stack_files(upper, lower, 0, true);
+    verify_file(file);
+    delete file;
+    fcheck = nullptr;
+}
+
 int main(int argc, char **argv) {
 
     auto seed = 154574045;
@@ -734,6 +897,7 @@ int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     ::gflags::ParseCommandLineFlags(&argc, &argv, true);
     log_output_level = FLAGS_log_level;
+    LOG_INFO("log level: `", log_output_level);
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
 
     auto ret = RUN_ALL_TESTS();

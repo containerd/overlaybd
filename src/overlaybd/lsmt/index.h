@@ -26,6 +26,7 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 #include <inttypes.h>
 #include <cstddef>
 #include <assert.h>
+#include <sys/types.h>
 
 namespace LSMT {
 struct Segment {          // 48 + 18 == 64
@@ -82,6 +83,17 @@ struct SegmentMapping : public Segment { // 64 + 55 + 9 == 128
         return SegmentMapping(INVALID_OFFSET, 0, 0);
     }
 } __attribute__((packed));
+
+struct RemoteMapping {
+    off_t offset;
+    uint32_t count;
+    off_t roffset;
+};
+
+enum class SegmentType {
+    fsMeta,
+    remoteData,
+};
 
 // a read-only memory index for log-structured data
 class IMemoryIndex {
