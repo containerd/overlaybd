@@ -180,7 +180,7 @@ void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
     case WRITE_SAME:
     case WRITE_SAME_16:
         if (cmd->cdb[1] & 0x08) {
-            length = tcmu_iovec_length(cmd->iovec, cmd->iov_cnt);
+            length = tcmu_lba_to_byte(dev, tcmu_cdb_get_xfer_length(cmd->cdb));
             ret = file->fallocate(3, tcmu_cdb_to_byte(dev, cmd->cdb), length);
             if (ret == 0) {
                 tcmulib_command_complete(dev, cmd, TCMU_STS_OK);
