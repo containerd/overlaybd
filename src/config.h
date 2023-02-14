@@ -67,6 +67,15 @@ struct P2PConfig : public ConfigUtils::Config {
     APPCFG_PARA(address, std::string, "http://localhost:9731/accelerator");
 };
 
+struct ExporterConfig : public ConfigUtils::Config {
+    APPCFG_CLASS
+
+    APPCFG_PARA(enable, bool, false);
+    APPCFG_PARA(uriPrefix, std::string, "/metrics");
+    APPCFG_PARA(port, int, 9863);
+    APPCFG_PARA(updateInterval, uint64_t, 60UL * 1000 * 1000);
+};
+
 struct CredentialConfig : public ConfigUtils::Config {
     APPCFG_CLASS
     APPCFG_PARA(mode, std::string, "");
@@ -98,6 +107,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(enableAudit, bool, true);
     APPCFG_PARA(enableThread, bool, false);
     APPCFG_PARA(p2pConfig, P2PConfig);
+    APPCFG_PARA(exporterConfig, ExporterConfig);
     APPCFG_PARA(auditPath, std::string, "/var/log/overlaybd-audit.log");
     APPCFG_PARA(registryFsVersion, std::string, "v1");
     APPCFG_PARA(cacheConfig, CacheConfig);
