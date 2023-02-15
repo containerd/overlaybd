@@ -62,8 +62,8 @@ int main(int argc, char **argv) {
     app.add_option(
            "--bs", block_size,
            "The size of a data block in KB. Must be a power of two between 4K~64K [4/8/16/32/64](default 4)");
+    app.add_option("--lba_file", remote_mapping_file, "remoteLBA for warpfile")->type_name("FILEPATH")->check(CLI::ExistingFile);
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
-    app.add_option("lba_file", remote_mapping_file, "remoteLBA for warpfile")->type_name("FILEPATH")->check(CLI::ExistingFile);
     app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     app.add_option("commit_file", commit_file_path, "commit file path")->type_name("FILEPATH")->required();
     CLI11_PARSE(app, argc, argv);
