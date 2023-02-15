@@ -58,3 +58,6 @@ install(FILES example_config/overlaybd.json DESTINATION /etc/overlaybd/)
 install(FILES example_config/cred.json DESTINATION /opt/overlaybd/)
 
 add_subdirectory(tools)
+if (BUILD_TESTING)
+    add_subdirectory(test)
+endif ()

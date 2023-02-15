@@ -16,15 +16,15 @@
 #include "image_service.h"
 #include "config.h"
 #include "image_file.h"
-#include <photon/common/alog-stdstring.h>
 #include <photon/common/alog.h>
+#include <photon/common/alog-stdstring.h>
 #include <photon/common/io-alloc.h>
 #include <photon/fs/localfs.h>
-#include <photon/net/curl.h>
-#include <photon/thread/thread.h>
-#include <photon/common/alog.h>
-#include <photon/net/curl.h>
 #include <photon/fs/path.h>
+#include <photon/net/curl.h>
+#include <photon/net/http/url.h>
+#include <photon/net/socket.h>
+#include <photon/thread/thread.h>
 #include "overlaybd/cache/cache.h"
 #include "overlaybd/registryfs/registryfs.h"
 #include "overlaybd/tar_file.h"
@@ -259,6 +259,24 @@ static std::string cache_fn_trans_sha256(std::string_view path) {
     return std::string(photon::fs::Path(path).basename());
 }
 
+bool check_accelerate_url(std::string_view a_url) {
+    photon::net::http::URL url(a_url);
+    std::string host = url.host().data();
+    auto pos = host.find(":");
+    if (pos != host.npos) {
+        host.resize(pos);
+    }
+    auto cli = photon::net::new_tcp_socket_client();
+    DEFER({ delete cli; });
+    LOG_DEBUG("Connecting");
+    auto sock = cli->connect({photon::net::IPAddr(host.c_str()), url.port()});
+    DEFER({ delete sock; });
+    if (sock == nullptr) {
+        LOG_WARN("P2P accelerate url invalid");
+    }
+    return sock != nullptr;
+}
+
 int ImageService::init() {
     if (read_global_config_and_set() < 0) {
         return -1;
@@ -319,7 +337,6 @@ int ImageService::init() {
         global_fs.srcfs = registry_fs;
 
         if (global_conf.p2pConfig().enable() == true) {
-            ((RegistryFS*)registry_fs)->setAccelerateAddress(global_conf.p2pConfig().address().c_str());
             global_fs.remote_fs = registry_fs;
             return 0;
         }
@@ -395,6 +412,12 @@ ImageFile *ImageService::create_image_file(const char *config_path) {
         defaultDlCfg.HasMember("download")) {
         cfg.AddMember("download", defaultDlCfg["download"], cfg.GetAllocator());
     }
+    std::string accelerate_url = "";
+    if (global_conf.p2pConfig().enable() &&
+        check_accelerate_url(global_conf.p2pConfig().address())) {
+        accelerate_url = global_conf.p2pConfig().address();
+    }
+    ((RegistryFS*)(global_fs.remote_fs))->setAccelerateAddress(accelerate_url.c_str());
 
     auto resFile = cfg.resultFile();
     ImageFile *ret = new ImageFile(cfg, *this);
