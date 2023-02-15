@@ -1,21 +1,17 @@
-cmake_minimum_required(VERSION 3.11)
+include_directories($ENV{GFLAGS}/include)
+link_directories($ENV{GFLAGS}/lib)
 
-find_package(rapidjson REQUIRED)
+include_directories($ENV{GTEST}/googletest/include)
+link_directories($ENV{GTEST}/lib)
 
-set(CURL_STATICLIB on)
-add_definitions(-DCURL_STATICLIB)
-
-INCLUDE_DIRECTORIES(
+add_executable(curl_test test.cpp)
+target_include_directories(curl_test PUBLIC
     ${PHOTON_INCLUDE_DIR}
     ${rapidjson_SOURCE_DIR}/include
 )
+target_link_libraries(curl_test gtest gtest_main gflags pthread photon_static overlaybd_lib overlaybd_image_lib)
 
-add_executable(simple_auth_srv simple_auth_server.cpp)
-
-target_link_libraries(simple_auth_srv
-photon_static
-rt
-resolv
-aio
-pthread
+add_test(
+    NAME curl_test
+    COMMAND ${EXECUTABLE_OUTPUT_PATH}/curl_test
 )
