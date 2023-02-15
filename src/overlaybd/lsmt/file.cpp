@@ -551,6 +551,7 @@ static int compact(const CompactOptions &opt, atomic_uint64_t &compacted_idx_siz
     if (load_layer_info(src_files, opt.n, layer) != 0)
         return -1;
     layer.user_tag = commit_args->user_tag;
+    layer.uuid.clear();
     if (UUID::String::is_valid((commit_args->parent_uuid).c_str())) {
         layer.parent_uuid.parse(commit_args->parent_uuid);
     }
