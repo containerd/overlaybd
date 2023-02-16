@@ -759,7 +759,7 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     DEFER(delete compressor);
     if (compressor == nullptr)
         return -1;
-    char buf[CompressionFile::HeaderTrailer::SPACE];
+    char buf[CompressionFile::HeaderTrailer::SPACE] = {};
     auto pht = new (buf) CompressionFile::HeaderTrailer;
     pht->set_compress_option(opt);
 

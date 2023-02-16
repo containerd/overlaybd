@@ -56,6 +56,7 @@ inline void get_now(struct timespec *now) {
 
 int update_xtime(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *pinode,
                         int flags, struct timespec *file_time = nullptr) {
+#ifndef NO_TIMESTAMP
     errcode_t ret = 0;
     struct ext2_inode inode, *pino;
 
@@ -86,11 +87,12 @@ int update_xtime(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *pinode,
         if (ret)
             return parse_extfs_error(fs, ino, ret);
     }
-
+#endif
     return 0;
 }
 
 int update_xtime(ext2_file_t file, int flags, struct timespec *file_time = nullptr) {
+#ifndef NO_TIMESTAMP
     errcode_t ret = 0;
     ext2_filsys fs = ext2fs_file_get_fs(file);
     ext2_ino_t ino = ext2fs_file_get_inode_num(file);
@@ -104,7 +106,7 @@ int update_xtime(ext2_file_t file, int flags, struct timespec *file_time = nullp
 
     ret = ext2fs_write_inode(fs, ino, inode);
     if (ret) return parse_extfs_error(fs, ino, ret);
-
+#endif
     return 0;
 }
 
@@ -170,7 +172,13 @@ int remove_inode(ext2_filsys fs, ext2_ino_t ino) {
 
     if (inode.i_links_count == 0) return 0;
     inode.i_links_count--;
-    if (inode.i_links_count == 0) inode.i_dtime = time(0);
+    if (inode.i_links_count == 0) {
+#ifndef NO_TIMESTAMP
+        inode.i_dtime = time(0);
+#else
+        inode.i_dtime = 0;
+#endif
+    }
 
     ret_err = update_xtime(fs, ino, (struct ext2_inode *)&inode, EXT_CTIME);
     if (ret_err) return ret_err;
@@ -393,7 +401,9 @@ int create_file(ext2_filsys fs, const char *path, unsigned int mode, ext2_ino_t 
     struct ext2_inode inode;
     memset(&inode, 0, sizeof(inode));
     inode.i_mode = (mode & ~LINUX_S_IFMT) | LINUX_S_IFREG;
+#ifndef NO_TIMESTAMP
     inode.i_atime = inode.i_ctime = inode.i_mtime = time(0);
+#endif
     inode.i_links_count = 1;
     ret = ext2fs_inode_size_set(fs, &inode, 0);  // TODO: update size? also on write?
     if (ret) return parse_extfs_error(fs, 0, ret);

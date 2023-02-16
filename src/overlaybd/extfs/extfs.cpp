@@ -314,7 +314,7 @@ int do_ext2fs_mkdir(ext2_filsys fs, const char *path, int mode) {
     if (ret == EXT2_ET_DIR_NO_SPACE) {
         ret = ext2fs_expand_dir(fs, parent);
         if (ret) return parse_extfs_error(fs, 0, ret);
-        LOG_WARN("ext2fs_expand_mkdir ", VALUE(parent));
+
         ret = ext2fs_mkdir(fs, parent, ino, filename);
     }
     if (ret) return parse_extfs_error(fs, 0, ret);
@@ -667,8 +667,10 @@ int do_ext2fs_mknod(ext2_filsys fs, const char *path, unsigned int st_mode, unsi
     struct ext2_inode inode;
     memset(&inode, 0, sizeof(inode));
     inode.i_mode = st_mode;
+#ifndef NO_TIMESTAMP
     inode.i_atime = inode.i_ctime = inode.i_mtime =
         fs->now ? fs->now : time(0);
+#endif
 
     if (filetype != S_IFIFO) {
         devmajor = major(st_rdev);
