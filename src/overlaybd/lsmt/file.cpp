@@ -906,7 +906,7 @@ public:
 class LSMTSparseFile : public LSMTFile {
 public:
     static const off_t BASE_MOFFSET = HeaderTrailer::SPACE;
-
+    bool warp_rw = false;
     LSMTSparseFile() {
         m_filetype = LSMTFileType::SparseRW;
     }
@@ -1003,7 +1003,7 @@ public:
     LSMTWarpFile() {
         m_filetype = LSMTFileType::WarpFile;
     }
-    ssize_t pwrite(const void *buf, size_t count, off_t offset, SegmentType tag) {
+    ssize_t pwrite(const void *buf, size_t count, off_t offset, SegmentType stype) {
 
         auto moffset = offset;
         SegmentMapping m{
@@ -1011,6 +1011,7 @@ public:
             (uint32_t)count / (uint32_t)ALIGNMENT,
             (uint64_t)moffset / (uint64_t)ALIGNMENT,
         };
+        auto tag = (uint8_t)stype + m_rw_tag;
         auto append = [&](const void *buf, SegmentMapping m) -> ssize_t {
             ssize_t ret = -1;
             m.tag = (uint8_t)tag;
@@ -1025,7 +1026,7 @@ public:
             append_index(m);
             return ret;
         };
-        if (tag == SegmentType::remoteData) {
+        if (stype == SegmentType::remoteData) {
             m.moffset = ((RemoteMapping *)buf)->roffset / (uint64_t)ALIGNMENT;
             auto limit_len = Segment::MAX_LENGTH;
             size_t nwrite = 0;
@@ -1678,10 +1679,37 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
                      bool check_order) {
     auto u = (LSMTFile *)upper_layer;
     auto l = (LSMTReadOnlyFile *)lower_layers;
-    if (!u || u->m_files.size() != 1)
+    if (!u /*|| u->m_files.size() != 1*/)
         LOG_ERROR_RETURN(EINVAL, nullptr, "invalid upper layer");
     if (!l)
         return upper_layer;
+    auto type = u->ioctl(IFileRO::GetType);
+    if (type == (uint8_t)LSMTFileType::WarpFile) {
+        auto rst = new LSMTWarpFile;
+        // rst->warp_rw = true;
+        auto idx = create_combo_index((IMemoryIndex0 *)u->m_index, l->m_index, l->m_files.size(), true);
+        rst->m_index = idx;
+        rst->m_findex = u->m_findex;
+        rst->m_vsize = u->m_vsize;
+        rst->m_file_ownership = ownership;
+        rst->m_files.reserve(2 + l->m_files.size());
+        rst->m_uuid.reserve(1 + l->m_uuid.size());
+        for (auto &x : l->m_files)
+            rst->m_files.push_back(x);
+        for (auto &x : l->m_uuid)
+            rst->m_uuid.push_back(x);
+        rst->m_files.push_back(u->m_files[0]);
+        rst->m_files.push_back(u->m_files[1]);
+        rst->m_uuid.push_back(u->m_uuid[0]);
+        u->m_index = l->m_index = nullptr;
+        rst->m_rw_tag = rst->m_files.size() - 2;
+        l->m_file_ownership = u->m_file_ownership = false;
+        if (ownership) {
+            delete u;
+            delete l;
+        }
+        return rst;
+    }
     ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
     auto pht = verify_ht(u->m_files[0], buf);
     if (pht == nullptr) {
