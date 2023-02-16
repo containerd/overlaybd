@@ -757,21 +757,19 @@ void WarpFileTest::randwrite_warpfile(IFile *file, size_t nwrites) {
 
 IFileRW *WarpFileTest::create_warpfile_rw(int io_engine) {
     name_next_layer();
-    auto findex = lfs->open("rwtmp.index", O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
-    auto flba = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
-    auto fmeta = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    // auto findex = lfs->open("rwtmp.index", O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto fmeta = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
     LOG_INFO("create warpfile { fn_lba: `, fn_meta `}", data_name.back().c_str(),
              idx_name.back().c_str());
-    WarpFileArgs args(findex, fmeta, fcheck, flba);
+    WarpFileArgs args(findex, fmeta, fcheck, nullptr);
     args.virtual_size = FLAGS_vsize << 20;
     memcpy(args.parent_uuid.data, parent_uuid.c_str(), parent_uuid.length());
-    auto file = create_warpfile(args, true);
-    randwrite_warpfile(file, FLAGS_nwrites);
+    auto file = create_warpfile(args, false);
     return file;
 }
 
-IFileRO *WarpFileTest::create_commit_warpfile(int io_engine) {
-    auto warpfile = create_warpfile_rw(io_engine);
+IFileRO *WarpFileTest::create_commit_warpfile(IFileRW* warpfile) {
     LOG_INFO("commit warpfile as `", layer_name.back().c_str());
     auto fcommit = lfs->open(layer_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
     UUID uu;
@@ -788,22 +786,30 @@ IFileRO *WarpFileTest::create_commit_warpfile(int io_engine) {
     return ret;
 }
 
+IFileRO *WarpFileTest::create_commit_warpfile(int io_engine) {
+    auto warpfile = create_warpfile_rw(io_engine);
+    randwrite_warpfile(warpfile, FLAGS_nwrites);
+    return create_commit_warpfile(warpfile);
+   
+}
+
 TEST_F(WarpFileTest, randwrite) {
     CleanUp();
     log_output_level = FLAGS_log_level;
     LOG_INFO("log level: `", log_output_level);
     auto file = create_warpfile_rw(ut_io_engine);
+    randwrite_warpfile(file, FLAGS_nwrites);
     verify_file(file);
     file->close();
-    auto findex = lfs->open("rwtmp.index", O_RDWR | O_CREAT, S_IRWXU);
-    auto flba = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT, S_IRWXU);
-    auto fmeta = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT, S_IRWXU);
-    file = open_warpfile_rw(findex, fmeta, flba, fcheck, false);
+    // auto findex = lfs->open("rwtmp.index", O_RDWR | O_CREAT, S_IRWXU);
+    auto fmeta = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT, S_IRWXU);
+    auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT, S_IRWXU);
+    file = open_warpfile_rw(findex, fmeta, nullptr, fcheck, false);
     verify_file(file);
     file->close();
     LOG_INFO("commit warpfile as `", layer_name.back().c_str());
     auto fcommit = lfs->open(layer_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
-    file = open_warpfile_rw(findex, fmeta, flba, nullptr, true);
+    file = open_warpfile_rw(findex, fmeta, nullptr, nullptr, true);
     CommitArgs c(fcommit);
     ((IFileRW *)file)->commit(c);
     file->close();
@@ -825,9 +831,9 @@ TEST_F(WarpFileTest, large_lba) {
     log_output_level = FLAGS_log_level;
     LOG_INFO("log level: `", log_output_level);
     auto fidx = open_localfile_adaptor("/tmp/warpfile.idx", O_TRUNC | O_CREAT | O_RDWR);
-    auto flba = open_localfile_adaptor("/tmp/warpfile.lba", O_TRUNC | O_CREAT | O_RDWR);
+    // auto flba = open_localfile_adaptor("/tmp/warpfile.lba", O_TRUNC | O_CREAT | O_RDWR);
     auto fmeta = open_localfile_adaptor("/tmp/warpfile.meta", O_TRUNC | O_CREAT | O_RDWR);
-    WarpFileArgs args(fidx, fmeta, fcheck, flba);
+    WarpFileArgs args(fidx, fmeta, fcheck, nullptr);
     args.virtual_size = FLAGS_vsize << 20;
     // Set memory file
     auto file = create_warpfile(args, true);
@@ -848,6 +854,7 @@ TEST_F(WarpFileTest, large_lba) {
         LOG_INFO("check: `, mapping: `", check[i], p[i]);
     }
     EXPECT_EQ(memcmp((void *)check, (void *)p, 4 * sizeof(SegmentMapping)), 0);
+    fcheck = nullptr;
 }
 
 TEST_F(WarpFileTest, multi_layer) {
@@ -881,9 +888,19 @@ TEST_F(WarpFileTest, stack_files) {
     auto lower = open_files_ro(files, FLAGS_layers);
     verify_file(lower);
     LOG_INFO("create top RW layer by randwrite()");
-    auto upper = create_file_rw();
-    auto file = stack_files(upper, lower, 0, true);
+    auto upper = create_warpfile_rw();
+    auto file = stack_files(upper, lower, false, true);
+    randwrite_warpfile(file, FLAGS_nwrites);
     verify_file(file);
+    LOG_INFO("commit top layer.");
+    delete upper;
+    auto fmeta = lfs->open(data_name.back().c_str(), O_RDONLY, S_IRWXU);
+    auto findex = lfs->open(idx_name.back().c_str(), O_RDONLY, S_IRWXU);
+    upper = open_warpfile_rw(findex, fmeta, nullptr, nullptr, false);
+    files[FLAGS_layers] = create_commit_warpfile(upper);
+    delete lower;
+    lower = open_files_ro(files, FLAGS_layers + 1);
+    verify_file(lower);
     delete file;
     fcheck = nullptr;
 }
