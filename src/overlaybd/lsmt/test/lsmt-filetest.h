@@ -572,4 +572,5 @@ public:
     void randwrite_warpfile(IFile *file, size_t nwrites);
     IFileRW *create_warpfile_rw(int io_engine = 0);
     IFileRO *create_commit_warpfile(int io_engine = 0);
+    IFileRO *create_commit_warpfile(IFileRW* warpfile);
 };

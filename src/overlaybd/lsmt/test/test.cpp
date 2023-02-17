@@ -769,9 +769,7 @@ IFileRW *WarpFileTest::create_warpfile_rw(int io_engine) {
     return file;
 }
 
-IFileRO *WarpFileTest::create_commit_warpfile(int io_engine) {
-    auto warpfile = create_warpfile_rw(io_engine);
-    randwrite_warpfile(warpfile, FLAGS_nwrites);
+IFileRO *WarpFileTest::create_commit_warpfile(IFileRW* warpfile) {
     LOG_INFO("commit warpfile as `", layer_name.back().c_str());
     auto fcommit = lfs->open(layer_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
     UUID uu;
@@ -786,6 +784,13 @@ IFileRO *WarpFileTest::create_commit_warpfile(int io_engine) {
     ret->get_uuid(uu);
     parent_uuid = UUID::String(uu).c_str();
     return ret;
+}
+
+IFileRO *WarpFileTest::create_commit_warpfile(int io_engine) {
+    auto warpfile = create_warpfile_rw(io_engine);
+    randwrite_warpfile(warpfile, FLAGS_nwrites);
+    return create_commit_warpfile(warpfile);
+   
 }
 
 TEST_F(WarpFileTest, randwrite) {
@@ -883,9 +888,19 @@ TEST_F(WarpFileTest, stack_files) {
     verify_file(lower);
     LOG_INFO("create top RW layer by randwrite()");
     auto upper = create_warpfile_rw();
-    auto file = stack_files(upper, lower, true, true);
+    auto file = stack_files(upper, lower, false, true);
     randwrite_warpfile(file, FLAGS_nwrites);
     verify_file(file);
+    LOG_INFO("commit top layer.");
+    delete upper;
+    auto findex = lfs->open("rwtmp.index", O_RDONLY, S_IRWXU);
+    auto flba = lfs->open(data_name.back().c_str(), O_RDONLY, S_IRWXU);
+    auto fmeta = lfs->open(idx_name.back().c_str(), O_RDONLY, S_IRWXU);
+    upper = open_warpfile_rw(findex, fmeta, flba, nullptr, false);
+    files[FLAGS_layers] = create_commit_warpfile(upper);
+    delete lower;
+    lower = open_files_ro(files, FLAGS_layers + 1);
+    verify_file(lower);
     delete file;
     fcheck = nullptr;
 }

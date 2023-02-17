@@ -906,7 +906,7 @@ public:
 class LSMTSparseFile : public LSMTFile {
 public:
     static const off_t BASE_MOFFSET = HeaderTrailer::SPACE;
-    bool warp_rw = false;
+
     LSMTSparseFile() {
         m_filetype = LSMTFileType::SparseRW;
     }
@@ -1184,7 +1184,7 @@ HeaderTrailer *verify_ht(IFile *file, char *buf) {
 }
 
 static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer, bool trailer,
-                                     bool keep_tag = false) {
+                                     bool warp_file = false) {
 
     ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
     auto pht = verify_ht(file, buf);
@@ -1233,13 +1233,19 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
     }
 
     size_t index_size = 0;
-    for (size_t i = 0; i < pht->index_size; ++i)
+    uint8_t min_tag = 255;
+    for (size_t i = 0; i < pht->index_size; ++i) {
         if (ibuf[i].offset != SegmentMapping::INVALID_OFFSET) {
             ibuf[index_size] = ibuf[i];
-            ibuf[index_size].tag = (keep_tag ? ibuf[i].tag : 0);
+            ibuf[index_size].tag = (warp_file ? ibuf[i].tag : 0);
+            if (min_tag > ibuf[index_size].tag) min_tag = ibuf[index_size].tag;
             index_size++;
         }
-
+    }
+    if (warp_file) {
+        LOG_INFO("rebuild index tag for LSMTWarpFile.");
+        for (size_t i = 0; i<index_size; i++) ibuf[i].tag -= min_tag;
+    }
     pht->index_size = index_size;
     if (pheader_trailer)
         *pheader_trailer = *pht;
@@ -1684,49 +1690,50 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
     if (!l)
         return upper_layer;
     auto type = u->ioctl(IFileRO::GetType);
-    if (type == (uint8_t)LSMTFileType::WarpFile) {
-        auto rst = new LSMTWarpFile;
-        // rst->warp_rw = true;
-        auto idx = create_combo_index((IMemoryIndex0 *)u->m_index, l->m_index, l->m_files.size(), true);
-        rst->m_index = idx;
-        rst->m_findex = u->m_findex;
-        rst->m_vsize = u->m_vsize;
-        rst->m_file_ownership = ownership;
-        rst->m_files.reserve(2 + l->m_files.size());
-        rst->m_uuid.reserve(1 + l->m_uuid.size());
-        for (auto &x : l->m_files)
-            rst->m_files.push_back(x);
-        for (auto &x : l->m_uuid)
-            rst->m_uuid.push_back(x);
-        rst->m_files.push_back(u->m_files[0]);
-        rst->m_files.push_back(u->m_files[1]);
-        rst->m_uuid.push_back(u->m_uuid[0]);
-        u->m_index = l->m_index = nullptr;
-        rst->m_rw_tag = rst->m_files.size() - 2;
-        l->m_file_ownership = u->m_file_ownership = false;
-        if (ownership) {
-            delete u;
-            delete l;
-        }
-        return rst;
-    }
-    ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
-    auto pht = verify_ht(u->m_files[0], buf);
-    if (pht == nullptr) {
-        LOG_ERRNO_RETURN(0, nullptr, "verify upper layer's Header failed.");
-    }
-    auto idx = create_combo_index((IMemoryIndex0 *)u->m_index, l->m_index, l->m_files.size(), true);
     LSMTFile *rst = nullptr;
-    if (!pht->is_sparse_rw()) {
-        rst = new LSMTFile;
+    IComboIndex *idx = nullptr;
+    int delta = 1;
+    if (type != (uint8_t)LSMTFileType::WarpFile) {
+        ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
+        auto pht = verify_ht(u->m_files[0], buf);
+        if (pht == nullptr) {
+            LOG_ERRNO_RETURN(0, nullptr, "verify upper layer's Header failed.");
+        }
+        if (!pht->is_sparse_rw()) {
+            rst = new LSMTFile;
+        } else {
+            rst = new LSMTSparseFile;
+        }
     } else {
-        rst = new LSMTSparseFile;
+        rst = new LSMTWarpFile;
+        delta++;
     }
+        // rst->m_index = idx;
+        // rst->m_findex = u->m_findex;
+        // rst->m_vsize = u->m_vsize;
+        // rst->m_file_ownership = ownership;
+        // rst->m_files.reserve(2 + l->m_files.size());
+        // rst->m_uuid.reserve(1 + l->m_uuid.size());
+        // for (auto &x : l->m_files)
+        //     rst->m_files.push_back(x);
+        // for (auto &x : l->m_uuid)
+        //     rst->m_uuid.push_back(x);
+        // rst->m_files.push_back(u->m_files[1]);
+        // rst->m_uuid.push_back(u->m_uuid[0]);
+        // u->m_index = l->m_index = nullptr;
+        // rst->m_rw_tag = rst->m_files.size() - 2;
+        // l->m_file_ownership = u->m_file_ownership = false;
+        // if (ownership) {
+        //     delete u;
+        //     delete l;
+        // }
+        // return rst;
+    idx = create_combo_index((IMemoryIndex0 *)u->m_index, l->m_index, l->m_files.size(), true);
     rst->m_index = idx;
     rst->m_findex = u->m_findex;
     rst->m_vsize = u->m_vsize;
     rst->m_file_ownership = ownership;
-    rst->m_files.reserve(1 + l->m_files.size());
+    rst->m_files.reserve(delta + l->m_files.size());
     rst->m_uuid.reserve(1 + l->m_uuid.size());
     for (auto &x : l->m_files)
         rst->m_files.push_back(x);
@@ -1741,8 +1748,11 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
         LOG_WARN("STACK FILES WITHOUT CHECK ORDER!!!");
     }
     rst->m_files.push_back(u->m_files[0]);
+    if (type == (uint8_t)LSMTFileType::WarpFile) {
+        rst->m_files.push_back(u->m_files[1]);
+    }
     rst->m_uuid.push_back(u->m_uuid[0]);
-    rst->m_rw_tag = rst->m_files.size() - 1;
+    rst->m_rw_tag = rst->m_files.size() - delta;
     u->m_index = l->m_index = nullptr;
     l->m_file_ownership = u->m_file_ownership = false;
     if (ownership) {
