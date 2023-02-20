@@ -1184,7 +1184,7 @@ HeaderTrailer *verify_ht(IFile *file, char *buf) {
 }
 
 static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer, bool trailer,
-                                     bool warp_file = false) {
+                                     uint8_t warp_file_tag = 0) {
 
     ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
     auto pht = verify_ht(file, buf);
@@ -1237,14 +1237,21 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
     for (size_t i = 0; i < pht->index_size; ++i) {
         if (ibuf[i].offset != SegmentMapping::INVALID_OFFSET) {
             ibuf[index_size] = ibuf[i];
-            ibuf[index_size].tag = (warp_file ? ibuf[i].tag : 0);
+            ibuf[index_size].tag = (warp_file_tag ? ibuf[i].tag : 0);
             if (min_tag > ibuf[index_size].tag) min_tag = ibuf[index_size].tag;
             index_size++;
         }
     }
-    if (warp_file) {
+    if (warp_file_tag) {
         LOG_INFO("rebuild index tag for LSMTWarpFile.");
-        for (size_t i = 0; i<index_size; i++) ibuf[i].tag -= min_tag;
+        for (size_t i = 0; i<index_size; i++) {
+            if (warp_file_tag == 1) /* only fsmeta */
+                ibuf[i].tag = (uint8_t)SegmentType::fsMeta;
+            if (warp_file_tag == 2) /* only remote data */
+                ibuf[i].tag = (uint8_t)SegmentType::remoteData;
+            if (warp_file_tag == 3) /* only remote data */
+                ibuf[i].tag -= min_tag;
+        }
     }
     pht->index_size = index_size;
     if (pheader_trailer)
@@ -1419,7 +1426,11 @@ IFileRW *open_warpfile_rw(IFile *findex, IFile *fsmeta_file, IFile *lba_file, IF
     rst->m_files.resize(2);
     // auto fsmeta = open_file_rw(fsmeta_file, nullptr, true);
     LSMT::HeaderTrailer ht;
-    auto p = do_load_index(findex, &ht, false, true);
+    struct stat st_fsmeta, st_flba;
+    fsmeta_file->fstat(&st_fsmeta);
+    lba_file->fstat(&st_flba);
+    auto p = do_load_index(findex, &ht, false, 
+        ((st_flba.st_blocks>0)<<1) + (st_fsmeta.st_blocks>0));
     auto pi = create_memory_index0(p, ht.index_size, 0, -1);
     if (!pi) {
         delete[] p;
@@ -1443,7 +1454,7 @@ IFileRO *open_warpfile_ro(IFile *warpfile, IFile *target_file, bool ownership) {
         return nullptr;
     }
     HeaderTrailer ht;
-    auto p = do_load_index(warpfile, &ht, true, true);
+    auto p = do_load_index(warpfile, &ht, true, 3);
     if (!p)
         LOG_ERROR_RETURN(EIO, nullptr, "failed to load index from file.");
     auto pi = create_memory_index(p, ht.index_size, 0, -1);
