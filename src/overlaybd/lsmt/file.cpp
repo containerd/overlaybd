@@ -902,7 +902,6 @@ public:
         return data_stat;
     }
 };
-
 class LSMTSparseFile : public LSMTFile {
 public:
     static const off_t BASE_MOFFSET = HeaderTrailer::SPACE;
@@ -1000,58 +999,35 @@ public:
 class LSMTWarpFile : public LSMTFile {
 public:
     const static int READ_BUFFER_SIZE = 65536;
-    LSMTWarpFile() {
+    IFile* m_target_file = nullptr;
+
+    LSMTWarpFile(){
         m_filetype = LSMTFileType::WarpFile;
     }
-    ssize_t pwrite(const void *buf, size_t count, off_t offset, SegmentType stype) {
-
-        auto moffset = offset;
-        SegmentMapping m{
-            (uint64_t)offset / (uint64_t)ALIGNMENT,
-            (uint32_t)count / (uint32_t)ALIGNMENT,
-            (uint64_t)moffset / (uint64_t)ALIGNMENT,
-        };
-        auto tag = (uint8_t)stype + m_rw_tag;
-        auto append = [&](const void *buf, SegmentMapping m) -> ssize_t {
-            ssize_t ret = -1;
-            m.tag = (uint8_t)tag;
-            auto file = m_files[(uint8_t)tag];
-            ret = file->pwrite(buf, count, offset);
-            LOG_DEBUG("insert segment: `, filePtr: `", m, file);
-            if (ret != (ssize_t)count) {
-                LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`", file, ret,
-                                 moffset, count);
-            }
-            static_cast<IMemoryIndex0 *>(m_index)->insert(m);
-            append_index(m);
-            return ret;
-        };
-        if (stype == SegmentType::remoteData) {
-            m.moffset = ((RemoteMapping *)buf)->roffset / (uint64_t)ALIGNMENT;
-            auto limit_len = Segment::MAX_LENGTH;
-            size_t nwrite = 0;
-            size_t count = ((RemoteMapping *)buf)->count / (uint64_t)ALIGNMENT;
-            RemoteMapping lba = *(RemoteMapping *)buf;
-            while (count > 0) {
-                m.length = (limit_len < count ? limit_len : count);
-                lba.count = m.length * ALIGNMENT;
-                nwrite += append(&lba, m);
-                count -= m.length;
-                lba.offset += m.length * ALIGNMENT;
-                lba.roffset += m.length * ALIGNMENT;
-                m.forward_offset_to(m.offset + m.length);
-            }
-            return nwrite;
+    ~LSMTWarpFile() {
+        if (m_file_ownership) {
+            delete m_target_file;
         }
-        return append(buf, m);
     }
 
     virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
         LOG_DEBUG("write fs meta {offset: `, len: `}", offset, count);
-        auto ret = pwrite(buf, count, offset, SegmentType::fsMeta);
+        auto tag = m_rw_tag + (uint8_t)SegmentType::fsMeta;
+        SegmentMapping m{
+            (uint64_t)offset / (uint64_t)ALIGNMENT,
+            (uint32_t)count / (uint32_t)ALIGNMENT,
+            (uint64_t)offset / (uint64_t)ALIGNMENT,
+        };
+        m.tag = tag;
+        auto file = m_files[tag];
+        LOG_DEBUG("insert segment: `, filePtr: `", m,file);
+        auto ret = file->pwrite(buf, count, offset);
         if (ret != (ssize_t)count) {
-            LOG_ERRNO_RETURN(0, -1, "pwrite fsmeta failed.");
+            LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`", 
+                file, ret, offset, count);
         }
+        static_cast<IMemoryIndex0 *>(m_index)->insert(m);
+        append_index(m);
         return count;
     }
 
@@ -1059,52 +1035,33 @@ public:
         if (request == GetType) {
             return LSMTReadOnlyFile::vioctl(request, args);
         }
-        if (request != RemoteData)
+        if (request != RemoteData) {
             LOG_ERROR_RETURN(EINVAL, -1, "invaid request code");
-
+        }
         va_list tmp;
         va_copy(tmp, args);
         auto lba = va_arg(tmp, RemoteMapping);
         va_end(tmp);
         LOG_DEBUG("RemoteMapping: {offset: `, count: `, roffset: `}", lba.offset, lba.count,
                   lba.roffset);
-        auto ret = pwrite(&lba, (ssize_t)sizeof(lba), lba.offset, SegmentType::remoteData);
-        if (ret !=
-            ((lba.count / ALIGNMENT - 1) / Segment::MAX_LENGTH + 1) * sizeof(RemoteMapping)) {
-            LOG_ERRNO_RETURN(0, -1, "pwrite fsmeta failed.");
+        size_t nwrite = 0;
+        while (lba.count > 0) {
+            SegmentMapping m;
+            m.offset = lba.offset / ALIGNMENT;
+            m.length = (Segment::MAX_LENGTH < lba.count / ALIGNMENT ? 
+                Segment::MAX_LENGTH : lba.count / ALIGNMENT);
+            m.moffset = lba.roffset / ALIGNMENT;
+            m.tag = m_rw_tag + (uint8_t)SegmentType::remoteData;
+            LOG_DEBUG("insert segment: ` into findex: `", m, m_findex);
+            static_cast<IMemoryIndex0 *>(m_index)->insert(m);
+            append_index(m);
+            nwrite += m.length * ALIGNMENT;
+            lba.offset += m.length * ALIGNMENT;
+            lba.count -= m.length * ALIGNMENT;
+            lba.roffset += m.length * ALIGNMENT;
         }
-        return 0;
+        return nwrite;
     }
-
-    class WarpFile : public VirtualReadOnlyFile {
-    public:
-        IFile *m_lba_file = nullptr;
-        IFile *m_target_file = nullptr;
-        WarpFile(IFile *lba_file, IFile *target_file)
-            : m_lba_file(lba_file), m_target_file(target_file) {
-        }
-
-        virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
-            auto lba = *(RemoteMapping *)buf;
-            LOG_DEBUG("write RemoteMapping {offset: `, len: `, roffset: `}", lba.offset, lba.count,
-                      lba.roffset);
-            auto ret = m_lba_file->pwrite(buf, sizeof(lba), offset);
-            if (ret != (ssize_t)count) {
-                LOG_ERRNO_RETURN(0, -1, "pwrite fsmeta failed.");
-            }
-            return count;
-        }
-
-        virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
-            return m_target_file->pread(buf, count, offset);
-        }
-
-        virtual int fstat(struct stat *buf) override {
-            return m_target_file->fstat(buf);
-        }
-
-        UNIMPLEMENTED_POINTER(IFileSystem *filesystem() override);
-    };
 
     size_t compact(CompactOptions &opts, size_t moffset, size_t &nindex) const {
 
@@ -1251,6 +1208,7 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
                 ibuf[i].tag = (uint8_t)SegmentType::remoteData;
             if (warp_file_tag == 3) /* only remote data */
                 ibuf[i].tag -= min_tag;
+            LOG_DEBUG("`", ibuf[i]);
         }
     }
     pht->index_size = index_size;
@@ -1391,7 +1349,7 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
 }
 
 IFileRW *create_warpfile(WarpFileArgs &args, bool ownership) {
-    auto rst = new LSMTWarpFile;
+    auto rst = new LSMTWarpFile();
     rst->m_findex = args.findex;
     LayerInfo info;
     info.sparse_rw = false;
@@ -1402,8 +1360,7 @@ IFileRW *create_warpfile(WarpFileArgs &args, bool ownership) {
     rst->m_index = create_memory_index0((const SegmentMapping *)nullptr, 0, 0, 0);
     rst->m_files.resize(2);
     rst->m_files[(uint8_t)SegmentType::fsMeta] = args.fsmeta;
-    rst->m_files[(uint8_t)SegmentType::remoteData] =
-        new LSMT::LSMTWarpFile::WarpFile(args.lba_file, args.target_file);
+    rst->m_files[(uint8_t)SegmentType::remoteData] = args.target_file;
     rst->m_vsize = args.virtual_size;
     rst->m_file_ownership = ownership;
     UUID raw;
@@ -1426,11 +1383,11 @@ IFileRW *open_warpfile_rw(IFile *findex, IFile *fsmeta_file, IFile *lba_file, IF
     rst->m_files.resize(2);
     // auto fsmeta = open_file_rw(fsmeta_file, nullptr, true);
     LSMT::HeaderTrailer ht;
-    struct stat st_fsmeta, st_flba;
-    fsmeta_file->fstat(&st_fsmeta);
-    lba_file->fstat(&st_flba);
+    // struct stat st_fsmeta, st_flba;
+    // fsmeta_file->fstat(&st_fsmeta);
+    // lba_file->fstat(&st_flba);
     auto p = do_load_index(findex, &ht, false, 
-        ((st_flba.st_blocks>0)<<1) + (st_fsmeta.st_blocks>0));
+        3);
     auto pi = create_memory_index0(p, ht.index_size, 0, -1);
     if (!pi) {
         delete[] p;
@@ -1438,7 +1395,7 @@ IFileRW *open_warpfile_rw(IFile *findex, IFile *fsmeta_file, IFile *lba_file, IF
     }
     rst->m_index = pi;
     rst->m_findex = findex;
-    rst->m_files = {fsmeta_file, new LSMTWarpFile::WarpFile(lba_file, target_file)};
+    rst->m_files = {fsmeta_file, target_file};
     rst->m_uuid.resize(1);
     rst->m_uuid[0].parse(ht.uuid);
     rst->m_vsize = ht.virtual_size;
