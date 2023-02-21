@@ -1369,7 +1369,6 @@ IFileRW *create_warpfile(WarpFileArgs &args, bool ownership) {
     HeaderTrailer tmp;
     tmp.version = 2;
     tmp.sub_version = 0;
-    args.target_file->ftruncate(args.virtual_size);
     args.fsmeta->ftruncate(args.virtual_size);
     LOG_INFO("WarpImage Layer: { UUID:`, Parent_UUID: `, Virtual size: `, Version: `.` }", raw,
              info.parent_uuid, rst->m_vsize, tmp.version, tmp.sub_version);
@@ -1378,14 +1377,10 @@ IFileRW *create_warpfile(WarpFileArgs &args, bool ownership) {
 
 IFileRW *open_warpfile_rw(IFile *findex, IFile *fsmeta_file, IFile *lba_file, IFile *target_file,
                           bool ownership) {
-    // TODO
+    // TODO empty fsmeta or remoteData
     auto rst = new LSMTWarpFile;
     rst->m_files.resize(2);
-    // auto fsmeta = open_file_rw(fsmeta_file, nullptr, true);
     LSMT::HeaderTrailer ht;
-    // struct stat st_fsmeta, st_flba;
-    // fsmeta_file->fstat(&st_fsmeta);
-    // lba_file->fstat(&st_flba);
     auto p = do_load_index(findex, &ht, false, 
         3);
     auto pi = create_memory_index0(p, ht.index_size, 0, -1);
