@@ -1377,12 +1377,12 @@ IFileRW *create_warpfile(WarpFileArgs &args, bool ownership) {
 }
 
 IFileRW *open_warpfile_rw(IFile *findex, IFile *fsmeta_file, IFile *target_file, bool ownership) {
+
     // TODO empty fsmeta or remoteData
     auto rst = new LSMTWarpFile;
     rst->m_files.resize(2);
     LSMT::HeaderTrailer ht;
-    auto p = do_load_index(findex, &ht, false,
-        3);
+    auto p = do_load_index(findex, &ht, false, 3);
     auto pi = create_memory_index0(p, ht.index_size, 0, -1);
     if (!pi) {
         delete[] p;
@@ -1671,26 +1671,6 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
         rst = new LSMTWarpFile;
         delta++;
     }
-        // rst->m_index = idx;
-        // rst->m_findex = u->m_findex;
-        // rst->m_vsize = u->m_vsize;
-        // rst->m_file_ownership = ownership;
-        // rst->m_files.reserve(2 + l->m_files.size());
-        // rst->m_uuid.reserve(1 + l->m_uuid.size());
-        // for (auto &x : l->m_files)
-        //     rst->m_files.push_back(x);
-        // for (auto &x : l->m_uuid)
-        //     rst->m_uuid.push_back(x);
-        // rst->m_files.push_back(u->m_files[1]);
-        // rst->m_uuid.push_back(u->m_uuid[0]);
-        // u->m_index = l->m_index = nullptr;
-        // rst->m_rw_tag = rst->m_files.size() - 2;
-        // l->m_file_ownership = u->m_file_ownership = false;
-        // if (ownership) {
-        //     delete u;
-        //     delete l;
-        // }
-        // return rst;
     idx = create_combo_index((IMemoryIndex0 *)u->m_index, l->m_index, l->m_files.size(), true);
     rst->m_index = idx;
     rst->m_findex = u->m_findex;
