@@ -1023,7 +1023,7 @@ public:
         LOG_DEBUG("insert segment: `, filePtr: `", m,file);
         auto ret = file->pwrite(buf, count, offset);
         if (ret != (ssize_t)count) {
-            LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`", 
+            LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`",
                 file, ret, offset, count);
         }
         static_cast<IMemoryIndex0 *>(m_index)->insert(m);
@@ -1048,7 +1048,7 @@ public:
         while (lba.count > 0) {
             SegmentMapping m;
             m.offset = lba.offset / ALIGNMENT;
-            m.length = (Segment::MAX_LENGTH < lba.count / ALIGNMENT ? 
+            m.length = (Segment::MAX_LENGTH < lba.count / ALIGNMENT ?
                 Segment::MAX_LENGTH : lba.count / ALIGNMENT);
             m.moffset = lba.roffset / ALIGNMENT;
             m.tag = m_rw_tag + (uint8_t)SegmentType::remoteData;
@@ -1097,7 +1097,8 @@ public:
             LOG_ERRNO_RETURN(0, -1, "write index failed");
         }
         nindex = index_size;
-        auto pos = dest_file->lseek(0, SEEK_END);
+        // auto pos = dest_file->lseek(0, SEEK_END);
+        auto pos = index_offset + index_size * sizeof(SegmentMapping);
         LOG_INFO("write index done, file_size: `", pos);
         return pos;
     }
@@ -1375,13 +1376,12 @@ IFileRW *create_warpfile(WarpFileArgs &args, bool ownership) {
     return rst;
 }
 
-IFileRW *open_warpfile_rw(IFile *findex, IFile *fsmeta_file, IFile *lba_file, IFile *target_file,
-                          bool ownership) {
+IFileRW *open_warpfile_rw(IFile *findex, IFile *fsmeta_file, IFile *target_file, bool ownership) {
     // TODO empty fsmeta or remoteData
     auto rst = new LSMTWarpFile;
     rst->m_files.resize(2);
     LSMT::HeaderTrailer ht;
-    auto p = do_load_index(findex, &ht, false, 
+    auto p = do_load_index(findex, &ht, false,
         3);
     auto pi = create_memory_index0(p, ht.index_size, 0, -1);
     if (!pi) {
@@ -1401,8 +1401,8 @@ IFileRW *open_warpfile_rw(IFile *findex, IFile *fsmeta_file, IFile *lba_file, IF
 };
 
 IFileRO *open_warpfile_ro(IFile *warpfile, IFile *target_file, bool ownership) {
-    if (!warpfile) {
-        LOG_ERROR("invalid file ptr. file: `", warpfile);
+    if (!warpfile || !target_file) {
+        LOG_ERROR("invalid file ptr. file: `, `", warpfile, target_file);
         return nullptr;
     }
     HeaderTrailer ht;

@@ -101,6 +101,10 @@ public:
     uint32_t block_size;
     bool read_only = false;
 
+    IFile* get_base() {
+        return m_file;
+    }
+
 private:
     Prefetcher *m_prefetcher = nullptr;
     ImageConfigNS::ImageConfig conf;
@@ -113,7 +117,8 @@ private:
     LSMT::IFileRO *open_lowers(std::vector<ImageConfigNS::LayerConfig> &, bool &);
     LSMT::IFileRW *open_upper(ImageConfigNS::UpperConfig &);
     IFile *__open_ro_file(const std::string &);
-    IFile *__open_ro_remote(const std::string &dir, const std::string &, const uint64_t,
-                                        int);
+    IFile *__open_ro_data_file(const std::string &);
+    IFile *__open_ro_remote(const std::string &dir, const std::string &, const uint64_t, int);
+    IFile *__open_ro_data_remote(const std::string &dir, const std::string &, const uint64_t, int);
     void start_bk_dl_thread();
 };

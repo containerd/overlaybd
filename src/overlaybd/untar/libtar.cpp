@@ -31,6 +31,9 @@
 #include <photon/common/alog.h>
 #include <photon/common/enumerable.h>
 #include <photon/fs/path.h>
+#include <photon/fs/fiemap.h>
+#include "../lsmt/file.h"
+#include "../lsmt/index.h"
 
 #define BIT_ISSET(bitmask, bit) ((bitmask) & (bit))
 static const char ZERO_BLOCK[T_BLOCKSIZE] = {0};
@@ -138,13 +141,13 @@ int Tar::read_header() {
 		return -1;
 	}
 
-	while (header.typeflag == GNU_LONGLINK_TYPE || 
+	while (header.typeflag == GNU_LONGLINK_TYPE ||
 		   header.typeflag == GNU_LONGNAME_TYPE ||
 		   header.typeflag == PAX_HEADER) {
 		size_t sz;
 		switch (header.typeflag) {
 		/* check for GNU long link extention */
-		case GNU_LONGLINK_TYPE:	
+		case GNU_LONGLINK_TYPE:
 			sz = read_sepcial_file(header.gnu_longlink);
 			LOG_DEBUG("found gnu longlink ", VALUE(sz));
 			if (sz < 0) return -1;
@@ -169,7 +172,7 @@ int Tar::read_header() {
 			}
 			break;
 		}
-		
+
 		i = read_header_internal();
 		if (i != T_BLOCKSIZE) {
 			if (i != -1)
@@ -184,7 +187,7 @@ int Tar::read_header() {
 /*
 	Each line consists of a decimal number, a space, a key string, an equals sign, a
 value string, and a new line.  The decimal number indicates the length of the entire
-line, including the initial length field and the trailing newline. 
+line, including the initial length field and the trailing newline.
 An example of such a field is:
     25 ctime=1084839148.1212\n
 */
@@ -388,7 +391,45 @@ int Tar::extract_file() {
 	return 0;
 }
 
+int Tar::extract_regfile_fastoci(const char *filename) {
+	size_t size = get_size();
+
+	LOG_DEBUG("  ==> extracting: ` (` bytes) (fastoci index)\n", filename, size);
+	photon::fs::IFile *fout = fs->open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0666);
+	if (fout == nullptr) {
+		return -1;
+	}
+	DEFER({delete fout;});
+
+	auto p = file->lseek(0, SEEK_CUR);
+	fout->fallocate(0, 0, size);
+	struct photon::fs::fiemap_t<512> fie(0, size);
+	fout->fiemap(&fie);
+	for (int i = 0; i < fie.fm_mapped_extents; i++) {
+        LSMT::RemoteMapping lba;
+        lba.offset = fie.fm_extents[i].fe_physical;
+        lba.count = fie.fm_extents[i].fe_length;
+        lba.roffset = p;
+        int nwrite = fs_base_file->ioctl(LSMT::IFileRW::RemoteData, lba);
+        if (nwrite < 0) {
+            LOG_ERRNO_RETURN(0, -1, "failed to write lba");
+        }
+        p += nwrite;
+    }
+
+	struct stat st;
+	fout->fstat(&st);
+	LOG_DEBUG("reg file size `", st.st_size);
+
+	file->lseek( ((size+511)/512)*512, SEEK_CUR); // skip size
+	return 0;
+}
+
 int Tar::extract_regfile(const char *filename) {
+    if (build_fastoci) {
+        return extract_regfile_fastoci(filename);
+    }
+
 	size_t size = get_size();
 
 	LOG_DEBUG("  ==> extracting: ` (` bytes)\n", filename, size);

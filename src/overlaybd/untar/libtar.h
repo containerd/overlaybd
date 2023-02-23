@@ -23,7 +23,9 @@
 #include <grp.h>
 #include <string.h>
 #include <photon/fs/filesystem.h>
+#include <photon/fs/fiemap.h>
 #include <set>
+#include <vector>
 #include <string>
 #include <list>
 #include <map>
@@ -141,6 +143,8 @@ class Tar {
 public:
 	photon::fs::IFileSystem *fs = nullptr; // target
 	photon::fs::IFile *file = nullptr; // source
+	photon::fs::IFile *fs_base_file = nullptr;
+    bool build_fastoci;
 	int options;
 	uint64_t fs_blocksize;
 	uint64_t fs_blockmask;
@@ -151,8 +155,11 @@ public:
 	PaxHeader *pax = nullptr;
 
 	Tar(photon::fs::IFile *file, photon::fs::IFileSystem *fs, int options,
-		uint64_t fs_blocksize = FS_BLOCKSIZE)
-		: file(file), fs(fs), options(options), fs_blocksize(fs_blocksize) {
+		uint64_t fs_blocksize = FS_BLOCKSIZE, photon::fs::IFile *bf = nullptr,
+        bool build_fastoci = false)
+		: file(file), fs(fs), options(options), fs_blocksize(fs_blocksize),
+        fs_base_file(bf), build_fastoci(build_fastoci)
+    {
 		fs_blockmask = ~(fs_blocksize - 1);
 	}
 	~Tar() {
@@ -173,6 +180,7 @@ private:
 
 	int extract_file();
 	int extract_regfile(const char *filename);
+    int extract_regfile_fastoci(const char *filename);
 	int extract_hardlink(const char *filename);
 	int extract_symlink(const char *filename);
 	int extract_dir(const char *filename);

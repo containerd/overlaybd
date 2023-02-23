@@ -35,6 +35,7 @@
 #include <photon/fs/filesystem.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/virtual-file.h>
+#include <photon/fs/fiemap.h>
 
 #include "extfs.h"
 #include "extfs_utils.h"
@@ -900,6 +901,110 @@ ssize_t do_ext2fs_readlink(ext2_filsys fs, const char *path, char *buf, size_t b
     return (len + 1);
 }
 
+int do_ext2fs_fallocate(ext2_filsys fs, ext2_ino_t ino, off_t offset, off_t len) {
+    struct ext2_inode inode;
+    memset(&inode, 0, sizeof(inode));
+
+    errcode_t ret = ext2fs_read_inode(fs, ino, &inode);
+    if (ret) return parse_extfs_error(fs, ino, ret);
+
+    LOG_DEBUG("do_ext2fs_fallocate ", VALUE(offset), VALUE(len));
+    auto start = offset / fs->blocksize;
+    auto end = (offset + len - 1) / fs->blocksize;
+    LOG_DEBUG("ext2fs_fallocate blocks `", end - start + 1);
+
+    ret = ext2fs_fallocate(fs, EXT2_FALLOCATE_FORCE_INIT, ino, &inode,
+                           ~0ULL, start, end - start + 1);
+    if (ret) return parse_extfs_error(fs, ino, ret);
+
+    ret = ext2fs_inode_size_set(fs, (struct ext2_inode *)&inode, len);
+    if (ret) return parse_extfs_error(fs, ino, ret);
+
+    ret = ext2fs_write_inode(fs, ino, &inode);
+    if (ret) return parse_extfs_error(fs, ino, ret);
+
+    return 0;
+}
+
+static int ino_iter_extents(ext2_filsys fs, ext2_ino_t ino,
+				     ext2_extent_handle_t extents,
+				     std::vector<std::pair<off_t, size_t>> &blocks) {
+	errcode_t retval;
+	int op = EXT2_EXTENT_ROOT;
+	struct ext2fs_extent extent;
+
+	for (;;) {
+		retval = ext2fs_extent_get(extents, op, &extent);
+		if (retval)
+			break;
+
+		op = EXT2_EXTENT_NEXT;
+
+		if ((extent.e_flags & EXT2_EXTENT_FLAGS_SECOND_VISIT) ||
+		    !(extent.e_flags & EXT2_EXTENT_FLAGS_LEAF))
+			continue;
+        LOG_DEBUG("found block ` `", extent.e_pblk, extent.e_len);
+        blocks.push_back({extent.e_pblk, extent.e_len});
+	}
+
+	if (retval == EXT2_ET_EXTENT_NO_NEXT)
+		retval = 0;
+	if (retval) {
+        LOG_WARN("getting extends of ino ", VALUE(retval), VALUE(ino));
+	}
+	return retval;
+}
+
+// TODO make ino_iter_blocks() compatible with ext2/3
+static int ino_iter_blocks(ext2_filsys fs, ext2_ino_t ino,
+				 std::vector<std::pair<off_t, size_t>> &blocks)
+{
+	struct ext2_inode inode;
+	ext2_extent_handle_t extents;
+
+	auto retval = ext2fs_read_inode(fs, ino, &inode);
+	if (retval) return retval;
+
+	if (!ext2fs_inode_has_valid_blocks2(fs, &inode)) {
+        LOG_DEBUG("ext2fs_inode_has_valid_blocks2");
+        return 0;
+		// return format->inline_data(&(inode.i_block[0]),
+		// 			   format->private);
+    }
+
+	retval = ext2fs_extent_open(fs, ino, &extents);
+	if (retval == EXT2_ET_INODE_NOT_EXTENT) {
+        LOG_DEBUG("EXT2_ET_INODE_NOT_EXTENT");
+        return 0;
+		// retval = ext2fs_block_iterate3(fs, ino, BLOCK_FLAG_READ_ONLY,
+		// 	NULL, walk_block, pdata);
+		// if (retval) {
+		// 	com_err(__func__, retval, _("listing blocks of ino \"%u\""),
+		// 		ino);
+		// }
+		// return retval;
+	}
+
+	auto ret = ino_iter_extents(fs, ino, extents, blocks);
+	ext2fs_extent_free(extents);
+    return ret;
+}
+
+int do_ext2fs_fiemap(ext2_filsys fs, ext2_ino_t ino, struct photon::fs::fiemap* map) {
+    std::vector<std::pair<off_t, size_t>> blocks;
+    errcode_t ret = ino_iter_blocks(fs, ino, blocks);
+    if (ret) return parse_extfs_error(fs, ino, ret);
+    map->fm_mapped_extents = blocks.size();
+    photon::fs::fiemap_extent *ext_buf = &map->fm_extents[0];
+    for (int i = 0; i < blocks.size(); i++) {
+        LOG_DEBUG("find block ` `", blocks[i].first * fs->blocksize, blocks[i].second * fs->blocksize);
+        ext_buf[i].fe_physical = blocks[i].first * fs->blocksize;
+        ext_buf[i].fe_length = blocks[i].second * fs->blocksize;
+    }
+    return 0;
+}
+
+
 #define DO_EXT2FS(func) \
     auto ret = func;    \
     if (ret < 0) {      \
@@ -960,6 +1065,14 @@ public:
     virtual int ftruncate(off_t length) override {
         DO_EXT2FS(do_ext2fs_ftruncate(file, flags, length))
     }
+    // mode is not used
+    virtual int fallocate(int mode, off_t o_offset, off_t len) override {
+        DO_EXT2FS(do_ext2fs_fallocate(fs, ino, o_offset, len));
+    }
+    virtual int fiemap(struct photon::fs::fiemap* map) override {
+        DO_EXT2FS(do_ext2fs_fiemap(fs, ino, map));
+    }
+
     virtual photon::fs::IFileSystem *filesystem() override;
 
     int flush_buffer();

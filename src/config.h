@@ -25,9 +25,12 @@ const int MAX_LAYER_CNT = 256;
 struct LayerConfig : public ConfigUtils::Config {
     APPCFG_CLASS;
 
+    APPCFG_PARA(gzipIndex, std::string, "");
     APPCFG_PARA(file, std::string, "");
+    APPCFG_PARA(dataFile, std::string, "");
     APPCFG_PARA(dir, std::string, "");
     APPCFG_PARA(digest, std::string, "");
+    APPCFG_PARA(dataDigest, std::string, "");
     APPCFG_PARA(size, uint64_t, 0);
 };
 
@@ -36,6 +39,8 @@ struct UpperConfig : public ConfigUtils::Config {
 
     APPCFG_PARA(index, std::string, "");
     APPCFG_PARA(data, std::string, "");
+    APPCFG_PARA(target, std::string, "");
+    APPCFG_PARA(gzipIndex, std::string, "");
 };
 
 struct DownloadConfig : public ConfigUtils::Config {

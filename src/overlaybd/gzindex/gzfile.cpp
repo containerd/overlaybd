@@ -1,3 +1,19 @@
+/*
+   Copyright The Overlaybd Authors
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,9 +35,15 @@ using namespace photon::fs;
 
 class GzFile : public VirtualReadOnlyFile {
 public:
+    bool m_file_ownership = false;
 	GzFile() = delete;
     explicit GzFile(photon::fs::IFile* gzip_file, photon::fs::IFile* index);
-    virtual ~GzFile(){};
+    virtual ~GzFile(){
+        if (m_file_ownership) {
+            delete gzip_file_;
+            delete index_file_;
+        }
+    };
 
 public:
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override;
@@ -247,15 +269,16 @@ ssize_t GzFile::extract(
     DEFER(inflateEnd(&strm));
 
     off_t start_pos = found_idx->en_pos - (found_idx->bits ? 1 : 0);
-    ret = gzip_file_->lseek(start_pos, SEEK_SET);
+    // ret = gzip_file_->lseek(start_pos, SEEK_SET);
     if (ret == -1){
         LOG_ERRNO_RETURN(0, -1, "Fail to gzip_file->lseek(`, SEEK_SET)", start_pos);
     }
     if (found_idx->bits) {
         unsigned char tmp;
-        if (gzip_file_->read(&tmp, 1) != 1) {
-            LOG_ERRNO_RETURN(0, -1, "Fail to gzip_file->read");
+        if (gzip_file_->pread(&tmp, 1, start_pos) != 1) {
+            LOG_ERRNO_RETURN(0, -1, "Fail to gzip_file->pread");
         }
+        start_pos++;
         inflatePrime(&strm, found_idx->bits, tmp >> (8 - found_idx->bits));
     }
 
@@ -285,13 +308,14 @@ ssize_t GzFile::extract(
 
         do {
             if (strm.avail_in == 0) {
-                ssize_t read_cnt = gzip_file_->read(inbuf, CHUNK);
+                ssize_t read_cnt = gzip_file_->pread(inbuf, CHUNK, start_pos);
                 if (read_cnt < 0 ) {
-                    LOG_ERRNO_RETURN(0, -1, "Fail to gzip_file->read(input, CHUNK)");
+                    LOG_ERRNO_RETURN(0, -1, "Fail to gzip_file->pread(input, CHUNK, `)", start_pos);
                 }
                 if (read_cnt == 0) {
-                    LOG_ERRNO_RETURN(Z_DATA_ERROR, -1, "Fail to gzip_file->read(input, CHUNK)");
+                    LOG_ERRNO_RETURN(Z_DATA_ERROR, -1, "Fail to gzip_file->pread(input, CHUNK, `)", start_pos);
                 }
+                start_pos += read_cnt;
                 strm.avail_in = read_cnt;
                 strm.next_in = inbuf;
             }
@@ -333,6 +357,19 @@ ssize_t GzFile::pread(void *buf, size_t count, off_t offset) {
 
 } // namespace FileSystem
 
-photon::fs::IFile* new_gzfile(photon::fs::IFile* gzip_file, photon::fs::IFile* index) {
-	return new FileSystem::GzFile(gzip_file, index);
+photon::fs::IFile* new_gzfile(photon::fs::IFile* gzip_file, photon::fs::IFile* index, bool ownership) {
+    if (!gzip_file || !index) {
+        LOG_ERRNO_RETURN(0, nullptr, "invalid file ptr. file: `, `", gzip_file, index);
+    }
+    auto rst = new FileSystem::GzFile(gzip_file, index);
+    rst->m_file_ownership = ownership;
+    return rst;
+}
+
+bool is_gzfile(photon::fs::IFile* file) {
+    char buf[4] = {0};
+    file->read(buf, 2);
+    file->lseek(0, 0);
+    return (uint8_t)buf[0] == 0x1f && (uint8_t)buf[1] == 0x8b;
+    // return (static_cast<uint8_t>(buf[0]) == 0x1F && static_cast<uint8_t>(buf[1]) == 0x8B);
 }
