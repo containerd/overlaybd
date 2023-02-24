@@ -17,7 +17,6 @@
 #include <photon/common/enumerable.h>
 #include <photon/fs/path.h>
 
-
 /*
  * In place, rewrite name to compress multiple /, eliminate ., and process ..
  *
@@ -32,8 +31,8 @@
  * See also Rob Pike, “Lexical File Names in Plan 9 or Getting Dot-Dot Right,”
  * https://9p.io/sys/doc/lexnames.html
  */
-#define SEP(x)	((x) == '/' || (x) == 0)
-char* clean_name(char *name) {
+#define SEP(x) ((x) == '/' || (x) == 0)
+char *clean_name(char *name) {
     char *p, *q, *dotdot;
     int rooted;
 
@@ -46,38 +45,45 @@ char* clean_name(char *name) {
      *	dotdot points just past the point where .. cannot backtrack
      *		any further (no slash).
      */
-    p = q = dotdot = name+rooted;
-    while(*p) {
-        if(p[0] == '/')	/* null element */
+    p = q = dotdot = name + rooted;
+    while (*p) {
+        if (p[0] == '/') /* null element */
             p++;
-        else if(p[0] == '.' && SEP(p[1]))
-            p += 1;	/* don't count the separator in case it is nul */
-        else if(p[0] == '.' && p[1] == '.' && SEP(p[2])) {
+        else if (p[0] == '.' && SEP(p[1]))
+            p += 1; /* don't count the separator in case it is nul */
+        else if (p[0] == '.' && p[1] == '.' && SEP(p[2])) {
             p += 2;
-            if(q > dotdot) {	/* can backtrack */
-                while(--q > dotdot && *q != '/')
+            if (q > dotdot) { /* can backtrack */
+                while (--q > dotdot && *q != '/')
                     ;
-            } else if(!rooted) {	/* /.. is / but ./../ is .. */
-                if(q != name)
+            } else if (!rooted) { /* /.. is / but ./../ is .. */
+                if (q != name)
                     *q++ = '/';
                 *q++ = '.';
                 *q++ = '.';
                 dotdot = q;
             }
-        } else {	/* real path element */
-            if(q != name+rooted)
+        } else { /* real path element */
+            if (q != name + rooted)
                 *q++ = '/';
-            while((*q = *p) != '/' && *q != 0)
+            while ((*q = *p) != '/' && *q != 0)
                 p++, q++;
         }
     }
-    if(q == name)	/* empty string is really ``.'' */
+    if (q == name) /* empty string is really ``.'' */
         *q++ = '.';
     *q = '\0';
     return name;
 }
 
-char* Tar::get_pathname() {
+std::string remove_last_slash(const std::string_view &path) {
+    if (path.back() == '/')
+        return std::string(path.substr(0, path.size() - 1));
+    else
+        return std::string(path);
+}
+
+char *Tar::get_pathname() {
     if (pax && pax->path)
         return clean_name(pax->path);
     if (header.gnu_longname)
@@ -98,7 +104,7 @@ char* Tar::get_pathname() {
      * POSIX prefix field. Thus, only honor the prefix field if the archive
      * is actually a POSIX archive. This is the same logic as GNU tar uses.
      */
-    if (strncmp(header.magic, TMAGIC, TMAGLEN - 1) != 0 || header.prefix[0] == '\0'){
+    if (strncmp(header.magic, TMAGIC, TMAGLEN - 1) != 0 || header.prefix[0] == '\0') {
         snprintf(th_pathname, MAXPATHLEN, "%.100s", header.name);
     } else {
         snprintf(th_pathname, MAXPATHLEN, "%.155s/%.100s", header.prefix, header.name);
@@ -108,12 +114,20 @@ char* Tar::get_pathname() {
     return clean_name(th_pathname);
 }
 
-char* Tar::get_linkname() {
-    if (pax && pax->linkpath) {
+char *Tar::get_linkname() {
+    if (pax && pax->linkpath)
         return clean_name(pax->linkpath);
-    } else {
-        return clean_name(header.get_linkname());
+    if (header.gnu_longlink)
+        return clean_name(header.gnu_longlink);
+
+    if (th_linkname == nullptr) {
+        th_linkname = (char *)malloc(MAXPATHLEN * sizeof(char));
+        if (th_linkname == nullptr)
+            return nullptr;
     }
+
+    snprintf(th_linkname, MAXPATHLEN, "%.100s", header.linkname);
+    return clean_name(th_linkname);
 }
 
 size_t Tar::get_size() {
@@ -126,7 +140,7 @@ size_t Tar::get_size() {
 
 mode_t TarHeader::get_mode() {
     mode_t m = (mode_t)oct_to_int(mode);
-    if (! (m & S_IFMT)) {
+    if (!(m & S_IFMT)) {
         switch (typeflag) {
         case SYMTYPE:
             m |= S_IFLNK;

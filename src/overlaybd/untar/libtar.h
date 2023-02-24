@@ -24,6 +24,7 @@
 #include <string.h>
 #include <photon/fs/filesystem.h>
 #include <photon/fs/fiemap.h>
+#include <photon/common/string_view.h>
 #include <set>
 #include <vector>
 #include <string>
@@ -50,16 +51,16 @@ static size_t oct_to_size(char *oct) {
     size_t i;
     return sscanf(oct, "%zo", &i) == 1 ? i : 0;
 }
-#define int_to_oct(num, oct, octlen) \
-    snprintf((oct), (octlen), "%*lo ", (octlen) - 2, (unsigned long)(num))
+#define int_to_oct(num, oct, octlen)                                                               \
+    snprintf((oct), (octlen), "%*lo ", (octlen)-2, (unsigned long)(num))
 
 static void int_to_oct_nonull(int num, char *oct, size_t octlen) {
     snprintf(oct, octlen, "%*lo", (int)(octlen - 1), (unsigned long)num);
     oct[octlen - 1] = ' ';
 }
 
-char* clean_name(char *name);
-
+char *clean_name(char *name);
+std::string remove_last_slash(const std::string_view &path);
 
 class TarHeader {
 public:
@@ -91,7 +92,7 @@ public:
     size_t get_size() { return oct_to_size(size); }
     int get_devmajor() { return oct_to_int(devmajor); }
     int get_devminor() { return oct_to_int(devminor); }
-    char *get_linkname() { return gnu_longlink ? gnu_longlink : linkname; }
+
     bool crc_ok() {
         return (get_crc() == crc_calc() || get_crc() == signed_crc_calc());
     }
@@ -100,18 +101,18 @@ public:
 };
 
 /* PAX format */
-#define PAX_HEADER			'x'
-#define PAX_GLOBAL_HEADER	'g'
-#define PAX_PATH			"path"
-#define PAX_LINKPATH		"linkpath"
-#define PAX_SIZE			"size"
-#define PAX_UID				"uid"
-#define PAX_GID				"gid"
-#define PAX_UNAME			"uname"
-#define PAX_GNAME			"gname"
-#define PAX_MTIME			"mtime"
-#define PAX_ATIME			"atime"
-#define PAX_CTIME			"ctime"
+#define PAX_HEADER        'x'
+#define PAX_GLOBAL_HEADER 'g'
+#define PAX_PATH          "path"
+#define PAX_LINKPATH      "linkpath"
+#define PAX_SIZE          "size"
+#define PAX_UID           "uid"
+#define PAX_GID           "gid"
+#define PAX_UNAME         "uname"
+#define PAX_GNAME         "gname"
+#define PAX_MTIME         "mtime"
+#define PAX_ATIME         "atime"
+#define PAX_CTIME         "ctime"
 class PaxHeader {
 public:
     char *path = nullptr;
@@ -142,7 +143,7 @@ private:
 class Tar {
 public:
     photon::fs::IFileSystem *fs = nullptr; // target
-    photon::fs::IFile *file = nullptr; // source
+    photon::fs::IFile *file = nullptr;     // source
     photon::fs::IFile *fs_base_file = nullptr;
     bool meta_only;
     int options;
@@ -150,26 +151,28 @@ public:
     uint64_t fs_blockmask;
     TarHeader header;
     char *th_pathname = nullptr;
+    char *th_linkname = nullptr;
     std::set<std::string> unpackedPaths;
-    std::list<std::pair<std::string, int>> dirs;	// <path, utime>
+    std::list<std::pair<std::string, int>> dirs; // <path, utime>
     PaxHeader *pax = nullptr;
 
     Tar(photon::fs::IFile *file, photon::fs::IFileSystem *fs, int options,
         uint64_t fs_blocksize = FS_BLOCKSIZE, photon::fs::IFile *bf = nullptr,
         bool meta_only = false)
         : file(file), fs(fs), options(options), fs_blocksize(fs_blocksize),
-        fs_base_file(bf), meta_only(meta_only)
-    {
+        fs_base_file(bf), meta_only(meta_only) {
         fs_blockmask = ~(fs_blocksize - 1);
     }
     ~Tar() {
         if (th_pathname != nullptr)
             free(th_pathname);
+        if (th_linkname != nullptr)
+            free(th_linkname);
         if (pax != nullptr)
             delete pax;
     }
-    char* get_pathname();
-    char* get_linkname();
+    char *get_pathname();
+    char *get_linkname();
     size_t get_size();
     int extract_all();
 
@@ -188,19 +191,22 @@ private:
 
     int set_file_perms(const char *filename);
     int convert_whiteout(const char *filename);
+
+    int mkdir_hier(const std::string_view &dir);
+    int remove_all(const std::string &path, bool rmdir = true);
 };
 
 /* constant values for the TAR options field */
-#define TAR_GNU			 1	/* use GNU extensions */
-#define TAR_VERBOSE		 2	/* output file info to stdout */
-#define TAR_NOOVERWRITE		 4	/* don't overwrite existing files */
-#define TAR_IGNORE_EOT		 8	/* ignore double zero blocks as EOF */
-#define TAR_CHECK_MAGIC		16	/* check magic in file header */
-#define TAR_CHECK_VERSION	32	/* check version in file header */
-#define TAR_IGNORE_CRC		64	/* ignore CRC in file header */
+#define TAR_GNU            1  /* use GNU extensions */
+#define TAR_VERBOSE        2  /* output file info to stdout */
+#define TAR_NOOVERWRITE    4  /* don't overwrite existing files */
+#define TAR_IGNORE_EOT     8  /* ignore double zero blocks as EOF */
+#define TAR_CHECK_MAGIC   16  /* check magic in file header */
+#define TAR_CHECK_VERSION 32  /* check version in file header */
+#define TAR_IGNORE_CRC    64  /* ignore CRC in file header */
 
 /* this is obsolete - it's here for backwards-compatibility only */
-#define TAR_IGNORE_MAGIC	0
+#define TAR_IGNORE_MAGIC   0
 
 const char libtar_version[] = "1";
 
@@ -225,5 +231,3 @@ const char libtar_version[] = "1";
 #define TH_ISFIFO(h)    (h.typeflag == FIFOTYPE \
                          || S_ISFIFO((mode_t)oct_to_int(h.mode)))
 #define TH_ISGLOBALHEADER(h) (h.typeflag == PAX_GLOBAL_HEADER)
-
-

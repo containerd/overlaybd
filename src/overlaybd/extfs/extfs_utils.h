@@ -349,7 +349,7 @@ ext2_ino_t get_parent_dir_ino(ext2_filsys fs, const char *path) {
     }
     char *parent_path = strndup(path, parent_len);
     ext2_ino_t parent_ino = string_to_inode(fs, parent_path, 0);
-    LOG_DEBUG(VALUE(path), VALUE(parent_path), VALUE(parent_ino));
+    // LOG_DEBUG(VALUE(path), VALUE(parent_path), VALUE(parent_ino));
     free(parent_path);
     return parent_ino;
 }
