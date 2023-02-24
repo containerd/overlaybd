@@ -30,13 +30,11 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 #include <photon/common/uuid.h>
 #include "index.h"
 
-using namespace photon::fs;
-
 namespace LSMT {
 
 static const int MAX_STACK_LAYERS = 255;
 
-class IFileRO : public VirtualReadOnlyFile {
+class IFileRO : public photon::fs::VirtualReadOnlyFile {
 public:
     static const int GetType = 12;
     // set MAX_IO_SIZE of per read/write operation.
@@ -50,7 +48,7 @@ public:
 };
 
 struct CommitArgs {
-    IFile *as = nullptr;
+    photon::fs::IFile *as = nullptr;
     char *user_tag = nullptr; // commit_msg, at most 256B
     size_t tag_len = 0;       // commit_msg length
     UUID::String parent_uuid; // set parent uuid when commit
@@ -60,7 +58,7 @@ struct CommitArgs {
         }
         return tag_len;
     }
-    CommitArgs(IFile *as) : as(as){};
+    CommitArgs(photon::fs::IFile *as) : as(as){};
 };
 
 class IFileRW : public IFileRO {
@@ -96,32 +94,31 @@ public:
 // optionally obtaining the ownerships of the underlying files,
 // thus they will be destructed automatically.
 struct LayerInfo {
-    IFile *fdata = nullptr;
-    IFile *findex = nullptr;
+    photon::fs::IFile *fdata = nullptr;
+    photon::fs::IFile *findex = nullptr;
     uint64_t virtual_size;
     UUID parent_uuid;
     UUID uuid;
     char *user_tag = nullptr; // a user provided string of message, 256B at most
     bool sparse_rw = false;
-    size_t len = 0; // len of user_tag; if it's 0, it will be detected with strlen()
-    LayerInfo(IFile *_fdata = nullptr, IFile *_findex = nullptr) : fdata(_fdata), findex(_findex) {
+    size_t len = 0;           // len of user_tag; if it's 0, it will be detected with strlen()
+    LayerInfo(photon::fs::IFile *_fdata = nullptr, photon::fs::IFile *_findex = nullptr) : fdata(_fdata), findex(_findex) {
         parent_uuid.clear();
         uuid.generate();
     }
 };
 
 struct WarpFileArgs {
-    IFile *findex = nullptr;
-    IFile *fsmeta = nullptr;      // sparse_file
-    IFile *target_file = nullptr; // eg. remote target, local data file
-    IFile *lba_file = nullptr;    // lba pass from ioctl
+    photon::fs::IFile *findex = nullptr;
+    photon::fs::IFile *fsmeta = nullptr; // sparse_file
+    photon::fs::IFile *target_file = nullptr;  // eg. remote target, local data file
     uint64_t virtual_size;
     UUID::String parent_uuid;
     UUID uuid;
     char *user_tag = nullptr; // a user provided string of message, 256B at most
     size_t len = 0;           // len of user_tag; if it's 0, it will be detected with strlen()
-    WarpFileArgs(IFile *findex, IFile *fsmeta, IFile *target_file, IFile *lba_file)
-        : findex(findex), fsmeta(fsmeta), target_file(target_file), lba_file(lba_file) {
+    WarpFileArgs(photon::fs::IFile *findex, photon::fs::IFile *fsmeta, photon::fs::IFile *target_file)
+        : findex(findex), fsmeta(fsmeta), target_file(target_file) {
         uuid.generate();
     }
 };
@@ -131,31 +128,31 @@ extern "C" IFileRW *create_file_rw(const LayerInfo &args, bool ownership = false
 // open a writable LSMT file constitued by a data file and a index file,
 // optionally obtaining the ownerships of the underlying files,
 // thus they will be destructed automatically.
-extern "C" IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership = false);
+extern "C" IFileRW *open_file_rw(photon::fs::IFile *fdata, photon::fs::IFile *findex, bool ownership = false);
 
 // open a read-only LSMT file, which was created by
 // `close_seal()`ing or `commit()`ing a R/W LSMT file.
 // optionally obtaining the `ownership` of the underlying file,
 // thus it will be destructed automatically.
-extern "C" IFileRO *open_file_ro(IFile *file, bool ownership = false);
+extern "C" IFileRO *open_file_ro(photon::fs::IFile *file, bool ownership = false);
 
 // open a read-only (sealed) LSMT file constituted by multiple layers,
 // with `files[0]` being the lowest layer, and vice versa
 // optionally obtaining the ownerships of the underlying files,
 // thus they will be destructed automatically.
-extern "C" IFileRO *open_files_ro(IFile **files, size_t n, bool ownership = false);
+extern "C" IFileRO *open_files_ro(photon::fs::IFile **files, size_t n, bool ownership = false);
 
 extern "C" IFileRW *create_warpfile(WarpFileArgs &args, bool ownership = false);
 
-extern "C" IFileRW *open_warpfile_rw(IFile *findex, IFile *fsmeta_file, IFile *lba_file,
-                                     IFile *target_file, bool ownership = false);
+extern "C" IFileRW *open_warpfile_rw(photon::fs::IFile *findex, photon::fs::IFile *fsmeta_file,
+                                    photon::fs::IFile *target_file, bool ownership = false);
 
-extern "C" IFileRO *open_warpfile_ro(IFile *warpfile, IFile *target_file, bool ownership = false);
+extern "C" IFileRO *open_warpfile_ro(photon::fs::IFile *warpfile, photon::fs::IFile *target_file, bool ownership = false);
 
 // merge multiple RO files (layers) into a single RO file (layer)
 // returning 0 for success, -1 otherwise
 // extern "C" int merge_files_ro(IFile** src_files, size_t n, IFile* dest_file);
-extern "C" int merge_files_ro(IFile **src_files, size_t n, const CommitArgs &args);
+extern "C" int merge_files_ro(photon::fs::IFile **src_files, size_t n, const CommitArgs &args);
 
 // stack a R/W layer (`upper_layer`) and a read-only layere (`lower_layer`)
 // together, forming a virtual single R/W file

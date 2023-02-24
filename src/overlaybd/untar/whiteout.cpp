@@ -73,28 +73,28 @@ int remove_all(photon::fs::IFileSystem *fs, const std::string &path) {
 // 0 not whiteout
 // -1 error
 int Tar::convert_whiteout(const char *filename) {
-	photon::fs::Path p(filename);
-	auto dir = std::string(p.dirname());
-	auto base = p.basename();
-	if (base == whiteoutOpaqueDir) {
-		struct stat buf;
-		if (fs->lstat(dir.c_str(), &buf) < 0) {
-			LOG_ERRNO_RETURN(0, -1, "failed to lstat ", VALUE(dir));
-		}
+    photon::fs::Path p(filename);
+    auto dir = std::string(p.dirname());
+    auto base = p.basename();
+    if (base == whiteoutOpaqueDir) {
+        struct stat buf;
+        if (fs->lstat(dir.c_str(), &buf) < 0) {
+            LOG_ERRNO_RETURN(0, -1, "failed to lstat ", VALUE(dir));
+        }
 
-		for (auto file : enumerable(photon::fs::Walker(fs, dir))) {
-			auto fn = std::string(file);
-			if (unpackedPaths.find(fn) == unpackedPaths.end()) {
-				remove_all(fs, fn);
-			}
-  		}
-		return 1;
-	}
-	if (base.substr(0, whiteoutPrefix.size()) == whiteoutPrefix) {
-		auto opath = dir + std::string(base.data() + whiteoutPrefix.size());
-		remove_all(fs, opath);
-		return 1;
-	}
-	return 0;
+        for (auto file : enumerable(photon::fs::Walker(fs, dir))) {
+            auto fn = std::string(file);
+            if (unpackedPaths.find(fn) == unpackedPaths.end()) {
+                remove_all(fs, fn);
+            }
+          }
+        return 1;
+    }
+    if (base.substr(0, whiteoutPrefix.size()) == whiteoutPrefix) {
+        auto opath = dir + std::string(base.data() + whiteoutPrefix.size());
+        remove_all(fs, opath);
+        return 1;
+    }
+    return 0;
 }
 

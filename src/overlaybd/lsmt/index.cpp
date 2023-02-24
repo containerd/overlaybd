@@ -404,7 +404,7 @@ public:
         m_ownership = ownership;
 
         for (auto &x : mapping)
-            ((SegmentMapping &)x).tag = ro_layers_count;
+            ((SegmentMapping &)x).tag += ro_layers_count;
         // for (auto &x : *m_backing_index)
         //     ((SegmentMapping &)x).tag++;
     }

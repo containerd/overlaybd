@@ -22,6 +22,8 @@
 #include "../overlaybd/zfile/zfile.h"
 #include "../overlaybd/untar/libtar.h"
 #include "../overlaybd/extfs/extfs.h"
+#include "../overlaybd/gzindex/gzfile.h"
+#include "../overlaybd/gzip/gz.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -51,12 +53,12 @@ IFile *open_file(const char *fn, int flags, mode_t mode = 0) {
 int main(int argc, char **argv) {
     string commit_msg;
     string parent_uuid;
-    std::string image_config_path, input_path;
-    bool compress_zfile = false;
+    std::string image_config_path, input_path, gz_index_path;
 
     CLI::App app{"this is overlaybd-apply, apply OCIv1 tar layer to overlaybd format"};
     app.add_option("input_path", input_path, "input OCIv1 tar layer path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     app.add_option("image_config_path", image_config_path, "overlaybd image config path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
+    app.add_option("--gz_index_path", gz_index_path, "build gzip index if layer is gzip, only used with fastoci")->type_name("FILEPATH");
     CLI11_PARSE(app, argc, argv);
 
     set_log_output_level(1);
@@ -68,7 +70,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "failed to create image file\n");
         exit(-1);
     }
-    auto extfs = new_extfs(imgfile);
+    // for now, buffer_file can't be used with fastoci
+    auto extfs = new_extfs(imgfile, gz_index_path == "");
     if (!extfs) {
         fprintf(stderr, "new extfs failed, %s\n", strerror(errno));
         exit(-1);
@@ -79,8 +82,21 @@ int main(int argc, char **argv) {
         exit(-1);
     }
 
+    photon::fs::IFile* src_file = nullptr;
+
     auto tarf = open_file(input_path.c_str(), O_RDONLY, 0666);
-    auto tar = new Tar(tarf, target, 0);
+    DEFER(delete tarf);
+
+    if (gz_index_path != "" && is_gzfile(tarf)) {
+        auto res = create_gz_index(tarf, gz_index_path.c_str(), 1024*1024);
+        LOG_INFO("create_gz_index ", VALUE(res));
+        tarf->lseek(0, 0);
+
+        src_file = open_gzfile_adaptor(input_path.c_str());
+    } else {
+        src_file = tarf;
+    }
+    auto tar = new Tar(src_file, target, 0, 4096, imgfile->get_base(), gz_index_path != "");
     if (tar->extract_all() < 0) {
         fprintf(stderr, "failed to extract\n");
         exit(-1);

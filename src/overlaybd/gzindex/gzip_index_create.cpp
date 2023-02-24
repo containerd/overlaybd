@@ -1,3 +1,19 @@
+/*
+   Copyright The Overlaybd Authors
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,19 +32,19 @@
 #define LAST_DEFLATE_BLOCK_BIT   0X40
 
 static int zlib_compress(int level, unsigned char *in, int in_len, unsigned char *out, int& out_len) {
-	z_stream strm;
-	memset(&strm, 0, sizeof(strm));
+    z_stream strm;
+    memset(&strm, 0, sizeof(strm));
 
-	int ret = deflateInit(&strm, level);
-	if (ret != Z_OK) {
-		LOG_ERRNO_RETURN(0, -1, "Failed to deflateInit. level:`", level);
-	}
-	DEFER(deflateEnd(&strm));
+    int ret = deflateInit(&strm, level);
+    if (ret != Z_OK) {
+        LOG_ERRNO_RETURN(0, -1, "Failed to deflateInit. level:`", level);
+    }
+    DEFER(deflateEnd(&strm));
 
-	strm.next_in = in;
-	strm.avail_in = in_len;
+    strm.next_in = in;
+    strm.avail_in = in_len;
 
-	strm.avail_out = out_len;
+    strm.avail_out = out_len;
     strm.next_out = out;
 
     ret = deflate(&strm, Z_FINISH);
@@ -41,26 +57,26 @@ static int zlib_compress(int level, unsigned char *in, int in_len, unsigned char
 }
 
 static int dict_compress(const IndexFileHeader& h,
-		unsigned char *dict, int dict_len, unsigned char *&out, int& out_len) {
-	if (h.dict_compress_algo == 0) {
-	    out = dict;
-	    out_len = dict_len;
-	    return 0;
-	}
+                         unsigned char *dict, int dict_len, unsigned char *&out, int& out_len) {
+    if (h.dict_compress_algo == 0) {
+        out = dict;
+        out_len = dict_len;
+        return 0;
+    }
 
-	if (h.dict_compress_algo == 1) {
-	    if (zlib_compress(h.dict_compress_level, dict, WINSIZE, out , out_len) != 0) {
+    if (h.dict_compress_algo == 1) {
+        if (zlib_compress(h.dict_compress_level, dict, WINSIZE, out , out_len) != 0) {
             LOG_ERRNO_RETURN(0, -1, "Failed to dict_compress");
-	    }
-	    return 0;
-	}
-	LOG_ERRNO_RETURN(0, -1, "Wrong compress algorithm. h.dict_compress_algo:`", h.dict_compress_algo);
-	return -1;
+        }
+        return 0;
+    }
+    LOG_ERRNO_RETURN(0, -1, "Wrong compress algorithm. h.dict_compress_algo:`", h.dict_compress_algo);
+    return -1;
 }
 
 static int add_index_entry(unsigned char *temp_buf, int32_t temp_buf_len, IndexFileHeader& h, int bits, off_t en_pos, off_t de_pos,
-		unsigned int left, unsigned char *window, INDEX &index, photon::fs::IFile* index_file) {
-	struct IndexEntry* p = new IndexEntry;
+                           unsigned int left, unsigned char *window, INDEX &index, photon::fs::IFile* index_file) {
+    struct IndexEntry* p = new IndexEntry;
     p->bits = bits;
     p->en_pos = en_pos;
     p->de_pos = de_pos;
@@ -156,83 +172,83 @@ static int build_index(IndexFileHeader& h,photon::fs::IFile *gzfile, INDEX &inde
 }
 
 static int get_compressed_index(const IndexFileHeader& h, const INDEX& index, unsigned char *out, int& out_len) {
-	int index_len = sizeof(IndexEntry) * index.size();
-	unsigned char *buf = new unsigned char[index_len];
-	DEFER(delete []buf);
+    int index_len = sizeof(IndexEntry) * index.size();
+    unsigned char *buf = new unsigned char[index_len];
+    DEFER(delete []buf);
 
-	IndexEntry *p = nullptr;
-	for (unsigned int i=0; i<index.size(); i++) {
-		p = index.at(i);
-		memcpy(buf + i*sizeof(IndexEntry), p, sizeof(IndexEntry));
-	}
+    IndexEntry *p = nullptr;
+    for (unsigned int i=0; i<index.size(); i++) {
+        p = index.at(i);
+        memcpy(buf + i*sizeof(IndexEntry), p, sizeof(IndexEntry));
+    }
 
-	if (h.dict_compress_algo == 0) {
-		memcpy(out, buf, index_len);
-		out_len = index_len;
-		return 0;
-	}
+    if (h.dict_compress_algo == 0) {
+        memcpy(out, buf, index_len);
+        out_len = index_len;
+        return 0;
+    }
 
-	return zlib_compress(h.dict_compress_level, buf, index_len, out, out_len);
+    return zlib_compress(h.dict_compress_level, buf, index_len, out, out_len);
 }
 
 static int save_index_to_file(IndexFileHeader &h, INDEX& index, photon::fs::IFile *index_file) {
-	int indx_cmpr_buf_len = index.size() * sizeof(IndexEntry) * 2 + 4096;
-	unsigned char *buf = new unsigned char[indx_cmpr_buf_len];
-	DEFER(delete []buf);
+    int indx_cmpr_buf_len = index.size() * sizeof(IndexEntry) * 2 + 4096;
+    unsigned char *buf = new unsigned char[indx_cmpr_buf_len];
+    DEFER(delete []buf);
 
-	if (get_compressed_index(h, index, buf, indx_cmpr_buf_len) != 0) {
-		LOG_ERROR_RETURN(0, -1, "Failed to get_compress_index");
-	}
+    if (get_compressed_index(h, index, buf, indx_cmpr_buf_len) != 0) {
+        LOG_ERROR_RETURN(0, -1, "Failed to get_compress_index");
+    }
 
-	LOG_INFO("origin_len_of_index:`, compressed_index_len:`", index.size() * sizeof(IndexEntry), indx_cmpr_buf_len);
-	if (index_file->pwrite(buf, indx_cmpr_buf_len, h.index_start) != indx_cmpr_buf_len) {
-		LOG_ERROR_RETURN(0, -1, "Failed to write index, indx_cmpr_buf_len:`, h.index_start:`", indx_cmpr_buf_len, h.index_start+0);
-	}
-	h.index_area_len = indx_cmpr_buf_len;
+    LOG_INFO("origin_len_of_index:`, compressed_index_len:`", index.size() * sizeof(IndexEntry), indx_cmpr_buf_len);
+    if (index_file->pwrite(buf, indx_cmpr_buf_len, h.index_start) != indx_cmpr_buf_len) {
+        LOG_ERROR_RETURN(0, -1, "Failed to write index, indx_cmpr_buf_len:`, h.index_start:`", indx_cmpr_buf_len, h.index_start+0);
+    }
+    h.index_area_len = indx_cmpr_buf_len;
 
-	struct stat sbuf;
-	if (index_file->fstat(&sbuf) != 0) {
-		LOG_ERRNO_RETURN(0, -1, "Faild to index_file->fstat()");
-	}
+    struct stat sbuf;
+    if (index_file->fstat(&sbuf) != 0) {
+        LOG_ERRNO_RETURN(0, -1, "Faild to index_file->fstat()");
+    }
     h.index_num = index.size();
-	h.index_file_size= sbuf.st_size;
+    h.index_file_size= sbuf.st_size;
 
 
     h.crc = h.cal_crc();
 
-	if (index_file->pwrite(&h, sizeof(IndexFileHeader), 0) != sizeof(IndexFileHeader)) {
-		LOG_ERROR_RETURN(0, -1, "Failed to write header");
-	}
-	return 0;
+    if (index_file->pwrite(&h, sizeof(IndexFileHeader), 0) != sizeof(IndexFileHeader)) {
+        LOG_ERROR_RETURN(0, -1, "Failed to write header");
+    }
+    return 0;
 }
 
 //int create_gz_index(photon::fs::IFile* gzip_file, const char *index_file_path, off_t span, unsigned char dict_compress_algo) {
 //int create_gz_index(photon::fs::IFile* gzip_file, off_t span, const char *index_file_path) {
 int create_gz_index(photon::fs::IFile* gzip_file, const char *index_file_path, off_t span, int dict_compress_algo, int dict_compress_level) {
-	LOG_INFO("span:`,dict_compress_algo:`,dict_compress_level:`", span, dict_compress_algo, dict_compress_level);
-	if (dict_compress_algo != DICT_COMPRESS_ALGO_NONE && dict_compress_algo != DICT_COMPRESS_ALGO_ZLIB) {
-		LOG_ERRNO_RETURN(0, -1, "Invalid dict_compress_algo:`", dict_compress_algo);
-	}
+    LOG_INFO("span:`,dict_compress_algo:`,dict_compress_level:`", span, dict_compress_algo, dict_compress_level);
+    if (dict_compress_algo != DICT_COMPRESS_ALGO_NONE && dict_compress_algo != DICT_COMPRESS_ALGO_ZLIB) {
+        LOG_ERRNO_RETURN(0, -1, "Invalid dict_compress_algo:`", dict_compress_algo);
+    }
 
-	if (dict_compress_algo == DICT_COMPRESS_ALGO_ZLIB) {
-		if (dict_compress_level < -1 || dict_compress_level > 9) {
-			LOG_ERRNO_RETURN(0, -1, "Invalid dict_compress_level:`, it must be in [-1, 9]", dict_compress_level);
-		}
-	}
-	if (span < WINSIZE) {
-		LOG_ERRNO_RETURN(0, -1, "Span is too small, must be greater than 100, span:`", span);
-	}
+    if (dict_compress_algo == DICT_COMPRESS_ALGO_ZLIB) {
+        if (dict_compress_level < -1 || dict_compress_level > 9) {
+            LOG_ERRNO_RETURN(0, -1, "Invalid dict_compress_level:`, it must be in [-1, 9]", dict_compress_level);
+        }
+    }
+    if (span < WINSIZE) {
+        LOG_ERRNO_RETURN(0, -1, "Span is too small, must be greater than 100, span:`", span);
+    }
 
-	struct stat sbuf;
-	if (gzip_file->fstat(&sbuf) != 0) {
-		LOG_ERRNO_RETURN(0, -1, "Faild to gzip_file->fstat()");
-	}
+    struct stat sbuf;
+    if (gzip_file->fstat(&sbuf) != 0) {
+        LOG_ERRNO_RETURN(0, -1, "Faild to gzip_file->fstat()");
+    }
 
-	photon::fs::IFile *index_file = photon::fs::open_localfile_adaptor(index_file_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
-	if (index_file == nullptr) {
-		LOG_ERROR_RETURN(0, -1, "Failed to open(`)", index_file_path);
-	}
-	DEFER(index_file->close());
+    photon::fs::IFile *index_file = photon::fs::open_localfile_adaptor(index_file_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (index_file == nullptr) {
+        LOG_ERROR_RETURN(0, -1, "Failed to open(`)", index_file_path);
+    }
+    DEFER(index_file->close());
 
     IndexFileHeader h;
     memset(&h, 0, sizeof(h));
@@ -255,7 +271,7 @@ int create_gz_index(photon::fs::IFile* gzip_file, const char *index_file_path, o
         LOG_ERRNO_RETURN(0, -1, "Faild to build_index");
     }
 
-	ret = save_index_to_file(h, index, index_file);
+    ret = save_index_to_file(h, index, index_file);
     if (ret != 0) {
         LOG_ERRNO_RETURN(0, -1, "Failed to save_index_to_file(...)");
     }

@@ -48,7 +48,8 @@ int main(int argc, char **argv) {
     uint64_t vsize;
     string parent_uuid;
     bool sparse = false;
-    std::string data_file_path, index_file_path;
+    std::string data_file_path, index_file_path, warp_index_path;
+    bool build_fastoci;
 
     CLI::App app{"this is overlaybd-create"};
     app.add_option("-u", parent_uuid, "parent uuid");
@@ -56,6 +57,7 @@ int main(int argc, char **argv) {
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->required();
     app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->required();
     app.add_option("vsize", vsize, "virtual size(GB)")->type_name("INT")->check(CLI::PositiveNumber)->required();
+    app.add_flag("--fastoci", build_fastoci, "commit using fastoci format");
     CLI11_PARSE(app, argc, argv);
 
 
@@ -66,13 +68,20 @@ int main(int argc, char **argv) {
     const auto mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
     IFile* fdata = open_file(data_file_path.c_str(), flag, mode);
     IFile* findex = open_file(index_file_path.c_str(), flag, mode);
+    IFile* file = nullptr;
 
-    LSMT::LayerInfo args(fdata, findex);
-    args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
-    args.virtual_size = vsize;
-    args.sparse_rw = sparse;
+    if (build_fastoci) {
+        LSMT::WarpFileArgs args(findex, fdata, nullptr);
+        args.virtual_size = vsize;
+        file = LSMT::create_warpfile(args, false);
+    } else {
+        LSMT::LayerInfo args(fdata, findex);
+        args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
+        args.virtual_size = vsize;
+        args.sparse_rw = sparse;
+        file = LSMT::create_file_rw(args, false);
+    }
 
-    auto file = LSMT::create_file_rw(args, false);
     if (!file) {
         fprintf(stderr, "failed to create lsmt file object, possibly I/O error!\n");
         exit(-1);
