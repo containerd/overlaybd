@@ -33,6 +33,8 @@
 #include "image_file.h"
 #include "sure_file.h"
 #include "switch_file.h"
+#include "overlaybd/gzip/gz.h"
+#include "overlaybd/gzindex/gzfile.h"
 
 #define PARALLEL_LOAD_INDEX 32
 using namespace photon::fs;
@@ -82,6 +84,43 @@ IFile *ImageFile::__open_ro_file(const std::string &path) {
     file = switch_file;
 
     return file;
+}
+
+IFile *ImageFile::__open_ro_target_file(const std::string &path) {
+    auto file = open_localfile_adaptor(path.c_str(), O_RDONLY, 0644, 0);
+    if (!file) {
+        set_failed("failed to open local data file " + path);
+        LOG_ERROR_RETURN(0, nullptr, "open(`),`:`", path, errno, strerror(errno));
+    }
+    return file;
+}
+
+IFile *ImageFile::__open_ro_target_remote(const std::string &dir, const std::string &data_digest,
+                                               const uint64_t size, int layer_index) {
+    std::string url;
+    int64_t extra_range, rand_wait;
+
+    if (conf.repoBlobUrl() == "") {
+        set_failed("empty repoBlobUrl");
+        LOG_ERROR_RETURN(0, nullptr, "empty repoBlobUrl for remote layer");
+    }
+    url = conf.repoBlobUrl();
+
+    if (url[url.length() - 1] != '/')
+        url += "/";
+    url += data_digest;
+
+    LOG_DEBUG("open file from remotefs: `", url);
+    IFile *remote_file = image_service.global_fs.remote_fs->open(url.c_str(), O_RDONLY);
+    if (!remote_file) {
+        if (errno == EPERM)
+            set_auth_failed();
+        else
+            set_failed("failed to open remote file " + url);
+        LOG_ERROR_RETURN(0, nullptr, "failed to open remote file `", url);
+    }
+
+    return remote_file;
 }
 
 IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &digest,
@@ -231,6 +270,27 @@ int ImageFile::open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer,
             file = __open_ro_remote(layer.dir(), layer.digest(), layer.size(), index);
         }
     }
+
+    IFile *target_file = nullptr;
+
+    if (layer.targetFile() != "") {
+        LOG_INFO("open local data file `", layer.targetFile());
+        target_file = __open_ro_target_file(layer.targetFile());
+    } else if (layer.targetDigest() != "") {
+        LOG_INFO("open remote data file `", layer.targetDigest());
+        target_file = __open_ro_target_remote(layer.dir(), layer.targetDigest(), 0, index);
+    }
+    if (layer.gzipIndex() != "") {
+        auto gz_index = open_localfile_adaptor(layer.gzipIndex().c_str(), O_RDONLY, 0644, 0);
+        if (!gz_index) {
+            set_failed("failed to open gzip index " + layer.gzipIndex());
+            LOG_ERROR_RETURN(0, -1, "open(`),`:`", layer.gzipIndex(), errno, strerror(errno));
+        }
+        target_file = new_gzfile(target_file, gz_index, true);
+    }
+    if (target_file != nullptr) {
+        file = LSMT::open_warpfile_ro(file, target_file, true);
+    }
     if (file != nullptr) {
         LOG_DEBUG("layer index: `, open(`) success", index, opened);
         return 0;
@@ -299,9 +359,8 @@ ERROR_EXIT:
 LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
     IFile *data_file = NULL;
     IFile *idx_file = NULL;
+    IFile *target_file = NULL;
     LSMT::IFileRW *ret = NULL;
-
-    LOG_INFO("upper layer : ` , `", upper.index(), upper.data());
 
     int dafa_file_flags = O_RDWR;
 
@@ -317,13 +376,36 @@ LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
         goto ERROR_EXIT;
     }
 
-    ret = LSMT::open_file_rw(data_file, idx_file, true);
-    if (!ret) {
-        LOG_ERROR("LSMT::open_file_rw(`,`,`) return NULL", (uint64_t)data_file, (uint64_t)idx_file,
-                  true);
-        goto ERROR_EXIT;
+    if (upper.target() != "") {
+        LOG_INFO("fastoci upper layer : `, `, `, `", upper.index(), upper.data(), upper.target());
+        target_file = new_sure_file_by_path(upper.target().c_str(), O_RDWR, this);
+        if (!target_file) {
+            LOG_ERROR("open(`,flags), `:`", upper.target(), errno, strerror(errno));
+            goto ERROR_EXIT;
+        }
+        if (upper.gzipIndex() != "") {
+            auto gzip_index = new_sure_file_by_path(upper.gzipIndex().c_str(), O_RDWR, this);
+            if (!gzip_index) {
+                LOG_ERROR("open(`,flags), `:`", upper.gzipIndex(), errno, strerror(errno));
+                goto ERROR_EXIT;
+            }
+            target_file = new_gzfile(target_file, gzip_index);
+        }
+        ret = LSMT::open_warpfile_rw(idx_file, data_file, target_file, true);
+        if (!ret) {
+            LOG_ERROR("LSMT::open_warpfile_rw(`,`,`,`) return NULL",
+                    (uint64_t)data_file, (uint64_t)idx_file, (uint64_t)target_file, true);
+            goto ERROR_EXIT;
+        }
+    } else {
+        LOG_INFO("overlaybd upper layer : ` , `", upper.index(), upper.data());
+        ret = LSMT::open_file_rw(data_file, idx_file, true);
+        if (!ret) {
+            LOG_ERROR("LSMT::open_file_rw(`,`,`) return NULL",
+                    (uint64_t)data_file, (uint64_t)idx_file, true);
+            goto ERROR_EXIT;
+        }
     }
-
     return ret;
 
 ERROR_EXIT:

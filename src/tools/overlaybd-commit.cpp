@@ -53,6 +53,7 @@ int main(int argc, char **argv) {
     int block_size = -1;
     std::string data_file_path, index_file_path, commit_file_path, remote_mapping_file;
     bool compress_zfile = false;
+    bool build_fastoci = false;
 
     CLI::App app{"this is overlaybd-commit"};
     app.add_option("-m", commit_msg, "add some custom message if needed");
@@ -62,7 +63,7 @@ int main(int argc, char **argv) {
     app.add_option(
            "--bs", block_size,
            "The size of a data block in KB. Must be a power of two between 4K~64K [4/8/16/32/64](default 4)");
-    app.add_option("--lba_file", remote_mapping_file, "remoteLBA for warpfile")->type_name("FILEPATH")->check(CLI::ExistingFile);
+    app.add_flag("--fastoci", build_fastoci, "commit using fastoci format");
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     app.add_option("commit_file", commit_file_path, "commit file path")->type_name("FILEPATH")->required();
@@ -74,12 +75,11 @@ int main(int argc, char **argv) {
 
     IFile* fdata = open_file(data_file_path.c_str(), O_RDONLY, 0);
     IFile* findex = open_file(index_file_path.c_str(), O_RDONLY, 0);
-    IFile* flba = nullptr;
     IFileRW* fin = nullptr;
-    if (not remote_mapping_file.empty()){
-        LOG_INFO("commit LSMTWarpFile with args: {fsmeta: `, remoteMapping: `, index_file: `",
-            data_file_path, remote_mapping_file, index_file_path);
-        fin = open_warpfile_rw(findex, fdata, flba, nullptr, true);
+    if (build_fastoci) {
+        LOG_INFO("commit LSMTWarpFile with args: {index_file: `, fsmeta: `",
+            index_file_path, data_file_path);
+        fin = open_warpfile_rw(findex, fdata, nullptr, true);
     } else {
         fin = open_file_rw(fdata, findex, true);
     }
