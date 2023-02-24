@@ -46,16 +46,14 @@ public:
     uint32_t args = 0; // reserve;
     uint32_t dict_size = 0;
     uint8_t verify = 0;
-    uint8_t __padding_1 = 0;
-    uint8_t __padding_2 = 0;
-    uint8_t __padding_3 = 0;
+    uint8_t __padding_1[7] = {0};
 
     CompressOptions(uint8_t type = LZ4, uint32_t block_size = DEFAULT_BLOCK_SIZE,
                     uint8_t verify = 0)
         : block_size(block_size), type(type), verify(verify) {
     }
 };
-static_assert(sizeof(CompressOptions) == 20, "sizeof(CompressOptions) != 20");
+static_assert(sizeof(CompressOptions) == 24, "sizeof(CompressOptions) != 24");
 
 class CompressArgs {
 public:

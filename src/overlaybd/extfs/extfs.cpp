@@ -1330,6 +1330,6 @@ photon::fs::IFileSystem *new_extfs(photon::fs::IFile *file, bool buffer) {
 ext2_ino_t string_to_inode(ext2_filsys fs, const char *str, int follow, bool release) {
     auto reserved = reinterpret_cast<std::uintptr_t *>(fs->reserved);
     auto extfs = reinterpret_cast<ExtFileSystem *>(reserved[0]);
-    LOG_DEBUG("string_to_inode ", VALUE(str), VALUE(follow), VALUE(release));
+    // LOG_DEBUG("string_to_inode ", VALUE(str), VALUE(follow), VALUE(release));
     return extfs->get_inode(str, follow, release);
 }

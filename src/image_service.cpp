@@ -183,6 +183,9 @@ int ImageService::read_global_config_and_set() {
         } else {
             LOG_INFO("set audit_path:`", global_conf.auditPath());
             default_audit_logger.log_output = new_log_output_file(global_conf.auditPath().c_str(), LOG_SIZE, LOG_NUM);
+            if (!default_audit_logger.log_output) {
+                default_audit_logger.log_output = log_output_null;
+            }
         }
     } else {
         LOG_INFO("audit disabled");

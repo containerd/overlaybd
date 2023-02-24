@@ -78,8 +78,9 @@ public:
             return magic0 == MAGIC0() && magic1 == MAGIC1();
         }
 
-        // offset 24  28
+        // offset 24, 28, 32
         uint32_t size = sizeof(HeaderTrailer);
+        uint32_t __padding = 0;
         uint64_t flags;
 
         static const uint32_t FLAG_SHIFT_HEADER = 0; // 1:header     0:trailer
@@ -140,14 +141,16 @@ public:
             this->opt = opt;
         }
 
-        // offset 32, 40, 48
+        // offset 40, 48, 56, 64
         uint64_t index_offset; // in bytes
         uint64_t index_size;   // # of SegmentMappings
         uint64_t raw_data_size;
         uint64_t reserved_0;
+        // offset 72
         CompressOptions opt;
 
     } /* __attribute__((packed)) */;
+    static_assert(sizeof(HeaderTrailer) == 96, "sizeof(HeaderTrailer) != 96");
 
     struct JumpTable {
         typedef uint16_t uinttype;
