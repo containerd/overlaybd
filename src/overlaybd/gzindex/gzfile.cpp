@@ -170,6 +170,9 @@ int GzFile::init() {
     if (index_header_.cal_crc() != index_header_.crc) {
         LOG_ERRNO_RETURN(0, -1, "Faild to check CRC of index_header");
     }
+    if (index_header_.major_version != 1) {
+        LOG_ERRNO_RETURN(0, -1, "Wrong index version, required:1, value:`", index_header_.major_version + 0);
+    }
 
     if (sizeof(IndexEntry) != index_header_.index_size) {
         LOG_ERRNO_RETURN(0, -1, "Failed check index_header_.index_size. ` != `", sizeof(IndexEntry), index_header_.index_size + 0);

@@ -21,6 +21,7 @@
 #include <vector>
 #include "photon/common/checksum/crc32c.h"
 #define WINSIZE 32768U
+#define DEFLATE_BLOCK_UNCOMPRESS_MAX_SIZE 65536U
 #define GZFILE_INDEX_MAGIC "ddgzidx"
 
 struct IndexFileHeader {
