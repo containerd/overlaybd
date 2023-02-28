@@ -31,6 +31,110 @@
 #define EACH_DEFLATE_BLOCK_BIT  0X080
 #define LAST_DEFLATE_BLOCK_BIT   0X40
 
+static int dict_compress(const IndexFileHeader& h,
+        unsigned char *dict, int dict_len, unsigned char *out, int& out_len);
+
+class IndexFilterRecorder {
+public:
+    IndexFilterRecorder() = delete;
+    explicit IndexFilterRecorder(IndexFileHeader* h, INDEX *index,
+        photon::fs::IFile* index_file):h_(h),index_(index),index_file_(index_file) {
+        buf_ = new unsigned char[DEFLATE_BLOCK_UNCOMPRESS_MAX_SIZE];
+        memset(&last_, 0, sizeof(last_));
+    }
+    virtual ~IndexFilterRecorder(){
+        delete []buf_;
+    };
+
+    int record(int bits, off_t en_pos, off_t de_pos, unsigned int left, unsigned char *window) {
+        LOG_DEBUG("all de_pos:`", de_pos);
+        if (de_pos == expected_len_) {
+            last_.valid = false;
+            LOG_DEBUG("add_index_entry:`", de_pos);
+            if (add_index_entry(bits, en_pos, de_pos, left, window) != 0 ) {
+                return -1;
+            }
+            expected_len_ += h_->span;
+            return 0;
+        }
+        if (de_pos > expected_len_ - DEFLATE_BLOCK_UNCOMPRESS_MAX_SIZE && de_pos < expected_len_) {
+            LOG_DEBUG("last_.keep_entry:`", de_pos);
+            last_.keep_entry(bits, en_pos, de_pos, left, window);
+            return 0;
+        }
+        if (de_pos > expected_len_) {
+            if (!last_.valid) {
+                LOG_ERRNO_RETURN(0, -1, "Internel ERROR, wrong span. span:`,de_pos:`,expected_len_:`", h_->span+0, de_pos, expected_len_);
+            }
+            LOG_DEBUG("add_index_entry:`", last_.de_pos + 0);
+            if (add_index_entry(last_.bits, last_.en_pos, last_.de_pos, last_.left, last_.window) != 0) {
+                return -1;
+            }
+            expected_len_ += h_->span;
+            if (de_pos > expected_len_) {
+                LOG_ERRNO_RETURN(0, -1, "Internel ERROR, wrong span. span:`,de_pos:`,expected_len_:`", h_->span+0, de_pos, expected_len_);
+            }
+            last_.keep_entry(bits, en_pos, de_pos, left, window);
+        }
+        return 0;
+    }
+private:
+    int add_index_entry(int bits, off_t en_pos, off_t de_pos, unsigned int left,
+            unsigned char *window) {
+        struct IndexEntry* p = new IndexEntry;
+        p->bits = bits;
+        p->en_pos = en_pos;
+        p->de_pos = de_pos;
+        p->win_pos= h_->index_start;
+        unsigned char dict[WINSIZE];
+        if (left) {
+            memcpy(dict, window + WINSIZE - left, left);
+        }
+        if (left < WINSIZE) {
+            memcpy(dict + left, window, WINSIZE - left);
+        }
+
+        int out_len = buf_len_;
+        if (dict_compress(*h_, dict, WINSIZE, buf_, out_len) != 0) {
+            LOG_ERRNO_RETURN(0, -1, "Failed to dict_compress");
+        }
+
+        if (index_file_->pwrite(buf_, out_len, p->win_pos) != out_len) {
+            LOG_ERRNO_RETURN(0, -1, "Failed to index_file->write(...)");
+        }
+
+        p->win_len = out_len;
+        h_->index_start += out_len;
+        index_->push_back(p);
+        return 0;
+    }
+private:
+    int64_t expected_len_ = 0;
+    unsigned char *buf_ = nullptr;
+    int32_t buf_len_ = DEFLATE_BLOCK_UNCOMPRESS_MAX_SIZE; //64KB the max size of deflate block uncompressed data
+    IndexFileHeader* h_ = nullptr;
+    INDEX *index_ = nullptr;
+    photon::fs::IFile* index_file_ = nullptr;
+
+    struct LastEntry {
+        bool valid = false;
+        int bits;
+        off_t en_pos;
+        off_t de_pos;
+        unsigned int left;
+        unsigned char window[WINSIZE];
+        void keep_entry(int bits, off_t en_pos, off_t de_pos, unsigned int left,
+                unsigned char *window) {
+            this->bits = bits;
+            this->en_pos = en_pos;
+            this->de_pos = de_pos;
+            this->left = left;
+            memcpy(this->window, window, WINSIZE);
+            valid = true;
+        };
+    }last_;
+};
+
 static int zlib_compress(int level, unsigned char *in, int in_len, unsigned char *out, int& out_len) {
     z_stream strm;
     memset(&strm, 0, sizeof(strm));
@@ -57,9 +161,12 @@ static int zlib_compress(int level, unsigned char *in, int in_len, unsigned char
 }
 
 static int dict_compress(const IndexFileHeader& h,
-                         unsigned char *dict, int dict_len, unsigned char *&out, int& out_len) {
+        unsigned char *dict, int dict_len, unsigned char *out, int& out_len) {
     if (h.dict_compress_algo == 0) {
-        out = dict;
+        if (out_len < dict_len) {
+            LOG_ERRNO_RETURN(0, -1, "Out buffer size is too small. out_len:`,dict_len:`", out_len, dict_len);
+        }
+        memcpy(out, dict, dict_len);
         out_len = dict_len;
         return 0;
     }
@@ -74,39 +181,8 @@ static int dict_compress(const IndexFileHeader& h,
     return -1;
 }
 
-static int add_index_entry(unsigned char *temp_buf, int32_t temp_buf_len, IndexFileHeader& h, int bits, off_t en_pos, off_t de_pos,
-                           unsigned int left, unsigned char *window, INDEX &index, photon::fs::IFile* index_file) {
-    struct IndexEntry* p = new IndexEntry;
-    p->bits = bits;
-    p->en_pos = en_pos;
-    p->de_pos = de_pos;
-    p->win_pos= h.index_start;
-    unsigned char dict[WINSIZE];
-    if (left) {
-        memcpy(dict, window + WINSIZE - left, left);
-    }
-    if (left < WINSIZE) {
-        memcpy(dict + left, window, WINSIZE - left);
-    }
-
-    if (dict_compress(h, dict, WINSIZE, temp_buf, temp_buf_len) != 0) {
-        LOG_ERRNO_RETURN(0, -1, "Failed to dict_compress");
-    }
-
-    if (index_file->pwrite(temp_buf, temp_buf_len, p->win_pos) != temp_buf_len) {
-        LOG_ERRNO_RETURN(0, -1, "Failed to index_file->write(...)");
-    }
-
-    p->win_len = temp_buf_len;
-    h.index_start += temp_buf_len;
-    index.push_back(p);
-    return 0;
-}
-
 static int build_index(IndexFileHeader& h,photon::fs::IFile *gzfile, INDEX &index, photon::fs::IFile* index_file) {
-    int32_t dict_buf_size = WINSIZE * 2;
-    unsigned char *dict_buf = new unsigned char[dict_buf_size];
-    DEFER(delete []dict_buf);
+    IndexFilterRecorder filter(&h, &index, index_file);
 
     int32_t inbuf_size = WINSIZE;
     unsigned char *inbuf = new unsigned char[inbuf_size];
@@ -124,8 +200,8 @@ static int build_index(IndexFileHeader& h,photon::fs::IFile *gzfile, INDEX &inde
     }
     DEFER(inflateEnd(&strm));
 
-    off_t last, ttin, ttout;
-    ttin = ttout = last = strm.avail_out = 0;
+    off_t ttin, ttout;
+    ttin = ttout = strm.avail_out = 0;
     do {
         ssize_t read_cnt = gzfile->read(inbuf, inbuf_size);
         if (read_cnt < 0) {
@@ -159,11 +235,8 @@ static int build_index(IndexFileHeader& h,photon::fs::IFile *gzfile, INDEX &inde
             //TODO Here generate crc32 for uncompressed data block
 
             if ((strm.data_type & EACH_DEFLATE_BLOCK_BIT) && !(strm.data_type & LAST_DEFLATE_BLOCK_BIT)) {
-                if (ttout == 0 || ttout - last >= h.span) {
-                    if (add_index_entry(dict_buf, dict_buf_size, h, strm.data_type & 7, ttin, ttout, strm.avail_out, window, index, index_file) != 0) {
-                        LOG_ERRNO_RETURN(ret, -1, "Failed to add_index_entry");
-                    }
-                    last = ttout;
+                if (filter.record(strm.data_type & 7, ttin, ttout, strm.avail_out, window) != 0) {
+                    LOG_ERRNO_RETURN(ret, -1, "Failed to add_index_entry");
                 }
             }
         } while (strm.avail_in != 0);
@@ -235,7 +308,7 @@ int create_gz_index(photon::fs::IFile* gzip_file, const char *index_file_path, o
             LOG_ERRNO_RETURN(0, -1, "Invalid dict_compress_level:`, it must be in [-1, 9]", dict_compress_level);
         }
     }
-    if (span < WINSIZE) {
+    if (span < DEFLATE_BLOCK_UNCOMPRESS_MAX_SIZE) {
         LOG_ERRNO_RETURN(0, -1, "Span is too small, must be greater than 100, span:`", span);
     }
 
