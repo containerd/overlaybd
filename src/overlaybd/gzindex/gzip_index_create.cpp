@@ -48,6 +48,24 @@ public:
 
     int record(int bits, off_t en_pos, off_t de_pos, unsigned int left, unsigned char *window) {
         LOG_DEBUG("all de_pos:`", de_pos);
+        if (de_pos < expected_len_) {
+            LOG_DEBUG("last_.keep_entry:`", de_pos);
+            last_.keep_entry(bits, en_pos, de_pos, left, window);
+            return 0;
+        }
+        if (de_pos > expected_len_) {
+            if (last_.valid) {
+                last_.valid = false;
+                LOG_DEBUG("add_index_entry:`", last_.de_pos + 0);
+                if (add_index_entry(last_.bits, last_.en_pos, last_.de_pos, last_.left, last_.window) != 0) {
+                    return -1;
+                }
+            }
+            last_.keep_entry(bits, en_pos, de_pos, left, window);
+            while(expected_len_ < de_pos) {
+                expected_len_ += h_->span;
+            }
+        }
         if (de_pos == expected_len_) {
             last_.valid = false;
             LOG_DEBUG("add_index_entry:`", de_pos);
@@ -55,26 +73,6 @@ public:
                 return -1;
             }
             expected_len_ += h_->span;
-            return 0;
-        }
-        if (de_pos > expected_len_ - DEFLATE_BLOCK_UNCOMPRESS_MAX_SIZE && de_pos < expected_len_) {
-            LOG_DEBUG("last_.keep_entry:`", de_pos);
-            last_.keep_entry(bits, en_pos, de_pos, left, window);
-            return 0;
-        }
-        if (de_pos > expected_len_) {
-            if (!last_.valid) {
-                LOG_ERRNO_RETURN(0, -1, "Internel ERROR, wrong span. span:`,de_pos:`,expected_len_:`", h_->span+0, de_pos, expected_len_);
-            }
-            LOG_DEBUG("add_index_entry:`", last_.de_pos + 0);
-            if (add_index_entry(last_.bits, last_.en_pos, last_.de_pos, last_.left, last_.window) != 0) {
-                return -1;
-            }
-            expected_len_ += h_->span;
-            if (de_pos > expected_len_) {
-                LOG_ERRNO_RETURN(0, -1, "Internel ERROR, wrong span. span:`,de_pos:`,expected_len_:`", h_->span+0, de_pos, expected_len_);
-            }
-            last_.keep_entry(bits, en_pos, de_pos, left, window);
         }
         return 0;
     }
