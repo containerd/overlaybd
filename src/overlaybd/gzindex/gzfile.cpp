@@ -348,6 +348,9 @@ ssize_t GzFile::pread(void *buf, size_t count, off_t offset) {
             LOG_ERRNO_RETURN(0, -1, "Fail init()", offset);
         }
     }
+    if (offset < 0) {
+        LOG_ERRNO_RETURN(EINVAL, -1, "invalid offset: ` < 0", offset);
+    }
 
     struct IndexEntry * p = seek_index(index_, offset);
     if (p == nullptr) {

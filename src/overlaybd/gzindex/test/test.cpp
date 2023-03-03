@@ -82,7 +82,7 @@ protected:
         DEFER(delete []buf1);
         DEFER(delete []buf2);
         ssize_t ret1 = defile->pread(buf1, t.count, t.offset);
-        ssize_t ret2 = defile->pread(buf2, t.count, t.offset);
+        ssize_t ret2 = gzfile->pread(buf2, t.count, t.offset);
         EXPECT_EQ(ret1, t.ret);
         EXPECT_EQ(ret2, t.ret);
         if (t.ret > 0) {
