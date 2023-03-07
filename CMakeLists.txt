@@ -7,6 +7,12 @@ project(
 )
 enable_language(C)
 
+# Get CPU arch
+execute_process(COMMAND uname -m OUTPUT_VARIABLE ARCH OUTPUT_STRIP_TRAILING_WHITESPACE)
+if (NOT (${ARCH} STREQUAL x86_64) AND NOT (${ARCH} STREQUAL aarch64) AND NOT (${ARCH} STREQUAL arm64))
+    message(FATAL_ERROR "Unknown CPU architecture ${ARCH}")
+endif ()
+
 set(LIBRARY_OUTPUT_PATH "${CMAKE_SOURCE_DIR}/build/output")
 set(EXECUTABLE_OUTPUT_PATH "${CMAKE_SOURCE_DIR}/build/output")
 
