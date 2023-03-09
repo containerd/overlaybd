@@ -410,11 +410,12 @@ int ImageService::init() {
                 LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed", cache_dir.c_str());
             }
 
-            auto io_alloc = new IOAlloc;
-            global_fs.io_alloc = io_alloc;
+            if (global_fs.io_alloc == nullptr) {
+                global_fs.io_alloc = new IOAlloc;
+            }
             global_fs.gzcache_fs = Cache::new_gzip_cached_fs(
                 gzip_cache_fs, refill_size, cache_size_GB,
-                10000000, (uint64_t)1048576 * 4096, io_alloc);
+                10000000, (uint64_t)1048576 * 4096, global_fs.io_alloc);
         }
 
         if (global_fs.remote_fs == nullptr) {

@@ -13,9 +13,8 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
-#include "../cache.h"
+#include <photon/common/io-alloc.h>
 #include <photon/fs/filesystem.h>
-#include <photon/fs/forwardfs.h>
 namespace Cache {
 
 class GzipCachedFs {

@@ -14,12 +14,8 @@
    limitations under the License.
 */
 #include "cached_fs.h"
-#include "../cache.h"
 #include "../full_file_cache/cache_pool.h"
 #include "../frontend/cached_file.h"
-#include <photon/fs/filesystem.h>
-#include <photon/fs/forwardfs.h>
-#include <photon/common/io-alloc.h>
 
 namespace Cache {
 
