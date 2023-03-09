@@ -287,6 +287,10 @@ int ImageFile::open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer,
             LOG_ERROR_RETURN(0, -1, "open(`),`:`", layer.gzipIndex(), errno, strerror(errno));
         }
         target_file = new_gzfile(target_file, gz_index, true);
+        if (image_service.global_conf.gzipCacheConfig().enable()) {
+            target_file = image_service.global_fs.gzcache_fs->
+                          open_cached_gzip_file(target_file, layer.targetDigest().c_str());
+        }
     }
     if (target_file != nullptr) {
         file = LSMT::open_warpfile_ro(file, target_file, true);

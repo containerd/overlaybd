@@ -72,6 +72,15 @@ struct P2PConfig : public ConfigUtils::Config {
     APPCFG_PARA(address, std::string, "http://localhost:9731/accelerator");
 };
 
+struct GzipCacheConfig : public ConfigUtils::Config {
+    APPCFG_CLASS
+
+    APPCFG_PARA(enable, bool, false);
+    APPCFG_PARA(cacheDir, std::string, "/opt/overlaybd/gzip_cache");
+    APPCFG_PARA(cacheSizeGB, uint32_t, 4);
+    APPCFG_PARA(refillSize, uint32_t, 1024 * 1024);
+};
+
 struct ExporterConfig : public ConfigUtils::Config {
     APPCFG_CLASS
 
@@ -116,6 +125,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(auditPath, std::string, "/var/log/overlaybd-audit.log");
     APPCFG_PARA(registryFsVersion, std::string, "v1");
     APPCFG_PARA(cacheConfig, CacheConfig);
+    APPCFG_PARA(gzipCacheConfig, GzipCacheConfig);
 };
 
 struct AuthConfig : public ConfigUtils::Config {
