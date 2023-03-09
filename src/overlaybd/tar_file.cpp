@@ -34,6 +34,7 @@
 using namespace std;
 using namespace photon::fs;
 
+#define NO_TIMESTAMP 1
 
 /* Contents of magic field and its length.  */
 #define TMAGIC "ustar"
@@ -213,13 +214,19 @@ public:
     }
 
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
-        offset += base_offset;
-        return m_file->pread(buf, count, offset);
+        return m_file->pread(buf, count, offset + base_offset);
     }
 
     virtual ssize_t preadv(const struct iovec *iov, int iovcnt, off_t offset) override {
-        offset += base_offset;
-        return m_file->preadv(iov, iovcnt, offset);
+        return m_file->preadv(iov, iovcnt, offset + base_offset);
+    }
+
+    virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+        return m_file->pwrite(buf, count, offset + base_offset);
+    }
+
+    virtual ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override {
+        return m_file->pwritev(iov, iovcnt, offset + base_offset);
     }
 
     virtual int close() override {
@@ -261,7 +268,11 @@ private:
         // th_set_mode
         int_to_oct(s.st_mode, th_buf.mode, 8);
         // th_set_mtime
+#ifndef NO_TIMESTAMP
         int_to_oct_nonull(s.st_mtime, th_buf.mtime, 12);
+#else
+        int_to_oct_nonull(0, th_buf.mtime, 12);
+#endif
         // th_set_size
         int_to_oct_nonull(s.st_size - TAR_HEADER_SIZE, th_buf.size, 12);
         // th_set_path
@@ -323,6 +334,7 @@ public:
 
 private:
     bool mark_new_tar(IFile *file) {
+        LOG_INFO("new tar header");
         struct tar_header th_buf;
         memset(&(th_buf), 0, sizeof(struct tar_header));
         snprintf(th_buf.name, 100, "%s", "overlaybd.new");

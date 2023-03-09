@@ -1,9 +1,15 @@
 include(FetchContent)
 set(FETCHCONTENT_QUIET false)
 
+if (${ARCH} STREQUAL x86_64)
+    set(LIB_EXT2FS_URL "https://github.com/data-accelerator/e2fsprogs/releases/download/latest/libext2fs.tar.gz")
+elseif (${ARCH} STREQUAL aarch64)
+    set(LIB_EXT2FS_URL "https://github.com/data-accelerator/e2fsprogs/releases/download/latest/libext2fs.aarch64.tar.gz")
+endif ()
+
 FetchContent_Declare(
   ext2fs
-  URL https://github.com/data-accelerator/e2fsprogs/releases/download/latest/libext2fs.tar.gz
+  URL ${LIB_EXT2FS_URL}
 )
 
 FetchContent_GetProperties(ext2fs)

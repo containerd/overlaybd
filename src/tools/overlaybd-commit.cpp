@@ -20,6 +20,7 @@
 #include <photon/photon.h>
 #include "../overlaybd/lsmt/file.h"
 #include "../overlaybd/zfile/zfile.h"
+#include "../overlaybd/tar_file.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -37,8 +38,8 @@ using namespace LSMT;
 using namespace photon::fs;
 
 
-IFile *open_file(const char *fn, int flags, mode_t mode = 0) {
-    auto file = open_localfile_adaptor(fn, flags, mode, 0);
+IFile *open_file(IFileSystem *fs, const char *fn, int flags, mode_t mode = 0) {
+    auto file = fs->open(fn, flags, mode);
     if (!file) {
         fprintf(stderr, "failed to open file '%s', %d: %s\n", fn, errno, strerror(errno));
         exit(-1);
@@ -54,11 +55,14 @@ int main(int argc, char **argv) {
     std::string data_file_path, index_file_path, commit_file_path, remote_mapping_file;
     bool compress_zfile = false;
     bool build_fastoci = false;
+    bool tar = false, rm_old = false;
 
     CLI::App app{"this is overlaybd-commit"};
     app.add_option("-m", commit_msg, "add some custom message if needed");
     app.add_option("-p", parent_uuid, "parent uuid");
     app.add_flag("-z", compress_zfile, "compress to zfile");
+    app.add_flag("-t", tar, "wrapper with tar");
+    app.add_flag("-f", rm_old, "force compress. unlink exist");
     app.add_option("--algorithm", algorithm, "compress algorithm, [lz4|zstd](default lz4)");
     app.add_option(
            "--bs", block_size,
@@ -72,9 +76,9 @@ int main(int argc, char **argv) {
     set_log_output_level(1);
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
 
-
-    IFile* fdata = open_file(data_file_path.c_str(), O_RDONLY, 0);
-    IFile* findex = open_file(index_file_path.c_str(), O_RDONLY, 0);
+    IFileSystem *lfs = new_localfs_adaptor();
+    IFile* fdata = open_file(lfs, data_file_path.c_str(), O_RDONLY, 0);
+    IFile* findex = open_file(lfs, index_file_path.c_str(), O_RDONLY, 0);
     IFileRW* fin = nullptr;
     if (build_fastoci) {
         LOG_INFO("commit LSMTWarpFile with args: {index_file: `, fsmeta: `",
@@ -83,9 +87,11 @@ int main(int argc, char **argv) {
     } else {
         fin = open_file_rw(fdata, findex, true);
     }
-    IFile* fout = open_file(commit_file_path.c_str(),  O_RDWR | O_EXCL | O_CREAT,
-                    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-    auto out = fout;
+    if (rm_old) {
+        lfs->unlink(commit_file_path.c_str());
+    }
+    IFile *fout = nullptr;
+    IFile *out = nullptr;
     IFile *zfile_builder = nullptr;
     ZFile::CompressOptions opt;
     opt.verify = 1;
@@ -109,13 +115,22 @@ int main(int argc, char **argv) {
             fprintf(stderr, "invalid '--bs' parameters.\n");
             exit(-1);
         }
+        IFileSystem *fs = lfs;
+        if (tar) {
+            fs = new_tar_fs_adaptor(fs);
+        }
+        fout = open_file(fs, commit_file_path.c_str(), O_RDWR | O_EXCL | O_CREAT,
+                    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
         ZFile::CompressArgs zfile_args(opt);
-        zfile_builder = ZFile::new_zfile_builder(out, &zfile_args, false);
+        zfile_builder = ZFile::new_zfile_builder(fout, &zfile_args, false);
         out = zfile_builder;
     } else {
         if (algorithm != "" || block_size != 0) {
             fprintf(stderr, "WARNING option '--bs' and '--algorithm' will be ignored without '-z'\n");
         }
+        fout = open_file(lfs, commit_file_path.c_str(),  O_RDWR | O_EXCL | O_CREAT,
+                    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+        out = fout;
     }
 
     CommitArgs args(out);

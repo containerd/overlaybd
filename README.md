@@ -131,19 +131,19 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
         "cacheSizeGB": 4
     },
     "credentialConfig": {
-      "mode": "file",
-      "path": "/opt/overlaybd/cred.json"
+        "mode": "file",
+        "path": "/opt/overlaybd/cred.json"
     },
     "ioEngine": 0,
     "download": {
         "enable": true,
-        "delay": 120,
+        "delay": 600,
         "delayExtra": 30,
         "maxMBps": 100
     },
     "p2pConfig": {
         "enable": false,
-        "address": "http://localhost:9731/accelerator"
+        "address": "localhost:9731/accelerator"
     },
     "exporterConfig": {
         "enable": false,
