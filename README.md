@@ -120,8 +120,16 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 {
     "logLevel": 1,
     "logPath": "/var/log/overlaybd.log",
-    "registryCacheDir": "/opt/overlaybd/registry_cache",
-    "registryCacheSizeGB": 1,
+    "cacheConfig": {
+        "cacheType": "file",
+        "cacheDir": "/opt/overlaybd/registry_cache",
+        "cacheSizeGB": 4
+    },
+    "gzipCacheConfig": {
+        "enable": true,
+        "cacheDir": "/opt/overlaybd/gzip_cache",
+        "cacheSizeGB": 4
+    },
     "credentialConfig": {
       "mode": "file",
       "path": "/opt/overlaybd/cred.json"
@@ -157,6 +165,12 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | cacheConfig.cacheDir    | The cache directory for remote image data.                                                        |
 | cacheConfig.cacheSizeGB | The max size of cache, in GB.                                                                     |
 | cacheConfig.refillSize  | The refill size from source, in byte. `262144` is default (256 KB).                               |
+
+| gzipCacheConfig.enable      | Whether decompressed gzip file cache is enabled or not.                                       |
+| gzipCacheConfig.cacheDir    | The cache directory for decompressed gzip data.                                               |
+| gzipCacheConfig.cacheSizeGB | The max size of cache, in GB.                                                                 |
+| gzipCacheConfig.refillSize  | The refill size from source, in byte. `262144` is default (256 KB).                           |
+
 | credentialFilePath(legacy)  | The credential used for fetching images on registry. `/opt/overlaybd/cred.json` is the default value. |
 | credentialConfig.mode | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` |
 | credentialConfig.path | credential file path or url which is determined by `mode` |

@@ -19,6 +19,7 @@
 #include <string>
 #include "config.h"
 #include "exporter_server.h"
+#include "overlaybd/cache/gzip_cache/cached_fs.h"
 #include <photon/fs/filesystem.h>
 #include <photon/common/io-alloc.h>
 
@@ -28,6 +29,7 @@ using namespace photon::fs;
 struct GlobalFs {
     IFileSystem *remote_fs = nullptr;
     IFileSystem *srcfs = nullptr;
+    Cache::GzipCachedFs *gzcache_fs = nullptr;
 
     // ocf cache only
     IFile *media_file = nullptr;

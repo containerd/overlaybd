@@ -5,6 +5,11 @@
         "cacheDir": "/opt/overlaybd/registry_cache",
         "cacheSizeGB": 4
     },
+    "gzipCacheConfig": {
+        "enable": true,
+        "cacheDir": "/opt/overlaybd/gzip_cache",
+        "cacheSizeGB": 4
+    },
     "credentialConfig": {
         "mode": "file",
         "path": "/opt/overlaybd/cred.json"

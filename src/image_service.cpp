@@ -352,10 +352,12 @@ int ImageService::init() {
                 delete global_fs.srcfs;
                 LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed", cache_dir.c_str());
             }
+            auto io_alloc = new IOAlloc;
+            global_fs.io_alloc = io_alloc;
             // file cache will delete its src_fs automatically when destructed
             global_fs.remote_fs = FileSystem::new_full_file_cached_fs(
                 global_fs.srcfs, registry_cache_fs, refill_size, cache_size_GB, 10000000,
-                (uint64_t)1048576 * 4096, nullptr, cache_fn_trans_sha256);
+                (uint64_t)1048576 * 4096, io_alloc, cache_fn_trans_sha256);
 
         } else if (cache_type == "ocf") {
             auto namespace_dir = std::string(cache_dir + "/namespace");
@@ -394,6 +396,27 @@ int ImageService::init() {
             global_fs.remote_fs = FileSystem::new_download_cached_fs(global_fs.srcfs, 4096, refill_size, io_alloc);
         }
 
+        if (global_conf.gzipCacheConfig().enable()) {
+            LOG_INFO("use gzip file cache");
+            cache_dir = global_conf.gzipCacheConfig().cacheDir();
+            cache_size_GB = global_conf.gzipCacheConfig().cacheSizeGB();
+            refill_size = global_conf.gzipCacheConfig().refillSize();
+            if (!create_dir(cache_dir.c_str())) {
+                return -1;
+            }
+            auto gzip_cache_fs = new_localfs_adaptor(cache_dir.c_str());
+            if (gzip_cache_fs == nullptr) {
+                delete global_fs.srcfs;
+                LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed", cache_dir.c_str());
+            }
+
+            auto io_alloc = new IOAlloc;
+            global_fs.io_alloc = io_alloc;
+            global_fs.gzcache_fs = Cache::new_gzip_cached_fs(
+                gzip_cache_fs, refill_size, cache_size_GB,
+                10000000, (uint64_t)1048576 * 4096, io_alloc);
+        }
+
         if (global_fs.remote_fs == nullptr) {
             LOG_ERROR_RETURN(0, -1, "create remotefs (registryfs + cache) failed.");
         }
@@ -415,12 +438,12 @@ ImageFile *ImageService::create_image_file(const char *config_path) {
         defaultDlCfg.HasMember("download")) {
         cfg.AddMember("download", defaultDlCfg["download"], cfg.GetAllocator());
     }
-    std::string accelerate_url = "";
+
     if (global_conf.p2pConfig().enable() &&
         check_accelerate_url(global_conf.p2pConfig().address())) {
-        accelerate_url = global_conf.p2pConfig().address();
+        std::string accelerate_url = global_conf.p2pConfig().address();
+        ((RegistryFS*)(global_fs.remote_fs))->setAccelerateAddress(accelerate_url.c_str());
     }
-    ((RegistryFS*)(global_fs.remote_fs))->setAccelerateAddress(accelerate_url.c_str());
 
     auto resFile = cfg.resultFile();
     ImageFile *ret = new ImageFile(cfg, *this);

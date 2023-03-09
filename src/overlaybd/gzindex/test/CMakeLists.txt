@@ -6,7 +6,7 @@ link_directories($ENV{GTEST}/lib)
 
 add_executable(gzindex_test test.cpp)
 target_include_directories(gzindex_test PUBLIC ${PHOTON_INCLUDE_DIR})
-target_link_libraries(gzindex_test gtest gtest_main gflags pthread photon_static gzindex_lib)
+target_link_libraries(gzindex_test gtest gtest_main gflags pthread photon_static gzindex_lib cache_lib)
 
 add_test(
     NAME gzindex_test
