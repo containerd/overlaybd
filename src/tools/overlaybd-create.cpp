@@ -49,7 +49,7 @@ int main(int argc, char **argv) {
     string parent_uuid;
     bool sparse = false;
     std::string data_file_path, index_file_path, warp_index_path;
-    bool build_fastoci;
+    bool build_fastoci = false;
 
     CLI::App app{"this is overlaybd-create"};
     app.add_option("-u", parent_uuid, "parent uuid");
