@@ -49,15 +49,15 @@ int main(int argc, char **argv) {
     string parent_uuid;
     bool sparse = false;
     std::string data_file_path, index_file_path, warp_index_path;
-    bool build_fastoci;
+    bool build_fastoci = false;
 
     CLI::App app{"this is overlaybd-create"};
     app.add_option("-u", parent_uuid, "parent uuid");
-    app.add_flag("-s", sparse, "create sparse RW layer");
+    app.add_flag("-s", sparse, "create sparse RW layer")->default_val(false);
+    app.add_flag("--fastoci", build_fastoci, "commit using fastoci format")->default_val(false);
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->required();
     app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->required();
     app.add_option("vsize", vsize, "virtual size(GB)")->type_name("INT")->check(CLI::PositiveNumber)->required();
-    app.add_flag("--fastoci", build_fastoci, "commit using fastoci format");
     CLI11_PARSE(app, argc, argv);
 
 

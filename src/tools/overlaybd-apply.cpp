@@ -57,8 +57,8 @@ int main(int argc, char **argv) {
     bool raw = false, verbose = false;
 
     CLI::App app{"this is overlaybd-apply, apply OCIv1 tar layer to overlaybd format"};
-    app.add_flag("--raw", raw, "apply to raw image");
-    app.add_flag("--verbose", verbose, "output debug info");
+    app.add_flag("--raw", raw, "apply to raw image")->default_val(false);
+    app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     app.add_option("--service_config_path", config_path, "overlaybd image service config path")->type_name("FILEPATH")->check(CLI::ExistingFile);
     app.add_option("--gz_index_path", gz_index_path, "build gzip index if layer is gzip, only used with fastoci")->type_name("FILEPATH");
     app.add_option("input_path", input_path, "input OCIv1 tar layer path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
