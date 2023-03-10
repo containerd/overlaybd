@@ -48,9 +48,9 @@ int main(int argc, char **argv) {
     int block_size;
 
     CLI::App app{"this is a zfile tool to create/extract zfile"};
-    app.add_flag("-t", tar, "wrapper with tar");
-    app.add_flag("-x", extract, "extract zfile");
-    app.add_flag("-f", rm_old, "force compress. unlink exist");
+    app.add_flag("-t", tar, "wrapper with tar")->default_val(false);
+    app.add_flag("-x", extract, "extract zfile")->default_val(false);
+    app.add_flag("-f", rm_old, "force compress. unlink exist")->default_val(false);
     app.add_option("--algorithm", algorithm, "compress algorithm, [lz4|zstd]")->default_str("lz4");
     app.add_option(
            "--bs", block_size,

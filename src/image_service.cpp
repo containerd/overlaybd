@@ -346,18 +346,19 @@ int ImageService::init() {
         if (global_conf.enableThread() == true && cache_type == "file") {
             LOG_ERROR_RETURN(0, -1, "multi-thread has not been valid for file cache");
         }
+
+        global_fs.io_alloc = new IOAlloc;
+
         if (cache_type == "file") {
             auto registry_cache_fs = new_localfs_adaptor(cache_dir.c_str());
             if (registry_cache_fs == nullptr) {
                 delete global_fs.srcfs;
                 LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed", cache_dir.c_str());
             }
-            auto io_alloc = new IOAlloc;
-            global_fs.io_alloc = io_alloc;
             // file cache will delete its src_fs automatically when destructed
             global_fs.remote_fs = FileSystem::new_full_file_cached_fs(
                 global_fs.srcfs, registry_cache_fs, refill_size, cache_size_GB, 10000000,
-                (uint64_t)1048576 * 4096, io_alloc, cache_fn_trans_sha256);
+                (uint64_t)1048576 * 4096, global_fs.io_alloc, cache_fn_trans_sha256);
 
         } else if (cache_type == "ocf") {
             auto namespace_dir = std::string(cache_dir + "/namespace");
@@ -369,9 +370,6 @@ int ImageService::init() {
                 LOG_ERROR_RETURN(0, -1, "failed tp create namespace_fs");
             }
             global_fs.namespace_fs = namespace_fs;
-
-            auto io_alloc = new IOAlloc;
-            global_fs.io_alloc = io_alloc;
 
             bool reload_media;
             IFile* media_file;
@@ -389,11 +387,9 @@ int ImageService::init() {
             global_fs.media_file = media_file;
 
             global_fs.remote_fs = FileSystem::new_ocf_cached_fs(global_fs.srcfs, namespace_fs, block_size, refill_size,
-                                                                media_file, reload_media, io_alloc);
+                                                                media_file, reload_media, global_fs.io_alloc);
         } else if (cache_type == "download") {
-            auto io_alloc = new IOAlloc;
-            global_fs.io_alloc = io_alloc;
-            global_fs.remote_fs = FileSystem::new_download_cached_fs(global_fs.srcfs, 4096, refill_size, io_alloc);
+            global_fs.remote_fs = FileSystem::new_download_cached_fs(global_fs.srcfs, 4096, refill_size, global_fs.io_alloc);
         }
 
         if (global_conf.gzipCacheConfig().enable()) {
@@ -410,9 +406,6 @@ int ImageService::init() {
                 LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed", cache_dir.c_str());
             }
 
-            if (global_fs.io_alloc == nullptr) {
-                global_fs.io_alloc = new IOAlloc;
-            }
             global_fs.gzcache_fs = Cache::new_gzip_cached_fs(
                 gzip_cache_fs, refill_size, cache_size_GB,
                 10000000, (uint64_t)1048576 * 4096, global_fs.io_alloc);
