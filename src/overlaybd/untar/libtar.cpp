@@ -387,7 +387,7 @@ int Tar::extract_regfile_meta_only(const char *filename) {
 
     auto p = file->lseek(0, SEEK_CUR);
     fout->fallocate(0, 0, size);
-    struct photon::fs::fiemap_t<512> fie(0, size);
+    struct photon::fs::fiemap_t<8192> fie(0, size);
     fout->fiemap(&fie);
     for (int i = 0; i < fie.fm_mapped_extents; i++) {
         LSMT::RemoteMapping lba;
