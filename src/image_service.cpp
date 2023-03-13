@@ -140,7 +140,7 @@ int load_cred_from_file(const std::string path, const std::string &remote_path,
 }
 
 int load_cred_from_http(const std::string addr /* http server */, const std::string &remote_path,
-                        std::string &username, std::string &password) {
+                        std::string &username, std::string &password, int timeout) {
 
     auto request = new photon::net::cURL();
     DEFER({ delete request; });
@@ -148,7 +148,7 @@ int load_cred_from_http(const std::string addr /* http server */, const std::str
     auto request_url = addr + "?remote_url=" + remote_path;
     LOG_INFO("request url: `", request_url);
     photon::net::StringWriter writer;
-    auto ret = request->GET(request_url.c_str(), &writer, 1UL * 1000000);
+    auto ret = request->GET(request_url.c_str(), &writer, (int64_t)timeout * 1000000);
     if (ret != 200) {
         LOG_ERRNO_RETURN(0, -1, "connect to auth component failed. http response code: `", ret);
     }
@@ -223,7 +223,8 @@ ImageService::reload_auth(const char *remote_path) {
         if (mode == "file") {
             res = load_cred_from_file(path, std::string(remote_path), username, password);
         } else if (mode == "http") {
-            res = load_cred_from_http(path, std::string(remote_path), username, password);
+            auto timeout = global_conf.credentialConfig().timeout();
+            res = load_cred_from_http(path, std::string(remote_path), username, password, timeout);
         } else {
             LOG_ERROR("invalid mode for authentication.");
             return std::make_pair("","");
