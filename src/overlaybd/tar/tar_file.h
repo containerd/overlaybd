@@ -15,13 +15,7 @@
 */
 
 #pragma once
-
-namespace photon{
-    namespace fs {
-        class IFile;
-        class IFileSystem;
-    };
-};
+#include <photon/fs/filesystem.h>
 
 // tarfile and tarfs are not complete implementation of tar.
 // only for overlaybd remote blob, which stores one blob file with tar header and trailer.
@@ -31,4 +25,3 @@ photon::fs::IFileSystem *new_tar_fs_adaptor(photon::fs::IFileSystem *fs);
 
 int is_tar_file(photon::fs::IFile *file);
 photon::fs::IFile *new_tar_file_adaptor(photon::fs::IFile *file);
-

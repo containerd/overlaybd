@@ -21,7 +21,7 @@
 #include <photon/thread/thread.h>
 #include <photon/fs/filesystem.h>
 #include <photon/fs/localfs.h>
-#include "overlaybd/tar_file.h"
+#include "overlaybd/tar/tar_file.h"
 #include "overlaybd/zfile/zfile.h"
 
 using namespace std;

@@ -20,7 +20,7 @@
 #include <photon/photon.h>
 #include "../overlaybd/lsmt/file.h"
 #include "../overlaybd/zfile/zfile.h"
-#include "../overlaybd/untar/libtar.h"
+#include "../overlaybd/tar/libtar.h"
 #include "../overlaybd/extfs/extfs.h"
 #include "../overlaybd/gzindex/gzfile.h"
 #include "../overlaybd/gzip/gz.h"
@@ -117,7 +117,7 @@ int main(int argc, char **argv) {
     }
 
     photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
-    auto tar = new Tar(src_file, target, 0, 4096, base_file, gz_index_path != "");
+    auto tar = new UnTar(src_file, target, 0, 4096, base_file, gz_index_path != "");
     if (tar->extract_all() < 0) {
         fprintf(stderr, "failed to extract\n");
         exit(-1);

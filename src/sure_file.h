@@ -14,12 +14,8 @@
    limitations under the License.
 */
 #pragma once
+#include <photon/fs/filesystem.h>
 
-namespace photon {
-    namespace fs {
-        class IFile;
-    }
-}
 class ImageFile;
 
 IFile *new_sure_file(IFile *src_file, ImageFile *image_file,
