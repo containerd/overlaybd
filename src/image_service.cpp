@@ -27,7 +27,6 @@
 #include <photon/thread/thread.h>
 #include "overlaybd/cache/cache.h"
 #include "overlaybd/registryfs/registryfs.h"
-#include "overlaybd/tar_file.h"
 #include "overlaybd/zfile/zfile.h"
 #include "overlaybd/base64.h"
 #include <errno.h>

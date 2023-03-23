@@ -28,7 +28,6 @@
 #include <fcntl.h>
 #include "../zfile.cpp"
 #include "../compressor.cpp"
-#include "../../tar_file.cpp"
 #include <memory>
 
 #include <optional>
@@ -212,19 +211,6 @@ TEST_F(ZFileTest, dsa) {
     }
 
     ASSERT_EQ(ret, 0);
-}
-
-TEST_F(ZFileTest, tar_header_check) {
-    set_log_output_level(0);
-    auto fn = "/tmp/data";
-    auto file = open_localfile_adaptor(fn, O_RDONLY, 0600);
-    if (file == nullptr)
-        return;
-    DEFER(delete file);
-    auto tar_file = open_tar_file(file);
-    struct stat st;
-    tar_file->fstat(&st);
-    LOG_INFO("size: `", st.st_size);
 }
 
 int main(int argc, char **argv) {

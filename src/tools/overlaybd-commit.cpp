@@ -20,7 +20,7 @@
 #include <photon/photon.h>
 #include "../overlaybd/lsmt/file.h"
 #include "../overlaybd/zfile/zfile.h"
-#include "../overlaybd/tar_file.h"
+#include "../overlaybd/tar/tar_file.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>

@@ -83,7 +83,7 @@ std::string remove_last_slash(const std::string_view &path) {
         return std::string(path);
 }
 
-char *Tar::get_pathname() {
+char *TarCore::get_pathname() {
     if (pax && pax->path)
         return clean_name(pax->path);
     if (header.gnu_longname)
@@ -114,7 +114,7 @@ char *Tar::get_pathname() {
     return clean_name(th_pathname);
 }
 
-char *Tar::get_linkname() {
+char *TarCore::get_linkname() {
     if (pax && pax->linkpath)
         return clean_name(pax->linkpath);
     if (header.gnu_longlink)
@@ -130,12 +130,198 @@ char *Tar::get_linkname() {
     return clean_name(th_linkname);
 }
 
-size_t Tar::get_size() {
+size_t TarCore::get_size() {
     if (pax && pax->size > 0) {
         return pax->size;
     } else {
         return header.get_size();
     }
+}
+
+#define BIT_ISSET(bitmask, bit) ((bitmask) & (bit))
+static const char ZERO_BLOCK[T_BLOCKSIZE] = {0};
+
+int TarCore::read_header_internal() {
+    int i;
+    int num_zero_blocks = 0;
+
+    while ((i = file->read(&header, T_BLOCKSIZE)) == T_BLOCKSIZE) {
+        /* two all-zero blocks mark EOF */
+        if (header.name[0] == '\0' && std::memcmp(&header, ZERO_BLOCK, T_BLOCKSIZE) == 0) {
+            num_zero_blocks++;
+            if (!BIT_ISSET(options, TAR_IGNORE_EOT) && num_zero_blocks >= 2)
+                return 0; /* EOF */
+            else
+                continue;
+        }
+
+        /* verify magic and version */
+        if (BIT_ISSET(options, TAR_CHECK_MAGIC) &&
+            strncmp(header.magic, TMAGIC, TMAGLEN - 1) != 0) {
+            LOG_ERROR("failed check magic");
+            return -2;
+        }
+
+        if (BIT_ISSET(options, TAR_CHECK_VERSION) &&
+            strncmp(header.version, TVERSION, TVERSLEN) != 0) {
+            LOG_ERROR("failed check version");
+            return -2;
+        }
+
+        /* check chksum */
+        if (!BIT_ISSET(options, TAR_IGNORE_CRC) && !header.crc_ok()) {
+            LOG_ERROR("failed check crc");
+            return -2;
+        }
+
+        break;
+    }
+
+    return i;
+}
+
+int TarCore::read_sepcial_file(char *&buf) {
+    size_t j, blocks;
+    char *ptr;
+    size_t sz = header.get_size();
+    blocks = (sz / T_BLOCKSIZE) + (sz % T_BLOCKSIZE ? 1 : 0);
+    if (blocks > ((size_t)-1 / T_BLOCKSIZE)) {
+        errno = E2BIG;
+        return -1;
+    }
+    buf = (char *)malloc(blocks * T_BLOCKSIZE);
+    if (buf == nullptr)
+        return -1;
+
+    for (j = 0, ptr = buf; j < blocks; j++, ptr += T_BLOCKSIZE) {
+        auto i = file->read(ptr, T_BLOCKSIZE);
+        if (i != T_BLOCKSIZE) {
+            if (i != -1)
+                errno = EINVAL;
+            return -1;
+        }
+    }
+
+    return sz;
+}
+
+int TarCore::read_header() {
+
+    if (header.gnu_longname != nullptr)
+        free(header.gnu_longname);
+    if (header.gnu_longlink != nullptr)
+        free(header.gnu_longlink);
+    memset(&(header), 0, sizeof(TarHeader));
+    if (pax != nullptr) {
+        delete pax;
+        pax = nullptr;
+    }
+
+    int i = read_header_internal();
+    if (i == 0)
+        return 1;
+    else if (i != T_BLOCKSIZE) {
+        if (i != -1)
+            errno = EINVAL;
+        return -1;
+    }
+
+    while (header.typeflag == GNU_LONGLINK_TYPE ||
+           header.typeflag == GNU_LONGNAME_TYPE ||
+           header.typeflag == PAX_HEADER ||
+           header.typeflag == PAX_GLOBAL_HEADER) {
+        size_t sz;
+        switch (header.typeflag) {
+        /* check for GNU long link extention */
+        case GNU_LONGLINK_TYPE:
+            sz = read_sepcial_file(header.gnu_longlink);
+            LOG_DEBUG("found gnu longlink ", VALUE(sz));
+            if (sz < 0) return -1;
+            break;
+        /* check for GNU long name extention */
+        case GNU_LONGNAME_TYPE:
+            sz = read_sepcial_file(header.gnu_longname);
+            LOG_DEBUG("found gnu longname ", VALUE(sz));
+            if (sz < 0) return -1;
+            break;
+        /* check for Pax Format Header */
+        case PAX_HEADER:
+            if (pax == nullptr)
+                pax = new PaxHeader();
+            sz = read_sepcial_file(pax->pax_buf);
+            LOG_DEBUG("found pax header ", VALUE(sz));
+            if (sz < 0) return -1;
+            i = pax->read_pax(sz);
+            if (i) {
+                errno = EINVAL;
+                return -1;
+            }
+            break;
+        /* check for Pax Global Header */
+        case PAX_GLOBAL_HEADER:
+            if (pax == nullptr)
+                pax = new PaxHeader();
+            sz = read_sepcial_file(pax->pax_buf);
+            LOG_WARN("found and ignored pax global header ", VALUE(sz));
+            break;
+        }
+
+        i = read_header_internal();
+        if (i != T_BLOCKSIZE) {
+            if (i != -1)
+                errno = EINVAL;
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/*
+    Each line consists of a decimal number, a space, a key string, an equals sign, a
+value string, and a new line.  The decimal number indicates the length of the entire
+line, including the initial length field and the trailing newline.
+An example of such a field is:
+    25 ctime=1084839148.1212\n
+*/
+int PaxHeader::read_pax(size_t size) {
+    char *start = pax_buf;
+    char *end = pax_buf + size;
+    while (start < end) {
+        char *p = start;
+        long len = strtol(p, &p, 0);
+        if (len < 5 || len >= LONG_MAX)
+            return -1;
+        size_t sz = len - (++p - start) - 1;
+        if (sz <= 0)
+            return -1;
+        std::string record(p, sz);
+        auto pos = record.find('=');
+        if (pos == std::string::npos)
+            return -1;
+        std::string key = record.substr(0, pos);
+        std::string value = record.substr(pos + 1);
+        LOG_DEBUG(VALUE(key.c_str()), VALUE(value.c_str()));
+        records[key] = value;
+        start += len;
+    }
+
+    return parse_pax_records();
+}
+
+int PaxHeader::parse_pax_records() {
+    // TODO: support more pax type
+    for (auto rec : records) {
+        LOG_DEBUG("`->`", rec.first.c_str(), rec.second.c_str());
+        if (rec.first == PAX_SIZE) {
+            size = std::stol(rec.second);
+        } else if (rec.first == PAX_PATH) {
+            path = strdup(rec.second.data());
+        } else if (rec.first == PAX_LINKPATH) {
+            linkpath = strdup(rec.second.data());
+        }
+    }
+    return 0;
 }
 
 mode_t TarHeader::get_mode() {

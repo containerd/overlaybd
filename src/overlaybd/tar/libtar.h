@@ -140,30 +140,15 @@ private:
     int parse_pax_records();
 };
 
-class Tar {
+class TarCore {
 public:
-    photon::fs::IFileSystem *fs = nullptr; // target
-    photon::fs::IFile *file = nullptr;     // source
-    photon::fs::IFile *fs_base_file = nullptr;
-    bool meta_only;
-    int options;
-    uint64_t fs_blocksize;
-    uint64_t fs_blockmask;
     TarHeader header;
-    char *th_pathname = nullptr;
-    char *th_linkname = nullptr;
-    std::set<std::string> unpackedPaths;
-    std::list<std::pair<std::string, int>> dirs; // <path, utime>
-    PaxHeader *pax = nullptr;
 
-    Tar(photon::fs::IFile *file, photon::fs::IFileSystem *fs, int options,
-        uint64_t fs_blocksize = FS_BLOCKSIZE, photon::fs::IFile *bf = nullptr,
-        bool meta_only = false)
-        : file(file), fs(fs), options(options), fs_blocksize(fs_blocksize),
-        fs_base_file(bf), meta_only(meta_only) {
+    TarCore(photon::fs::IFile *file, int options, uint64_t fs_blocksize = FS_BLOCKSIZE)
+        : file(file), options(options), fs_blocksize(fs_blocksize) {
         fs_blockmask = ~(fs_blocksize - 1);
     }
-    ~Tar() {
+    virtual ~TarCore() {
         if (th_pathname != nullptr)
             free(th_pathname);
         if (th_linkname != nullptr)
@@ -171,15 +156,45 @@ public:
         if (pax != nullptr)
             delete pax;
     }
+
     char *get_pathname();
     char *get_linkname();
     size_t get_size();
+    int read_header();
+    bool has_pax_header() {
+        return pax != nullptr;
+    }
+
+protected:
+    photon::fs::IFile *file = nullptr;     // source
+    int options;
+    uint64_t fs_blocksize;
+    uint64_t fs_blockmask;
+
+private:
+    char *th_pathname = nullptr;
+    char *th_linkname = nullptr;
+    PaxHeader *pax = nullptr;
+
+    int read_header_internal();
+    int read_sepcial_file(char *&buf);
+};
+
+class UnTar : public TarCore {
+public:
+    UnTar(photon::fs::IFile *file, photon::fs::IFileSystem *fs, int options,
+        uint64_t fs_blocksize = FS_BLOCKSIZE, photon::fs::IFile *bf = nullptr,
+        bool meta_only = false)
+        : TarCore(file, options, fs_blocksize), fs(fs), fs_base_file(bf), meta_only(meta_only) {}
+
     int extract_all();
 
 private:
-    int read_header();
-    int read_header_internal();
-    int read_sepcial_file(char *&buf);
+    photon::fs::IFileSystem *fs = nullptr; // target
+    photon::fs::IFile *fs_base_file = nullptr;
+    bool meta_only;
+    std::set<std::string> unpackedPaths;
+    std::list<std::pair<std::string, int>> dirs; // <path, utime>
 
     int extract_file();
     int extract_regfile(const char *filename);
@@ -230,4 +245,3 @@ const char libtar_version[] = "1";
                      && (h.name[strlen(h.name) - 1] == '/')))
 #define TH_ISFIFO(h)    (h.typeflag == FIFOTYPE \
                          || S_ISFIFO((mode_t)oct_to_int(h.mode)))
-#define TH_ISGLOBALHEADER(h) (h.typeflag == PAX_GLOBAL_HEADER)

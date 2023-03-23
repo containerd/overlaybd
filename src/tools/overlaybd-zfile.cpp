@@ -15,7 +15,7 @@
 */
 
 #include "../overlaybd/zfile/zfile.h"
-#include "../overlaybd/tar_file.h"
+#include "../overlaybd/tar/tar_file.h"
 #include <photon/common/uuid.h>
 #include <photon/common/utility.h>
 #include <photon/fs/localfs.h>

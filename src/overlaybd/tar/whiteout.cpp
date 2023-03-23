@@ -12,7 +12,6 @@
 #include <photon/fs/filesystem.h>
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
-#include <photon/common/enumerable.h>
 
 // whiteoutPrefix prefix means file is a whiteout. If this is followed by a
 // filename this means that file has been removed from the base layer.
@@ -30,7 +29,7 @@ const std::string whiteoutOpaqueDir = whiteoutMetaPrefix + ".opq";
 
 const std::string paxSchilyXattr = "SCHILY.xattr.";
 
-int Tar::mkdir_hier(const std::string_view &dir) {
+int UnTar::mkdir_hier(const std::string_view &dir) {
     struct stat s;
     std::string path = remove_last_slash(dir);
     if (fs->lstat(path.c_str(), &s) == 0) {
@@ -46,7 +45,7 @@ int Tar::mkdir_hier(const std::string_view &dir) {
     return photon::fs::mkdir_recursive(dir, fs, 0755);
 }
 
-int Tar::remove_all(const std::string &path, bool rmdir) {
+int UnTar::remove_all(const std::string &path, bool rmdir) {
     if (fs == nullptr || path.empty()) {
         LOG_ERROR("remove_all ` failed, fs is null or path is empty", path);
         return -1;
@@ -88,7 +87,7 @@ int Tar::remove_all(const std::string &path, bool rmdir) {
 // 1 whiteout done
 // 0 not whiteout
 // -1 error
-int Tar::convert_whiteout(const char *filename) {
+int UnTar::convert_whiteout(const char *filename) {
     photon::fs::Path p(filename);
     auto dir = std::string(p.dirname());
     auto base = p.basename();
