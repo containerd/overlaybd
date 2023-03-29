@@ -188,6 +188,14 @@ public:
     }
 
     UrlInfo* getActualUrl(const char *url, uint64_t timeout, long &code) {
+        struct timeval start;
+        gettimeofday(&start, nullptr);
+        DEFER({
+            struct timeval end;
+            gettimeofday(&end, nullptr);
+            uint64_t elapsed = 1000000UL * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
+            LOG_INFO("getActualUrl for: `, time used: ` ms", url, elapsed / 1000);
+        });
         Timeout tmo(timeout);
         auto curl = get_cURL();
         DEFER({ release_cURL(curl); });
@@ -313,6 +321,14 @@ protected:
 
     bool authenticate(const char *auth_url, std::string &username, std::string &password,
                       estring *token, uint64_t timeout) {
+        struct timeval start;
+        gettimeofday(&start, nullptr);
+        DEFER({
+            struct timeval end;
+            gettimeofday(&end, nullptr);
+            uint64_t elapsed = 1000000UL * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
+            LOG_INFO("authenticate for: `, time used: ` ms", auth_url, elapsed / 1000);
+        });
         Timeout tmo(timeout);
         photon::net::cURL *req = get_cURL();
         DEFER({ release_cURL(req); });

@@ -190,17 +190,33 @@ int ImageService::read_global_config_and_set() {
         LOG_INFO("audit disabled");
     }
 
-    set_log_output_level(global_conf.logLevel());
-    LOG_INFO("set log_level:`", global_conf.logLevel());
+    uint32_t log_level, log_size, log_num;
+    std::string log_path;
+    LOG_INFO(VALUE(global_conf.logConfig().logPath()));
+    if (global_conf.logConfig().logPath().empty()) {  // compatible for old config
+        log_level = global_conf.logLevel();
+        log_path = global_conf.logPath();
+        log_size = LOG_SIZE;
+        log_num = LOG_NUM;
+    } else {
+        log_level = global_conf.logConfig().logLevel();
+        log_path = global_conf.logConfig().logPath();
+        log_size = global_conf.logConfig().logSizeMB() * 1024 * 1024;
+        log_num = global_conf.logConfig().logRotateNum();
+    }
 
-    if (global_conf.logPath() != "") {
-        LOG_INFO("set log_path:`", global_conf.logPath());
-        int ret = log_output_file(global_conf.logPath().c_str(), LOG_SIZE, LOG_NUM);
+    set_log_output_level(log_level);
+    LOG_INFO("set log_level: `", log_level);
+
+    if (!log_path.empty()) {
+        LOG_INFO("set log_path: `, log_size: `, log_num: `", log_path, log_size, log_num);
+        int ret = log_output_file(log_path.c_str(), log_size, log_num);
         if (ret != 0) {
             LOG_ERROR_RETURN(0, -1, "log_output_file failed, errno:`", errno);
         }
     }
-
+    // display in log file
+    LOG_INFO("log config: ", VALUE(log_level), VALUE(log_path), VALUE(log_size), VALUE(log_num));
     return 0;
 }
 

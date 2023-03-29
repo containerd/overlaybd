@@ -45,7 +45,7 @@ using namespace photon::fs;
 IFile *ImageFile::__open_ro_file(const std::string &path) {
     int flags = O_RDONLY;
 
-    LOG_DEBUG("open ro file: `", path);
+    LOG_INFO("open ro file: `", path);
     int ioengine = image_service.global_conf.ioEngine();
     if (ioengine > 2) {
         LOG_WARN("invalid ioengine: `, set to psync", ioengine);
@@ -110,7 +110,7 @@ IFile *ImageFile::__open_ro_target_remote(const std::string &dir, const std::str
         url += "/";
     url += data_digest;
 
-    LOG_DEBUG("open file from remotefs: `", url);
+    LOG_INFO("open file from remotefs: `", url);
     IFile *remote_file = image_service.global_fs.remote_fs->open(url.c_str(), O_RDONLY);
     if (!remote_file) {
         if (errno == EPERM)
@@ -138,7 +138,7 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
         url += "/";
     url += digest;
 
-    LOG_DEBUG("open file from remotefs: `, size: `", url, size);
+    LOG_INFO("open file from remotefs: `, size: `", url, size);
     IFile *remote_file = image_service.global_fs.remote_fs->open(url.c_str(), O_RDONLY);
     if (!remote_file) {
         std::string err_msg = "failed to open remote file " + url + ": ";

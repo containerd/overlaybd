@@ -49,7 +49,7 @@ IFile *open_file(IFileSystem *fs, const char *fn, int flags, mode_t mode = 0) {
 
 int main(int argc, char **argv) {
     string commit_msg;
-    string parent_uuid;
+    string uuid, parent_uuid;
     std::string algorithm;
     int block_size = -1;
     std::string data_file_path, index_file_path, commit_file_path, remote_mapping_file;
@@ -59,7 +59,8 @@ int main(int argc, char **argv) {
 
     CLI::App app{"this is overlaybd-commit"};
     app.add_option("-m", commit_msg, "add some custom message if needed");
-    app.add_option("-p", parent_uuid, "parent uuid");
+    app.add_option("--uuid", uuid, "uuid");
+    app.add_option("-p,--parent-uuid", parent_uuid, "parent uuid");
     app.add_flag("-z", compress_zfile, "compress to zfile")->default_val(false);
     app.add_flag("-t", tar, "wrapper with tar")->default_val(false);
     app.add_flag("-f", rm_old, "force compress. unlink exist")->default_val(false);
@@ -134,8 +135,15 @@ int main(int argc, char **argv) {
     }
 
     CommitArgs args(out);
-    if (parent_uuid.empty() == false) {
+    if (!uuid.empty()) {
+        memset(args.uuid.data, 0, UUID::String::LEN);
+        memcpy(args.uuid.data, uuid.c_str(), uuid.length());
+        LOG_INFO("uuid: `", args.uuid);
+    }
+    if (!parent_uuid.empty()) {
+        memset(args.parent_uuid.data, 0, UUID::String::LEN);
         memcpy(args.parent_uuid.data, parent_uuid.c_str(), parent_uuid.length());
+        LOG_INFO("parent uuid: `", args.parent_uuid);
     }
     if (commit_msg != "") {
         args.user_tag = const_cast<char *>(commit_msg.c_str());

@@ -107,6 +107,15 @@ struct CacheConfig : public ConfigUtils::Config {
     APPCFG_PARA(blockSize, uint32_t, 65536);
 };
 
+struct LogConfig : public ConfigUtils::Config {
+    APPCFG_CLASS
+
+    APPCFG_PARA(logLevel, uint32_t, 1);
+    APPCFG_PARA(logPath, std::string, "");
+    APPCFG_PARA(logSizeMB, uint32_t, 10);
+    APPCFG_PARA(logRotateNum, int, 3);
+};
+
 struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_CLASS
 
@@ -127,6 +136,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(registryFsVersion, std::string, "v1");
     APPCFG_PARA(cacheConfig, CacheConfig);
     APPCFG_PARA(gzipCacheConfig, GzipCacheConfig);
+    APPCFG_PARA(logConfig, LogConfig);
 };
 
 struct AuthConfig : public ConfigUtils::Config {

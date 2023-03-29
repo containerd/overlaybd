@@ -552,6 +552,9 @@ static int compact(const CompactOptions &opt, atomic_uint64_t &compacted_idx_siz
         return -1;
     layer.user_tag = commit_args->user_tag;
     layer.uuid.clear();
+    if (UUID::String::is_valid((commit_args->uuid).c_str())) {
+        layer.uuid.parse(commit_args->uuid);
+    }
     if (UUID::String::is_valid((commit_args->parent_uuid).c_str())) {
         layer.parent_uuid.parse(commit_args->parent_uuid);
     }
@@ -1590,7 +1593,7 @@ IFileRO *open_files_ro(IFile **files, size_t n, bool ownership) {
 
     LOG_DEBUG("open ` layers", n);
     for (int i = 0; i < (int)n; i++) {
-        LOG_DEBUG(rst->m_uuid[i]);
+        LOG_DEBUG("layer `, uuid `", i, rst->m_uuid[i]);
     }
     return rst;
 }
