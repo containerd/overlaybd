@@ -1,6 +1,8 @@
 {
-    "logLevel": 1,
-    "logPath": "/var/log/overlaybd.log",
+    "logConfig": {
+        "logLevel": 1,
+        "logPath": "/var/log/overlaybd.log"
+    },
     "cacheConfig": {
         "cacheType": "file",
         "cacheDir": "/opt/overlaybd/registry_cache",

@@ -58,13 +58,9 @@ TEST(ImageTest, AccelerateURL) {
 }
 
 int main(int argc, char** argv) {
-    photon::vcpu_init();
-    photon::fd_events_init();
-    photon::net::cURL::init();
+    photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+    DEFER(photon::fini(););
     ::testing::InitGoogleTest(&argc, argv);
     auto ret = RUN_ALL_TESTS();
-    photon::net::cURL::fini();
-    photon::fd_events_fini();
-    photon::vcpu_fini();
     return ret;
 }

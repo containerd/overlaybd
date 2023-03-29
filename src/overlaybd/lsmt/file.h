@@ -51,6 +51,7 @@ struct CommitArgs {
     photon::fs::IFile *as = nullptr;
     char *user_tag = nullptr; // commit_msg, at most 256B
     size_t tag_len = 0;       // commit_msg length
+    UUID::String uuid;        // set uuid when commit
     UUID::String parent_uuid; // set parent uuid when commit
     size_t get_tag_len() const {
         if (tag_len == 0 && user_tag != nullptr) {

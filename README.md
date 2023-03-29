@@ -118,8 +118,10 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 
 ```json
 {
-    "logLevel": 1,
-    "logPath": "/var/log/overlaybd.log",
+    "logConfig": {
+        "logLevel": 1,
+        "logPath": "/var/log/overlaybd.log"
+    },
     "cacheConfig": {
         "cacheType": "file",
         "cacheDir": "/opt/overlaybd/registry_cache",
@@ -158,32 +160,32 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 
 | Field               | Description                                                                                           |
 |---------------------|-------------------------------------------------------------------------------------------------------|
-| logLevel            | DEBUG 0, INFO  1, WARN  2, ERROR 3                                                                    |
-| ioEngine            | IO engine used to open local files: psync 0, libaio 1, posix aio 2.                                   |
-| logPath             | The path for log file, `/var/log/overlaybd.log` is the default value.                                 |
+| logConfig.logLevel      | The log level for log file, 0 - DEBUG, 1 - INFO, 2 - WARN, 3 - ERROR                              |
+| logConfig.logPath       | The path for log file, `/var/log/overlaybd.log` is the default value.                             |
+| logConfig.logSizeMB     | The size limit for log file, in MB, `10` is default (10 MB).                                      |
+| logConfig.logRotateNum  | The rotate number for log file, `3` is default.                                                   |
+| ioEngine                | IO engine used to open local files: psync 0, libaio 1, posix aio 2.                               |
 | cacheConfig.cacheType   | Cache type used, `file`, `ocf` and `download` are supported.                                      |
 | cacheConfig.cacheDir    | The cache directory for remote image data.                                                        |
 | cacheConfig.cacheSizeGB | The max size of cache, in GB.                                                                     |
 | cacheConfig.refillSize  | The refill size from source, in byte. `262144` is default (256 KB).                               |
-
 | gzipCacheConfig.enable      | Whether decompressed gzip file cache is enabled or not.                                       |
 | gzipCacheConfig.cacheDir    | The cache directory for decompressed gzip data.                                               |
 | gzipCacheConfig.cacheSizeGB | The max size of cache, in GB.                                                                 |
 | gzipCacheConfig.refillSize  | The refill size from source, in byte. `262144` is default (256 KB).                           |
-
 | credentialFilePath(legacy)  | The credential used for fetching images on registry. `/opt/overlaybd/cred.json` is the default value. |
-| credentialConfig.mode | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` |
-| credentialConfig.path | credential file path or url which is determined by `mode` |
+| credentialConfig.mode       | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` |
+| credentialConfig.path       | credential file path or url which is determined by `mode`                                     |
 | download.enable     | Whether background downloading is enabled or not.                                                     |
 | download.delay      | The seconds waiting to start downloading task after the overlaybd device launched.                    |
 | download.delayExtra | A random extra delay is attached to delay, avoiding too many tasks started at the same time.          |
 | download.maxMBps    | The speed limit in MB/s for a downloading task.                                                       |
 | p2pConfig.enable    | Whether p2p proxy is enabled or not.                                                                  |
 | p2pConfig.address   | The proxy for p2p download.                                                                           |
-| exporterConfig.enable | whether or not create a server to show Prometheus metrics. |
-| exporterConfig.uriPrefix | URI prefix for export metrics. |
-| exporterConfig.port | port for http server to show metrics. |
-| exporterConfig.updateInterval | Time interval to update metrics in microseconds. |
+| exporterConfig.enable         | whether or not create a server to show Prometheus metrics.                                  |
+| exporterConfig.uriPrefix      | URI prefix for export metrics.                                                              |
+| exporterConfig.port           | port for http server to show metrics.                                                       |
+| exporterConfig.updateInterval | Time interval to update metrics in microseconds.                                            |
 | enableAudit         | Enable audit or not.                                                                                  |
 | enableThread        | Enable overlaybd device run in seprate thread or not. Note `cacheType` should be `ocf`. `false` is default. |
 | auditPath           | The path for audit file, `/var/log/overlaybd-audit.log` is the default value.                         |
