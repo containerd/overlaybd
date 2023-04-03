@@ -170,12 +170,7 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
         LOG_ERROR_RETURN(0, nullptr, "failed to open switch file `", url);
     }
 
-    IFile *file = switch_file;
-    if (m_prefetcher != nullptr) {
-        file = m_prefetcher->new_prefetch_file(switch_file, layer_index);
-    }
-
-    IFile *sure_file = new_sure_file(file, this);
+    IFile *sure_file = new_sure_file(switch_file, this);
     if (!sure_file) {
         set_failed("failed to open sure file `" + url);
         delete switch_file;
@@ -269,6 +264,10 @@ int ImageFile::open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer,
             opened = layer.digest();
             file = __open_ro_remote(layer.dir(), layer.digest(), layer.size(), index);
         }
+    }
+
+    if (m_prefetcher != nullptr) {
+        file = m_prefetcher->new_prefetch_file(file, index);
     }
 
     IFile *target_file = nullptr;
@@ -444,13 +443,15 @@ int ImageFile::init_image_file() {
         }
 
     } else if (!conf.recordTracePath().empty()) {
-        if (Prefetcher::detect_mode(conf.recordTracePath()) !=
-            Prefetcher::Mode::Record) {
-            LOG_ERROR("Prefetch: incorrect mode for trace recording");
+        auto mode = Prefetcher::detect_mode(conf.recordTracePath());
+        if (mode != Prefetcher::Mode::Record && mode != Prefetcher::Mode::Replay) {
+            LOG_ERROR("Prefetch: incorrect mode ` for prefetching", mode);
             goto ERROR_EXIT;
         }
         m_prefetcher = new_prefetcher(conf.recordTracePath());
-        record_no_download = true;
+        if (mode == Prefetcher::Mode::Record) {
+            record_no_download = true;
+        }
     }
 
     upper.CopyFrom(conf.upper(), upper.GetAllocator());

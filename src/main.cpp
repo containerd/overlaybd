@@ -358,6 +358,7 @@ static void dev_close(struct tcmu_device *dev) {
     }
     delete odev->file;
     delete odev;
+    LOG_INFO("dev closed `", tcmu_get_path(dev));
     close_cnt++;
     if (close_cnt == 500) {
         malloc_trim(128 * 1024);
