@@ -232,6 +232,7 @@ private:
             LOG_ERRNO_RETURN(0, -1, "Prefetch: open OK file failed");
         }
         close(ok_fd);
+        LOG_INFO("Prefetch: Record ` records", m_record_array.size());
         return 0;
     }
 
