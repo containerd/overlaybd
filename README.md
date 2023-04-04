@@ -145,7 +145,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
     },
     "p2pConfig": {
         "enable": false,
-        "address": "localhost:9731/accelerator"
+        "address": "localhost:19145/dadip2p"
     },
     "exporterConfig": {
         "enable": false,
@@ -181,7 +181,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | download.delayExtra | A random extra delay is attached to delay, avoiding too many tasks started at the same time.          |
 | download.maxMBps    | The speed limit in MB/s for a downloading task.                                                       |
 | p2pConfig.enable    | Whether p2p proxy is enabled or not.                                                                  |
-| p2pConfig.address   | The proxy for p2p download.                                                                           |
+| p2pConfig.address   | The proxy for p2p download, the format is `localhost:<P2PConfig.Port>/<P2PConfig.APIKey>`, depending on dadip2p.yaml |
 | exporterConfig.enable         | whether or not create a server to show Prometheus metrics.                                  |
 | exporterConfig.uriPrefix      | URI prefix for export metrics.                                                              |
 | exporterConfig.port           | port for http server to show metrics.                                                       |
