@@ -426,6 +426,7 @@ int ImageFile::init_image_file() {
     bool record_no_download = false;
     bool has_error = false;
     auto lowers = conf.lowers();
+    auto concurrency = image_service.global_conf.prefetchConfig().concurrency();
 
     if (conf.accelerationLayer() && !conf.recordTracePath().empty()) {
         LOG_ERROR("Cannot record trace while acceleration layer exists");
@@ -439,7 +440,7 @@ int ImageFile::init_image_file() {
         std::string trace_file = accel_layer + "/trace";
         if (Prefetcher::detect_mode(trace_file) ==
             Prefetcher::Mode::Replay) {
-            m_prefetcher = new_prefetcher(trace_file);
+            m_prefetcher = new_prefetcher(trace_file, concurrency);
         }
 
     } else if (!conf.recordTracePath().empty()) {
@@ -448,7 +449,7 @@ int ImageFile::init_image_file() {
             LOG_ERROR("Prefetch: incorrect mode ` for prefetching", mode);
             goto ERROR_EXIT;
         }
-        m_prefetcher = new_prefetcher(conf.recordTracePath());
+        m_prefetcher = new_prefetcher(conf.recordTracePath(), concurrency);
         if (mode == Prefetcher::Mode::Record) {
             record_no_download = true;
         }

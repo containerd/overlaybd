@@ -116,6 +116,12 @@ struct LogConfig : public ConfigUtils::Config {
     APPCFG_PARA(logRotateNum, int, 3);
 };
 
+struct PrefetchConfig : public ConfigUtils::Config {
+    APPCFG_CLASS
+
+    APPCFG_PARA(concurrency, int, 16);
+};
+
 struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_CLASS
 
@@ -137,6 +143,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(cacheConfig, CacheConfig);
     APPCFG_PARA(gzipCacheConfig, GzipCacheConfig);
     APPCFG_PARA(logConfig, LogConfig);
+    APPCFG_PARA(prefetchConfig, PrefetchConfig);
 };
 
 struct AuthConfig : public ConfigUtils::Config {

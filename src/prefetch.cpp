@@ -47,7 +47,7 @@ private:
 
 class PrefetcherImpl : public Prefetcher {
 public:
-    explicit PrefetcherImpl(const string &trace_file_path) {
+    explicit PrefetcherImpl(const string &trace_file_path, int concurrency) : m_concurrency(concurrency) {
         // Detect mode
         size_t file_size = 0;
         m_mode = detect_mode(trace_file_path, &file_size);
@@ -87,9 +87,13 @@ public:
 
         } else if (m_mode == Mode::Replay) {
             m_replay_stopped = true;
-            for (auto th : m_replay_threads) {
-                photon::thread_shutdown((photon::thread *)th);
-                photon::thread_join(th);
+            if (m_replay_thread) {
+                for (auto th : m_replay_threads) {
+                    if (th) {
+                        photon::thread_shutdown((photon::thread *)th);
+                    }
+                }
+                photon::thread_join(m_replay_thread);
             }
         }
 
@@ -110,6 +114,26 @@ public:
         m_record_array.push_back(trace);
     }
 
+    void do_replay() {
+        struct timeval start;
+        gettimeofday(&start, NULL);
+        LOG_INFO("Prefetch: Replay ` records from ` layers, concurrency `",
+                 m_replay_queue.size(), m_src_files.size(), m_concurrency);
+        for (int i = 0; i < m_concurrency; ++i) {
+            auto th = photon::thread_create11(&PrefetcherImpl::replay_worker_thread, this);
+            auto join_handle = photon::thread_enable_join(th);
+            m_replay_threads.push_back(join_handle);
+        }
+        for (auto &th : m_replay_threads) {
+            photon::thread_join(th);
+            th = nullptr;
+        }
+        struct timeval end;
+        gettimeofday(&end, NULL);
+        uint64_t elapsed = 1000000UL * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
+        LOG_INFO("Prefetch: Replay done, time cost ` ms", elapsed / 1000);
+    }
+
     void replay() override {
         if (m_mode != Mode::Replay) {
             return;
@@ -117,13 +141,8 @@ public:
         if (m_replay_queue.empty() || m_src_files.empty()) {
             return;
         }
-        LOG_INFO("Prefetch: Replay ` records from ` layers", m_replay_queue.size(),
-                 m_src_files.size());
-        for (int i = 0; i < REPLAY_CONCURRENCY; ++i) {
-            auto th = photon::thread_create11(&PrefetcherImpl::replay_worker_thread, this);
-            auto join_handle = photon::thread_enable_join(th);
-            m_replay_threads.push_back(join_handle);
-        }
+        auto th = photon::thread_create11(&PrefetcherImpl::do_replay, this);
+        m_replay_thread = photon::thread_enable_join(th);
     }
 
     int replay_worker_thread() {
@@ -166,13 +185,13 @@ private:
     };
 
     static const int MAX_IO_SIZE = 1024 * 1024;
-    static const int REPLAY_CONCURRENCY = 16;
     static const uint32_t TRACE_MAGIC = 3270449184; // CRC32 of `Container Image Trace Format`
 
     vector<TraceFormat> m_record_array;
     queue<TraceFormat> m_replay_queue;
     map<uint32_t, IFile *> m_src_files;
     vector<photon::join_handle *> m_replay_threads;
+    photon::join_handle *m_replay_thread = nullptr;
     photon::join_handle *m_detect_thread = nullptr;
     bool m_detect_thread_interruptible = false;
     string m_lock_file_path;
@@ -181,6 +200,7 @@ private:
     bool m_replay_stopped = false;
     bool m_record_stopped = false;
     bool m_buffer_released = false;
+    int m_concurrency;
 
     int dump() {
         if (m_trace_file == nullptr) {
@@ -314,8 +334,8 @@ ssize_t PrefetchFile::pread(void *buf, size_t count, off_t offset) {
     return n_read;
 }
 
-Prefetcher *new_prefetcher(const string &trace_file_path) {
-    return new PrefetcherImpl(trace_file_path);
+Prefetcher *new_prefetcher(const string &trace_file_path, int concurrency) {
+    return new PrefetcherImpl(trace_file_path, concurrency);
 }
 
 Prefetcher::Mode Prefetcher::detect_mode(const string &trace_file_path, size_t *file_size) {
