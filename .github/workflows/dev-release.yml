@@ -11,7 +11,7 @@ env:
 jobs:
   dev-build-rpm:
     name: "Development Release Rpm"
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-22.04
     container: centos:7
 
     steps:
@@ -43,7 +43,8 @@ jobs:
 
   dev-build-deb:
     name: "Development Release Deb"
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-22.04
+    container: ubuntu:18.04
 
     steps:
     - uses: actions/checkout@v3
@@ -51,24 +52,25 @@ jobs:
     - name: Install Dependencies
       shell: bash
       run: |
-        sudo apt-get update -y
-        sudo apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev rpm
-        sudo apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm libzstd-dev libext2fs-dev
-
-    - name: Create Build Environment
-      run: cmake -E make_directory ${{ github.workspace }}/build
-
-    - name: Configure CMake
-      shell: bash
-      working-directory: ${{ github.workspace }}/build
-      run: |
-        git submodule update --init
-        cmake ${{ github.workspace }} -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TESTING=0 -DENABLE_DSA=0 -DENABLE_ISAL=0
+        apt-get update -y
+        apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev rpm git wget make g++
+        apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm libzstd-dev libext2fs-dev zlib1g-dev
+        wget https://cmake.org/files/v3.15/cmake-3.15.0-Linux-x86_64.tar.gz
+        tar -zxvf cmake-3.15.0-Linux-x86_64.tar.gz
+        cp -r cmake-3.15.0-Linux-x86_64 /usr/local/
 
     - name: Build
-      working-directory: ${{ github.workspace }}/build
       shell: bash
       run: |
+        export PATH="/usr/local/cmake-3.15.0-Linux-x86_64/bin:$PATH"
+        echo git fetching ${{ github.repository }}@${{ github.sha }}
+        git clone https://github.com/${{ github.repository }} overlaybd
+        cd overlaybd
+        git checkout ${{ github.sha }}
+        git submodule update --init
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TESTING=0 -DENABLE_DSA=0 -DENABLE_ISAL=0 -DCMAKE_C_COMPILER=/usr/bin/gcc -DCMAKE_CXX_COMPILER=/usr/bin/g++
         make -j64
         cpack
 
@@ -76,7 +78,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: release-deb
-        path: ${{ github.workspace }}/build/overlaybd-*.deb
+        path: overlaybd/build/overlaybd-*.deb
 
   dev-release:
     runs-on: ubuntu-20.04
