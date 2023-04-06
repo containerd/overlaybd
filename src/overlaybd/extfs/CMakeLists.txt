@@ -3,10 +3,11 @@ add_library(extfs_lib STATIC ${SOURCE_TAR})
 
 if(NOT ORIGIN_EXT2FS)
   find_package(ext2fs REQUIRED)
+  add_dependencies(extfs_lib libext2fs)
   target_include_directories(extfs_lib PUBLIC ${EXT2FS_INCLUDE_DIR})
   set(LIB_EXT2FS ${EXT2FS_LIBRARY})
 
-  install(DIRECTORY ${ext2fs_SOURCE_DIR}/lib DESTINATION /opt/overlaybd/ USE_SOURCE_PERMISSIONS)
+  install(DIRECTORY ${LIBEXT2FS_INSTALL_DIR}/lib DESTINATION /opt/overlaybd/ USE_SOURCE_PERMISSIONS)
 else()
   set(LIB_EXT2FS ext2fs)
 endif()
