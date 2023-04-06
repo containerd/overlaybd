@@ -21,7 +21,7 @@
     },
     "p2pConfig": {
         "enable": false,
-        "address": "localhost:9731/accelerator"
+        "address": "localhost:19145/dadip2p"
     },
     "enableAudit": true,
     "auditPath": "/var/log/overlaybd-audit.log",
