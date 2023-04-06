@@ -63,4 +63,4 @@ protected:
     Mode m_mode;
 };
 
-Prefetcher *new_prefetcher(const std::string &trace_file_path);
+Prefetcher *new_prefetcher(const std::string &trace_file_path, int concurrency);
