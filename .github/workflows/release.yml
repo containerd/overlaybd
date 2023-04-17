@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: "Build Release"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        images: [ubuntu-18.04, ubuntu-20.04, ubuntu-22.04, centos-7, centos-8]
+        platforms: [linux/amd64, linux/arm64]
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+      with:
+        submodules: true
+    - name: Setup buildx instance
+      uses: docker/setup-buildx-action@v2
+      with:
+        use: true
+    - name: Build
+      shell: bash
+      run: |
+        BASE_IMAGE=${IMAGE/-/:}
+        echo ${BASE_IMAGE}
+        docker buildx build --build-arg BUILD_IMAGE=${BASE_IMAGE} -f .github/workflows/release/Dockerfile --platform=${{ matrix.platforms }} -o releases/ .
+        # remove unused package
+        if [[ "${IMAGE}" =~ "ubuntu" ]]; then
+          rm -f releases/overlaybd-*.rpm
+        elif [[ "${IMAGE}" =~ "centos" ]]; then
+          rm -f releases/overlaybd-*.deb
+        fi
+        ls -l releases/
+      env:
+        IMAGE: ${{ matrix.images }}
+    - name: Upload
+      uses: actions/upload-artifact@v3
+      with:
+        name: releases
+        path: releases/overlaybd-*.*
+
+  dev-release:
+    name: "Development Release"
+    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Download builds and release notes
+        uses: actions/download-artifact@v3
+      - name: Display downloaded files
+        shell: bash
+        run: ls -l releases
+      - name: Create Release
+        uses: "marvinpinto/action-automatic-releases@latest"
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          automatic_release_tag: "latest"
+          prerelease: true
+          title: "Development Build"
+          files: |
+            releases/overlaybd-*.*
+
+  release:
+    name: "Tagged Release"
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Download builds and release notes
+        uses: actions/download-artifact@v3
+      - name: Display downloaded files
+        shell: bash
+        run: ls -l releases
+      - name: Create Release
+        uses: "marvinpinto/action-automatic-releases@latest"
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          prerelease: false
+          files: |
+            releases/overlaybd-*.*

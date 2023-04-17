@@ -17,7 +17,7 @@ target_include_directories(crc32_lib PUBLIC
 if (${ARCH} STREQUAL x86_64)
     target_compile_options(crc32_lib PUBLIC -msse4.2 -mcrc32)
 else()
-    target_compile_options(crc32_lib PUBLIC -march=native)
+    target_compile_options(crc32_lib PUBLIC -march=native -mcpu=generic+crc)
 endif()
 
 if(ENABLE_DSA OR ENABLE_ISAL)
