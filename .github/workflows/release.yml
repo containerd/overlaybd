@@ -17,6 +17,13 @@ jobs:
         images: [ubuntu-18.04, ubuntu-20.04, ubuntu-22.04, centos-7, centos-8]
         platforms: [linux/amd64, linux/arm64]
     steps:
+    - name: Set Release Version
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+      shell: bash
+      run: |
+        releasever=${{ github.ref }}
+        releasever="${releasever#refs/tags/}"
+        echo "RELEASE_VERSION=${releasever}" >> $GITHUB_ENV
     - name: Checkout
       uses: actions/checkout@v3
       with:
@@ -28,9 +35,16 @@ jobs:
     - name: Build
       shell: bash
       run: |
+        RELEASE_VERSION=${{ env.RELEASE_VERSION }}
+        if [[ -z ${RELEASE_VERSION} ]]; then
+          git fetch --tags
+          RELEASE_VERSION=$(git tag -l v* | tail -1)
+        fi
+        RELEASE_VERSION=${RELEASE_VERSION#v}
+        echo "RELEASE_VERSION=${RELEASE_VERSION}"
         BASE_IMAGE=${IMAGE/-/:}
         echo ${BASE_IMAGE}
-        docker buildx build --build-arg BUILD_IMAGE=${BASE_IMAGE} -f .github/workflows/release/Dockerfile --platform=${{ matrix.platforms }} -o releases/ .
+        docker buildx build --build-arg BUILD_IMAGE=${BASE_IMAGE} --build-arg RELEASE_VERSION=${RELEASE_VERSION} -f .github/workflows/release/Dockerfile --platform=${{ matrix.platforms }} -o releases/ .
         # remove unused package
         if [[ "${IMAGE}" =~ "ubuntu" ]]; then
           rm -f releases/overlaybd-*.rpm

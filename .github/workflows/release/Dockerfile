@@ -17,7 +17,8 @@ FROM ${BUILD_IMAGE} AS builder
 WORKDIR /src
 COPY . .
 ARG BUILD_IMAGE
-RUN ls -l /src && chmod 755 .github/workflows/release/build.sh && .github/workflows/release/build.sh ${BUILD_IMAGE}
+ARG RELEASE_VERSION
+RUN ls -l /src && chmod 755 .github/workflows/release/build.sh && .github/workflows/release/build.sh ${BUILD_IMAGE} ${RELEASE_VERSION}
 
 FROM scratch AS release
 COPY --from=builder /src/build/overlaybd-*.* /
