@@ -24,7 +24,6 @@ class ISwitchFile;
 namespace BKDL {
 
 static std::string DOWNLOAD_TMP_NAME = ".download";
-static std::string COMMIT_FILE_NAME = "overlaybd.commit";
 
 bool check_downloaded(const std::string &dir);
 

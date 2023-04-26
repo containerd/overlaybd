@@ -29,6 +29,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "switch_file.h"
+#include "image_file.h"
 
 using namespace photon::fs;
 

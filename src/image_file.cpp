@@ -258,11 +258,18 @@ int ImageFile::open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer,
     } else {
         // open downloaded blob or remote blob
         if (BKDL::check_downloaded(layer.dir())) {
-            opened = layer.dir() + "/" + BKDL::COMMIT_FILE_NAME;
+            opened = layer.dir() + "/" + COMMIT_FILE_NAME;
             file = __open_ro_file(opened);
         } else {
-            opened = layer.digest();
-            file = __open_ro_remote(layer.dir(), layer.digest(), layer.size(), index);
+            auto sealed = layer.dir() + "/" + SEALED_FILE_NAME;
+            if (::access(sealed.c_str(), 0) == 0) {
+                // open sealed blob
+                opened = sealed;
+                file = __open_ro_file(opened);
+            } else {
+                opened = layer.digest();
+                file = __open_ro_remote(layer.dir(), layer.digest(), layer.size(), index);
+            }
         }
     }
 

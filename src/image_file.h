@@ -36,6 +36,9 @@
 #include <photon/thread/thread11.h>
 #include "overlaybd/lsmt/file.h"
 
+static std::string COMMIT_FILE_NAME = "overlaybd.commit";
+static std::string SEALED_FILE_NAME = "overlaybd.sealed";
+
 class ImageFile : public photon::fs::ForwardFile {
 public:
     ImageFile(ImageConfigNS::ImageConfig &_conf, ImageService &is)
