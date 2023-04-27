@@ -186,172 +186,6 @@ static const uint32_t ALIGNMENT4K = 4096;
 
 static const int ABORT_FLAG_DETECTED = -2;
 
-class LSMTReadOnlyFile : public IFileRW {
-public:
-    size_t MAX_IO_SIZE = 4 * 1024 * 1024;
-    uint64_t m_vsize = 0;
-    vector<IFile *> m_files;
-    vector<UUID> m_uuid;
-    IMemoryIndex *m_index = nullptr;
-    bool m_file_ownership = false;
-    uint64_t m_data_offset = HeaderTrailer::SPACE / ALIGNMENT;
-    uint32_t lsmt_io_cnt = 0;
-    uint64_t lsmt_io_size = 0;
-    LSMTFileType m_filetype = LSMTFileType::RO;
-
-    virtual ~LSMTReadOnlyFile() {
-        LOG_INFO("pread times: `, size: `M", lsmt_io_cnt, lsmt_io_size >> 20);
-        close();
-        if (m_file_ownership) {
-            LOG_DEBUG("m_file_ownership:`, m_files.size:`", m_file_ownership, m_files.size());
-            for (auto &x : m_files)
-                safe_delete(x);
-        }
-    }
-
-    virtual int vioctl(int request, va_list args) override {
-        if (request == GetType) {
-            return (int)m_filetype;
-        }
-        LOG_ERROR_RETURN(EINVAL, -1, "invaid request code");
-    }
-
-    virtual int set_max_io_size(size_t _size) override {
-
-        if (_size == 0 || (_size & (ALIGNMENT4K - 1)) != 0) {
-            LOG_ERROR_RETURN(0, -1, "_size( ` ) is not aligned with 4K.", _size);
-        }
-        LOG_INFO("`", _size);
-        this->MAX_IO_SIZE = _size;
-        return 0;
-    }
-
-    virtual size_t get_max_io_size() override {
-        return this->MAX_IO_SIZE;
-    }
-
-    virtual IMemoryIndex0 *index() const override {
-        return (IMemoryIndex0 *)m_index;
-    }
-
-    virtual int close() override {
-        safe_delete(m_index);
-        if (m_file_ownership) {
-            for (auto &x : m_files)
-                if (x)
-                    x->close();
-        }
-        return 0;
-    }
-
-    virtual int get_uuid(UUID &out, size_t layer_id) const override {
-        if (layer_id >= m_uuid.size()) {
-            LOG_ERROR_RETURN(0, -1, "layer_id out of range.");
-        }
-        out = m_uuid[layer_id];
-        LOG_DEBUG(out);
-        return 0;
-    }
-
-    template <typename T1, typename T2, typename T3>
-    inline void forward(void *&buffer, T1 &offset, T2 &count, T3 step) {
-        (char *&)buffer += step * ALIGNMENT;
-        offset += step;
-        count -= step;
-    }
-    template <typename T>
-    bool is_aligned(T x) {
-        static_assert(std::is_integral<T>::value, "T must be integral types");
-        return (x & (ALIGNMENT - 1)) == 0;
-    }
-#define CHECK_ALIGNMENT(size, offset)                                                              \
-    if (!is_aligned((size) | (offset)))                                                            \
-        LOG_ERROR_RETURN(EFAULT, -1, "arguments must be aligned!");
-
-    virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
-        CHECK_ALIGNMENT(count, offset);
-        auto nbytes = count;
-        while (count > MAX_IO_SIZE) {
-            auto ret = pread(buf, MAX_IO_SIZE, offset);
-            if (ret < (ssize_t)MAX_IO_SIZE)
-                return -1;
-            (char *&)buf += MAX_IO_SIZE;
-            count -= MAX_IO_SIZE;
-            offset += MAX_IO_SIZE;
-        }
-        count /= ALIGNMENT;
-        offset /= ALIGNMENT;
-        Segment s{(uint64_t)offset, (uint32_t)count};
-        auto ret = foreach_segments(
-            m_index, s,
-            [&](const Segment &m) __attribute__((always_inline)) {
-                auto step = m.length * ALIGNMENT;
-                memset(buf, 0, step);
-                (char *&)buf += step;
-                return 0;
-            },
-            [&](const SegmentMapping &m) __attribute__((always_inline)) {
-                if (m.tag >= m_files.size()) {
-                    LOG_DEBUG(" ` >= `", m.tag, m_files.size());
-                }
-                assert(m.tag < m_files.size());
-                ssize_t size = m.length * ALIGNMENT;
-                // LOG_DEBUG("offset: `, length: `", m.moffset, size);
-                ssize_t ret = m_files[m.tag]->pread(buf, size, m.moffset * ALIGNMENT);
-                if (ret < size) {
-                    LOG_ERRNO_RETURN(0, (int)ret,
-                                     "failed to read from `-th file ( ` pread return: ` < size: `)",
-                                     m.tag, m_files[m.tag], ret, size);
-                }
-                lsmt_io_size += ret;
-                lsmt_io_cnt++;
-                (char *&)buf += size;
-                return 0;
-            });
-        return (ret >= 0) ? nbytes : ret;
-    }
-
-    virtual IFile *front_file() {
-        for (auto x : m_files)
-            if (x)
-                return x;
-        return nullptr;
-    }
-    virtual int fstat(struct stat *buf) override {
-        auto file = front_file();
-        if (!file)
-            LOG_ERROR_RETURN(ENOSYS, -1, "no underlying files found!");
-
-        auto ret = file->fstat(buf);
-        if (ret == 0) {
-            buf->st_blksize = ALIGNMENT;
-            buf->st_size = m_vsize;
-            buf->st_blocks = m_index->block_count();
-        }
-        return ret;
-    }
-    virtual IFileSystem *filesystem() override {
-        auto file = front_file();
-        if (!file)
-            LOG_ERROR_RETURN(ENOSYS, nullptr, "no underlying files found!");
-        return file->filesystem();
-    }
-    UNIMPLEMENTED(int close_seal(IFileRO **reopen_as = nullptr) override);
-    UNIMPLEMENTED(int commit(const CommitArgs &args) const override);
-
-    virtual DataStat data_stat() const override {
-        uint64_t size = 0;
-        auto idx_arr = ptr_array(m_index->buffer(), m_index->size());
-        for (auto x : idx_arr)
-            size += x.length * (!x.zeroed);
-        size *= ALIGNMENT;
-        DataStat ret;
-        ret.total_data_size = size;
-        ret.valid_data_size = size;
-        return ret;
-    }
-};
-
 static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, bool is_data_file,
                                 uint64_t index_offset, uint64_t index_size, const LayerInfo &args) {
     ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
@@ -616,6 +450,182 @@ static int compact(const CompactOptions &opt, atomic_uint64_t &compacted_idx_siz
         LOG_ERROR_RETURN(0, -1, "failed to write trailer");
     return 0;
 }
+
+class LSMTReadOnlyFile : public IFileRW {
+public:
+    size_t MAX_IO_SIZE = 4 * 1024 * 1024;
+    uint64_t m_vsize = 0;
+    vector<IFile *> m_files;
+    vector<UUID> m_uuid;
+    IMemoryIndex *m_index = nullptr;
+    bool m_file_ownership = false;
+    uint64_t m_data_offset = HeaderTrailer::SPACE / ALIGNMENT;
+    uint32_t lsmt_io_cnt = 0;
+    uint64_t lsmt_io_size = 0;
+    LSMTFileType m_filetype = LSMTFileType::RO;
+
+    virtual ~LSMTReadOnlyFile() {
+        LOG_INFO("pread times: `, size: `M", lsmt_io_cnt, lsmt_io_size >> 20);
+        close();
+        if (m_file_ownership) {
+            LOG_DEBUG("m_file_ownership:`, m_files.size:`", m_file_ownership, m_files.size());
+            for (auto &x : m_files)
+                safe_delete(x);
+        }
+    }
+
+    virtual int vioctl(int request, va_list args) override {
+        if (request == GetType) {
+            return (int)m_filetype;
+        }
+        LOG_ERROR_RETURN(EINVAL, -1, "invaid request code");
+    }
+
+    virtual int set_max_io_size(size_t _size) override {
+
+        if (_size == 0 || (_size & (ALIGNMENT4K - 1)) != 0) {
+            LOG_ERROR_RETURN(0, -1, "_size( ` ) is not aligned with 4K.", _size);
+        }
+        LOG_INFO("`", _size);
+        this->MAX_IO_SIZE = _size;
+        return 0;
+    }
+
+    virtual size_t get_max_io_size() override {
+        return this->MAX_IO_SIZE;
+    }
+
+    virtual IMemoryIndex0 *index() const override {
+        return (IMemoryIndex0 *)m_index;
+    }
+
+    virtual int close() override {
+        safe_delete(m_index);
+        if (m_file_ownership) {
+            for (auto &x : m_files)
+                if (x)
+                    x->close();
+        }
+        return 0;
+    }
+
+    virtual int get_uuid(UUID &out, size_t layer_id) const override {
+        if (layer_id >= m_uuid.size()) {
+            LOG_ERROR_RETURN(0, -1, "layer_id out of range.");
+        }
+        out = m_uuid[layer_id];
+        LOG_DEBUG(out);
+        return 0;
+    }
+
+    template <typename T1, typename T2, typename T3>
+    inline void forward(void *&buffer, T1 &offset, T2 &count, T3 step) {
+        (char *&)buffer += step * ALIGNMENT;
+        offset += step;
+        count -= step;
+    }
+    template <typename T>
+    bool is_aligned(T x) {
+        static_assert(std::is_integral<T>::value, "T must be integral types");
+        return (x & (ALIGNMENT - 1)) == 0;
+    }
+#define CHECK_ALIGNMENT(size, offset)                                                              \
+    if (!is_aligned((size) | (offset)))                                                            \
+        LOG_ERROR_RETURN(EFAULT, -1, "arguments must be aligned!");
+
+    virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
+        CHECK_ALIGNMENT(count, offset);
+        auto nbytes = count;
+        while (count > MAX_IO_SIZE) {
+            auto ret = pread(buf, MAX_IO_SIZE, offset);
+            if (ret < (ssize_t)MAX_IO_SIZE)
+                return -1;
+            (char *&)buf += MAX_IO_SIZE;
+            count -= MAX_IO_SIZE;
+            offset += MAX_IO_SIZE;
+        }
+        count /= ALIGNMENT;
+        offset /= ALIGNMENT;
+        Segment s{(uint64_t)offset, (uint32_t)count};
+        auto ret = foreach_segments(
+            m_index, s,
+            [&](const Segment &m) __attribute__((always_inline)) {
+                auto step = m.length * ALIGNMENT;
+                memset(buf, 0, step);
+                (char *&)buf += step;
+                return 0;
+            },
+            [&](const SegmentMapping &m) __attribute__((always_inline)) {
+                if (m.tag >= m_files.size()) {
+                    LOG_DEBUG(" ` >= `", m.tag, m_files.size());
+                }
+                assert(m.tag < m_files.size());
+                ssize_t size = m.length * ALIGNMENT;
+                // LOG_DEBUG("offset: `, length: `", m.moffset, size);
+                ssize_t ret = m_files[m.tag]->pread(buf, size, m.moffset * ALIGNMENT);
+                if (ret < size) {
+                    LOG_ERRNO_RETURN(0, (int)ret,
+                                     "failed to read from `-th file ( ` pread return: ` < size: `)",
+                                     m.tag, m_files[m.tag], ret, size);
+                }
+                lsmt_io_size += ret;
+                lsmt_io_cnt++;
+                (char *&)buf += size;
+                return 0;
+            });
+        return (ret >= 0) ? nbytes : ret;
+    }
+
+    virtual IFile *front_file() {
+        for (auto x : m_files)
+            if (x)
+                return x;
+        return nullptr;
+    }
+    virtual int fstat(struct stat *buf) override {
+        auto file = front_file();
+        if (!file)
+            LOG_ERROR_RETURN(ENOSYS, -1, "no underlying files found!");
+
+        auto ret = file->fstat(buf);
+        if (ret == 0) {
+            buf->st_blksize = ALIGNMENT;
+            buf->st_size = m_vsize;
+            buf->st_blocks = m_index->block_count();
+        }
+        return ret;
+    }
+    virtual IFileSystem *filesystem() override {
+        auto file = front_file();
+        if (!file)
+            LOG_ERROR_RETURN(ENOSYS, nullptr, "no underlying files found!");
+        return file->filesystem();
+    }
+    UNIMPLEMENTED(int close_seal(IFileRO **reopen_as = nullptr) override);
+
+    // It can commit a RO file after close_seal()
+    int commit(const CommitArgs &args) const override {
+        if (m_files.size() > 1) {
+            LOG_ERROR_RETURN(ENOTSUP, -1, "not supported: commit stacked files");
+        }
+        CompactOptions opts(&m_files, (SegmentMapping*)m_index->buffer(), m_index->size(), m_vsize, &args);
+
+        atomic_uint64_t _no_use_var(0);
+        return compact(opts, _no_use_var);
+    }
+
+    virtual DataStat data_stat() const override {
+        uint64_t size = 0;
+        auto idx_arr = ptr_array(m_index->buffer(), m_index->size());
+        for (auto x : idx_arr)
+            size += x.length * (!x.zeroed);
+        size *= ALIGNMENT;
+        DataStat ret;
+        ret.total_data_size = size;
+        ret.valid_data_size = size;
+        return ret;
+    }
+};
 
 class LSMTFile : public LSMTReadOnlyFile {
 public:
