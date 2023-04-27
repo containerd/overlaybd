@@ -52,6 +52,12 @@ elif [[ ${OS} =~ "centos" ]]; then
     yum install -y epel-release libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel
     yum install -y rpm-build make git wget sudo
     yum install --skip-broken -y libzstd-static libzstd-devel
+elif [[ ${OS} =~ "mariner" ]]; then
+    yum install -y libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel glibc-devel libzstd-devel binutils ca-certificates-microsoft build-essential
+    yum install -y rpm-build make git wget sudo tar gcc gcc-c++
+
+    DISTRO=${OS/:/}
+    PACKAGE_RELEASE="-DPACKAGE_RELEASE=2${DISTRO}"
 fi
 
 if [[ ${ARCH} == "x86_64" ]]; then
