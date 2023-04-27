@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
     std::string data_file_path, index_file_path, commit_file_path, remote_mapping_file;
     bool compress_zfile = false;
     bool build_fastoci = false;
-    bool tar = false, rm_old = false;
+    bool tar = false, rm_old = false, seal = false, commit_sealed = false;
 
     CLI::App app{"this is overlaybd-commit"};
     app.add_option("-m", commit_msg, "add some custom message if needed");
@@ -70,24 +70,41 @@ int main(int argc, char **argv) {
            "The size of a data block in KB. Must be a power of two between 4K~64K [4/8/16/32/64](default 4)");
     app.add_flag("--fastoci", build_fastoci, "commit using fastoci format")->default_val(false);
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
-    app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
-    app.add_option("commit_file", commit_file_path, "commit file path")->type_name("FILEPATH")->required();
+    app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH");
+    app.add_option("commit_file", commit_file_path, "commit file path")->type_name("FILEPATH");
+    app.add_flag("--seal", seal, "seal only, data_file is output itself")->default_val(false);
+    app.add_flag("--commit_sealed", commit_sealed, "commit sealed, index_file is output")->default_val(false);
     CLI11_PARSE(app, argc, argv);
 
     set_log_output_level(1);
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
 
     IFileSystem *lfs = new_localfs_adaptor();
-    IFile* fdata = open_file(lfs, data_file_path.c_str(), O_RDONLY, 0);
-    IFile* findex = open_file(lfs, index_file_path.c_str(), O_RDONLY, 0);
+
+    IFile* fdata = open_file(lfs, data_file_path.c_str(), O_RDWR, 0);
     IFileRW* fin = nullptr;
     if (build_fastoci) {
-        LOG_INFO("commit LSMTWarpFile with args: {index_file: `, fsmeta: `",
+        LOG_INFO("commit LSMTWarpFile with args: {index_file: `, fsmeta: `}",
             index_file_path, data_file_path);
+        IFile* findex = open_file(lfs, index_file_path.c_str(), O_RDONLY, 0);
         fin = open_warpfile_rw(findex, fdata, nullptr, true);
+    } if (commit_sealed) {
+        fin = (IFileRW*)open_file_ro(fdata, true);
+        commit_file_path = index_file_path; // the second param is for commit path
     } else {
+        IFile* findex = open_file(lfs, index_file_path.c_str(), O_RDONLY, 0);
         fin = open_file_rw(fdata, findex, true);
     }
+
+    if (seal) {
+        if (fin->close_seal() < 0) {
+            fprintf(stderr, "failed to perform seal, %d: %s\n", errno, strerror(errno));
+            return -1;
+        }
+        delete fin;
+        return 0;
+    }
+
     if (rm_old) {
         lfs->unlink(commit_file_path.c_str());
     }
