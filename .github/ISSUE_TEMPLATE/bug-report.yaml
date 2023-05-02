@@ -45,7 +45,7 @@ body:
       required: true
     attributes:
       label: What is the version of your Overlaybd?
-      description: "You can find the released versoins from https://github.com/containerd/overlaybd/releases."
+      description: "You can find the released versions from https://github.com/containerd/overlaybd/releases."
   - type: input
     id: os
     validations:
