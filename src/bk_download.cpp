@@ -109,14 +109,17 @@ bool BkDownload::download_done() {
     new_name = dir + "/" + COMMIT_FILE_NAME;
 
     // verify sha256
-    auto th = photon::CURRENT;
+    photon::semaphore done;
     std::string shares;
-    std::thread sha256_thread([&, th]() {
+    std::thread sha256_thread([&]() {
         shares = sha256sum(old_name.c_str());
-        photon::thread_interrupt(th, EINTR);
+        done.signal(1);
     });
     sha256_thread.detach();
-    photon::thread_usleep(-1UL);
+    while (running == 1) {
+        if (done.wait(1, 200 * 1000) == 0)
+            break;
+    }
     if (shares != digest) {
         LOG_ERROR("verify checksum ` failed (expect: `, got: `)", old_name, digest, shares);
         force_download = true; // force redownload next time
@@ -128,17 +131,17 @@ bool BkDownload::download_done() {
         LOG_ERROR("rename(`,`), `:`", old_name, new_name, errno, strerror(errno));
         return false;
     }
-    LOG_INFO("download done. rename(`,`) success", old_name, new_name);
+    LOG_INFO("download verify done. rename(`,`) success", old_name, new_name);
     return true;
 }
 
-bool BkDownload::download(int &running) {
+bool BkDownload::download() {
     if (check_downloaded(dir)) {
         switch_to_local_file();
         return true;
     }
 
-    if (download_blob(running)) {
+    if (download_blob()) {
         if (!download_done())
             return false;
         switch_to_local_file();
@@ -149,7 +152,7 @@ bool BkDownload::download(int &running) {
 
 bool BkDownload::lock_file() {
     if (lock_files.find(dir) != lock_files.end()) {
-        LOG_WARN("failded to lock download path:`", dir);
+        LOG_WARN("failed to lock download path:`", dir);
         return false;
     }
     lock_files.insert(dir);
@@ -160,7 +163,7 @@ void BkDownload::unlock_file() {
     lock_files.erase(dir);
 }
 
-bool BkDownload::download_blob(int &running) {
+bool BkDownload::download_blob() {
     std::string dl_file_path = dir + "/" + DOWNLOAD_TMP_NAME;
     try_cnt--;
     IFile *src = src_file;
@@ -231,6 +234,7 @@ bool BkDownload::download_blob(int &running) {
         }
         offset += count;
     }
+    LOG_INFO("download blob done. (`)", dl_file_path);
     return true;
 }
 
@@ -260,7 +264,7 @@ void bk_download_proc(std::list<BKDL::BkDownload *> &dl_list, uint64_t delay_sec
             continue;
         }
 
-        bool succ = dl_item->download(running);
+        bool succ = dl_item->download();
         dl_item->unlock_file();
 
         if (running != 1) {
@@ -287,7 +291,7 @@ void bk_download_proc(std::list<BKDL::BkDownload *> &dl_list, uint64_t delay_sec
             delete dl_item;
         }
     }
-    LOG_DEBUG("BACKGROUND DOWNLOAD THREAD EXIT.");
+    LOG_INFO("BACKGROUND DOWNLOAD THREAD EXIT.");
 }
 
 } // namespace BKDL
