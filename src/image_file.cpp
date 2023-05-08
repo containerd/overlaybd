@@ -185,7 +185,7 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
         } else {
             BKDL::BkDownload *obj =
                 new BKDL::BkDownload(switch_file, srcfile, size, dir, conf.download().maxMBps(),
-                                     conf.download().tryCnt(), this, digest);
+                                     conf.download().tryCnt(), this, digest, m_status);
             LOG_DEBUG("add to download list for `", dir);
             dl_list.push_back(obj);
         }
