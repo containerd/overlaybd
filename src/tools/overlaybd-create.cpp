@@ -24,6 +24,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include "../overlaybd/lsmt/file.h"
+#include "../overlaybd/extfs/extfs.h"
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
 #include <photon/common/uuid.h>
@@ -50,11 +51,13 @@ int main(int argc, char **argv) {
     bool sparse = false;
     std::string data_file_path, index_file_path, warp_index_path;
     bool build_fastoci = false;
+    bool mkfs = false;
 
     CLI::App app{"this is overlaybd-create"};
     app.add_option("-u", parent_uuid, "parent uuid");
     app.add_flag("-s", sparse, "create sparse RW layer")->default_val(false);
     app.add_flag("--fastoci", build_fastoci, "commit using fastoci format")->default_val(false);
+    app.add_flag("--mkfs", mkfs, "mkfs after create")->default_val(false);
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->required();
     app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->required();
     app.add_option("vsize", vsize, "virtual size(GB)")->type_name("INT")->check(CLI::PositiveNumber)->required();
@@ -86,6 +89,14 @@ int main(int argc, char **argv) {
         fprintf(stderr, "failed to create lsmt file object, possibly I/O error!\n");
         exit(-1);
     }
+
+    if (mkfs) {
+        if (make_extfs(file) < 0) {
+            fprintf(stderr, "mkfs failed, %s\n", strerror(errno));
+            exit(-1);
+        }
+    }
+
     delete file;
     delete fdata;
     delete findex;

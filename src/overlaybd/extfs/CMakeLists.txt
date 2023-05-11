@@ -1,5 +1,5 @@
-file(GLOB SOURCE_TAR "*.cpp")
-add_library(extfs_lib STATIC ${SOURCE_TAR})
+file(GLOB SOURCE_EXTFS "*.cpp")
+add_library(extfs_lib STATIC ${SOURCE_EXTFS})
 
 if(NOT ORIGIN_EXT2FS)
   find_package(ext2fs REQUIRED)

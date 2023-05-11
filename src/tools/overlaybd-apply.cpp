@@ -54,10 +54,11 @@ int main(int argc, char **argv) {
     string commit_msg;
     string parent_uuid;
     std::string image_config_path, input_path, gz_index_path, config_path;
-    bool raw = false, verbose = false;
+    bool raw = false, mkfs = false, verbose = false;
 
     CLI::App app{"this is overlaybd-apply, apply OCIv1 tar layer to overlaybd format"};
     app.add_flag("--raw", raw, "apply to raw image")->default_val(false);
+    app.add_flag("--mkfs", mkfs, "mkfs before apply")->default_val(false);
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     app.add_option("--service_config_path", config_path, "overlaybd image service config path")->type_name("FILEPATH")->check(CLI::ExistingFile);
     app.add_option("--gz_index_path", gz_index_path, "build gzip index if layer is gzip, only used with fastoci")->type_name("FILEPATH");
@@ -88,6 +89,13 @@ int main(int argc, char **argv) {
     if (imgfile == nullptr) {
         fprintf(stderr, "failed to create image file\n");
         exit(-1);
+    }
+
+    if (mkfs) {
+        if (make_extfs(imgfile) < 0) {
+            fprintf(stderr, "mkfs failed, %s\n", strerror(errno));
+            exit(-1);
+        }
     }
     // for now, buffer_file can't be used with fastoci
     auto extfs = new_extfs(imgfile, gz_index_path == "");

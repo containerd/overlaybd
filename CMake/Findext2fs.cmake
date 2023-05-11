@@ -4,7 +4,7 @@ set(FETCHCONTENT_QUIET false)
 FetchContent_Declare(
   e2fsprogs
   GIT_REPOSITORY https://github.com/data-accelerator/e2fsprogs.git
-  GIT_TAG b4d19a0ec5cb535f13009d910833c62aa70d69a5
+  GIT_TAG 5c1a47716d56c2f543058c1499fdd7742e3dd2b1
 )
 
 FetchContent_MakeAvailable(e2fsprogs)

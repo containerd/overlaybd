@@ -67,12 +67,26 @@ jobs:
         sudo apt-get install -y lsscsi
         dev=`lsscsi | grep TCMU | awk '{print $7}'`
         echo $dev
-        sudo mkdir obd_mp
+        mkdir obd_mp
         sudo mount -o ro $dev obd_mp
         ls obd_mp
         sudo umount obd_mp
         ls -l /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0/vol1
         sudo unlink /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0/vol1
+        wget https://overlaybd.blob.core.windows.net/overlaybd/e2etest.tar.gz
+        gzip -k -d e2etest.tar.gz
+        mkdir test_data
+        tar -zxvf e2etest.tar.gz -C test_data/
+        truncate -s 2g img1
+        truncate -s 2g img2
+        /opt/overlaybd/bin/overlaybd-apply --mkfs --raw e2etest.tar img1
+        sleep 2
+        /opt/overlaybd/bin/overlaybd-apply --mkfs --raw e2etest.tar img2
+        diff img1 img2
+        sudo mount -o ro img1 obd_mp
+        ls obd_mp
+        sudo diff -r --exclude "lost+found" test_data obd_mp
+        sudo umount obd_mp
     - name: E2E Test FastOCI
       working-directory: ${{github.workspace}}/build
       shell: bash
