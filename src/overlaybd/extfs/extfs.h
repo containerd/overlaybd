@@ -28,3 +28,7 @@ public:
 
 IOManager *new_io_manager(photon::fs::IFile *file);
 photon::fs::IFileSystem *new_extfs(photon::fs::IFile *file, bool buffer = true);
+
+// make extfs on an prezeroed IFile,
+// should be truncated to specified size in advance
+int make_extfs(photon::fs::IFile *file);
