@@ -116,10 +116,9 @@ bool BkDownload::download_done() {
         done.signal(1);
     });
     sha256_thread.detach();
-    while (running == 1) {
-        if (done.wait(1, 200 * 1000) == 0)
-            break;
-    }
+    // wait verify finish
+    done.wait(1);
+
     if (shares != digest) {
         LOG_ERROR("verify checksum ` failed (expect: `, got: `)", old_name, digest, shares);
         force_download = true; // force redownload next time
