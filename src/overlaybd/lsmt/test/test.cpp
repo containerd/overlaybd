@@ -604,6 +604,23 @@ TEST_F(FileTest3, stack_files) {
     delete file;
 }
 
+TEST_F(FileTest3, sparsefile_close_seal) {
+    CleanUp();
+    cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
+    auto file = create_a_layer(true);
+    IFileRO *fdup;
+    file->close_seal(&fdup);
+    verify_file(fdup);
+    auto fcommit = lfs->open(layer_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    CommitArgs args(fcommit);
+    ((LSMTReadOnlyFile*)fdup)->commit(args);
+    fcommit->close();
+    fcommit = (IFile*)open_file_ro(layer_name.back().c_str());
+    verify_file((IFileRO*)fcommit);
+    delete fcommit;
+    delete file;
+}
+
 TEST_F(FileTest3, stack_sparsefiles) {
     CleanUp();
     cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
