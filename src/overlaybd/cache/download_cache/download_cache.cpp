@@ -27,7 +27,7 @@
 #include <photon/thread/thread.h>
 #include <photon/common/io-alloc.h>
 #include <photon/common/expirecontainer.h>
-#include "thread_range_lock.h"
+#include <photon/common/range-lock.h>
 
 #define SET_LOCAL_DIR 118
 #define SET_SIZE 119
@@ -50,7 +50,7 @@ public:
     using ForwardFile_Ownership::pwritev;
 
     int fallocate(int mode, off_t offset, off_t len) override {
-        ThreadScopedRangeLock lock(m_range_lock, offset, len);
+        ScopedRangeLock lock(m_range_lock, offset, len);
         return m_file->fallocate(mode, offset, len);
     }
     int ftruncate(off_t length) override {
@@ -64,14 +64,14 @@ public:
         return m_range_lock.try_lock_wait(offset, length);
     }
     void lock(uint64_t offset, uint64_t length) {
-        return m_range_lock.lock(offset, length);
+        m_range_lock.lock(offset, length);
     }
     void unlock(uint64_t offset, uint64_t length) {
         m_range_lock.unlock(offset, length);
     }
 
 private:
-    ThreadRangeLock m_range_lock;
+    RangeLock m_range_lock;
     DownloadCacheFs *m_fs;
 };
 
