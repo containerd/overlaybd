@@ -678,6 +678,9 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
     auto ibuf = std::unique_ptr<uint32_t[]>(new uint32_t[pht->index_size]);
     LOG_DEBUG("index_offset: `", pht->index_offset);
     ret = file->pread((void *)(ibuf.get()), index_bytes, pht->index_offset);
+    if (ret < index_bytes) {
+        LOG_ERRNO_RETURN(0, false, "failed to read index");
+    }
     jump_table.build(ibuf.get(), pht->index_size,
                      CompressionFile::HeaderTrailer::SPACE + pht->opt.dict_size,
                      pht->opt.block_size);
