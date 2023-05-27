@@ -130,7 +130,7 @@ public:
         //use p2p proxy
         estring accelerate_url;
         if(m_accelerate.size() > 0) {
-            accelerate_url = m_accelerate + "/" + *actual_url;
+            accelerate_url = estring().appends(m_accelerate, "/", *actual_url);
             actual_url = &accelerate_url;
             LOG_DEBUG("p2p_url: `", *actual_url);
         }
@@ -280,8 +280,8 @@ protected:
                              challengeLine);
         }
         *scope = estring(kv["scope"]);
-        *authurl = estring(kv["realm"]) + "?service=" + estring(kv["service"]) +
-                    "&scope=" + estring(kv["scope"]);
+        *authurl = estring().appends(kv["realm"], "?service=", kv["service"],
+                    "&scope=", kv["scope"]);
         return 0;
     }
 

@@ -232,7 +232,7 @@ static int single_file_file_cache(IOAlloc *io_alloc, photon::fs::IFileSystem *sr
 
     estring filename = FLAGS_src_file;
     if (!filename.starts_with("/")) {
-        filename = "/" + filename;
+        filename = estring().appends("/", filename);
     }
 
     auto file = cached_fs->open(filename.c_str(), O_RDONLY, 0644);

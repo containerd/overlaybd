@@ -142,7 +142,7 @@ private:
             .info = info,
         };
 
-        auto tmp_file_path = file_path + ".tmp";
+        auto tmp_file_path = estring().appends(file_path, ".tmp");
         {
             auto tmp_file = m_fs->open(tmp_file_path.c_str(), O_WRONLY | O_TRUNC | O_CREAT, 0644);
             if (tmp_file == nullptr) {

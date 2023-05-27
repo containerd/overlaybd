@@ -161,6 +161,7 @@ int FileCacheStore::evict(off_t offset, size_t count) {
 #ifndef FALLOC_FL_PUNCH_HOLE
 #define FALLOC_FL_PUNCH_HOLE 0x02 /* de-allocates range */
 #endif
+        ScopedRangeLock lock(rangeLock_, offset, count);
         int mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE;
         return localFile_->fallocate(mode, offset, count);
     }
