@@ -17,6 +17,7 @@
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/subfs.h>
+#include <photon/fs/virtual-file.h>
 #include <photon/photon.h>
 #include "../overlaybd/lsmt/file.h"
 #include "../overlaybd/zfile/zfile.h"
@@ -37,9 +38,60 @@
 #include "../image_service.h"
 #include "../image_file.h"
 #include "CLI11.hpp"
+#include <openssl/sha.h>
 
 using namespace std;
 using namespace photon::fs;
+
+class SHA256CheckedFile: public VirtualReadOnlyFile {
+public:
+    IFile *m_file;
+    SHA256_CTX ctx = {0};
+    size_t total_read = 0;
+
+    SHA256CheckedFile(IFile *file): m_file(file) {
+        SHA256_Init(&ctx);
+    }
+    ~SHA256CheckedFile() {
+        delete m_file;
+    }
+    virtual IFileSystem *filesystem() override {
+        return nullptr;
+    }
+    ssize_t read(void *buf, size_t count) override {
+        auto rc = m_file->read(buf, count);
+        if (rc > 0 && SHA256_Update(&ctx, buf, rc) < 0) {
+            LOG_ERROR("sha256 calculate error");
+            return -1;
+        }
+        return rc;
+    }
+    off_t lseek(off_t offset, int whence) override {
+        return m_file->lseek(offset, whence);
+    }
+    std::string sha256_checksum() {
+        // read trailing data
+        char buf[64*1024];
+        auto rc = m_file->read(buf, 64*1024);
+        if (rc == 64*1024) {
+            LOG_WARN("too much trailing data");
+        }
+        if (rc > 0 && SHA256_Update(&ctx, buf, rc) < 0) {
+            LOG_ERROR("sha256 calculate error");
+            return "";
+        }
+        // calc sha256 result
+        unsigned char sha[32];
+        SHA256_Final(sha, &ctx);
+        char res[SHA256_DIGEST_LENGTH * 2];
+        for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
+            sprintf(res + (i * 2), "%02x", sha[i]);
+        return "sha256:" + std::string(res, SHA256_DIGEST_LENGTH * 2);
+    }
+    int fstat(struct stat *buf) override {
+        return m_file->fstat(buf);
+    }
+};
 
 IFile *open_file(const char *fn, int flags, mode_t mode = 0) {
     auto file = open_localfile_adaptor(fn, flags, mode, 0);
@@ -53,7 +105,7 @@ IFile *open_file(const char *fn, int flags, mode_t mode = 0) {
 int main(int argc, char **argv) {
     string commit_msg;
     string parent_uuid;
-    std::string image_config_path, input_path, gz_index_path, config_path;
+    std::string image_config_path, input_path, gz_index_path, config_path, sha256_checksum;
     bool raw = false, mkfs = false, verbose = false;
 
     CLI::App app{"this is overlaybd-apply, apply OCIv1 tar layer to overlaybd format"};
@@ -62,6 +114,7 @@ int main(int argc, char **argv) {
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     app.add_option("--service_config_path", config_path, "overlaybd image service config path")->type_name("FILEPATH")->check(CLI::ExistingFile);
     app.add_option("--gz_index_path", gz_index_path, "build gzip index if layer is gzip, only used with fastoci")->type_name("FILEPATH");
+    app.add_option("--checksum", sha256_checksum, "sha256 checksum for origin uncompressed data");
     app.add_option("input_path", input_path, "input OCIv1 tar layer path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     app.add_option("image_config_path", image_config_path, "overlaybd image config path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     CLI11_PARSE(app, argc, argv);
@@ -81,7 +134,7 @@ int main(int argc, char **argv) {
         }
         if (imgservice == nullptr) {
             fprintf(stderr, "failed to create image service\n");
-            return -1;
+            exit(-1);
         }
         imgfile = imgservice->create_image_file(image_config_path.c_str());
     }
@@ -110,18 +163,24 @@ int main(int argc, char **argv) {
     }
 
     photon::fs::IFile* src_file = nullptr;
+    SHA256CheckedFile* checksum_file = nullptr;
 
     auto tarf = open_file(input_path.c_str(), O_RDONLY, 0666);
     DEFER(delete tarf);
 
-    if (gz_index_path != "" && is_gzfile(tarf)) {
-        auto res = create_gz_index(tarf, gz_index_path.c_str(), 1024*1024);
-        LOG_INFO("create_gz_index ", VALUE(res));
-        tarf->lseek(0, 0);
-
+    if (is_gzfile(tarf)) {
+        if (gz_index_path != "") {
+            auto res = create_gz_index(tarf, gz_index_path.c_str(), 1024*1024);
+            LOG_INFO("create_gz_index ", VALUE(res));
+            tarf->lseek(0, 0);
+        }
         src_file = open_gzfile_adaptor(input_path.c_str());
     } else {
         src_file = tarf;
+    }
+
+    if (!sha256_checksum.empty()) {
+        src_file = checksum_file = new SHA256CheckedFile(src_file);
     }
 
     photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
@@ -130,7 +189,14 @@ int main(int argc, char **argv) {
         fprintf(stderr, "failed to extract\n");
         exit(-1);
     } else {
-        fprintf(stderr, "overlaybd-apply done\n");
+        if (checksum_file != nullptr) {
+            auto calc = checksum_file->sha256_checksum();
+            if (calc != sha256_checksum) {
+                fprintf(stderr, "sha256 checksum mismatch, expect: %s, got: %s\n", sha256_checksum.c_str(), calc.c_str());
+                exit(-1);
+            }
+        }
+        fprintf(stdout, "overlaybd-apply done\n");
     }
 
     delete target;
