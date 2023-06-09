@@ -403,7 +403,7 @@ public:
     again:
         photon::net::IOVWriter container(iov, iovcnt);
         auto count = container.sum();
-        if ((ssize_t)count + offset > filesize)
+        if (count + offset > filesize)
             count = filesize - offset;
         LOG_DEBUG("pulling blob from docker registry: ", VALUE(m_url), VALUE(offset), VALUE(count));
 

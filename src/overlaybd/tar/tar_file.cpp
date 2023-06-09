@@ -256,7 +256,7 @@ private:
     }
 
     std::string format_pax_record(const std::string &key, const std::string &value) {
-        int size = key.length() + value.length() + 3; // padding for ' ', '=' and '\n'
+        size_t size = key.length() + value.length() + 3; // padding for ' ', '=' and '\n'
         size += to_string(size).length();
         std::string record = to_string(size) + " " + key + "=" + value + "\n";
         if (record.length() != size) {

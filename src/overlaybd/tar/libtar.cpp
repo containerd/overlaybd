@@ -207,7 +207,7 @@ int UnTar::extract_regfile_meta_only(const char *filename) {
     fout->fallocate(0, 0, size);
     struct photon::fs::fiemap_t<8192> fie(0, size);
     fout->fiemap(&fie);
-    for (int i = 0; i < fie.fm_mapped_extents; i++) {
+    for (uint32_t i = 0; i < fie.fm_mapped_extents; i++) {
         LSMT::RemoteMapping lba;
         lba.offset = fie.fm_extents[i].fe_physical;
         lba.count = fie.fm_extents[i].fe_length;
@@ -252,11 +252,11 @@ int UnTar::extract_regfile(const char *filename) {
             rsz = left & fs_blockmask;
         else
             rsz = (left & ~T_BLOCKMASK) ? (left & T_BLOCKMASK) + T_BLOCKSIZE : (left & T_BLOCKMASK);
-        if (file->read(buf, rsz) != rsz) {
+        if (file->read(buf, rsz) != (ssize_t)rsz) {
             LOG_ERRNO_RETURN(0, -1, "failed to read block");
         }
         size_t wsz = (left < rsz) ? left : rsz;
-        if (fout->pwrite(buf, wsz, pos) != wsz) {
+        if (fout->pwrite(buf, wsz, pos) != (ssize_t)wsz) {
             LOG_ERRNO_RETURN(0, -1, "failed to write file");
         }
         pos += wsz;

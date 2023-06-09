@@ -226,13 +226,13 @@ again:
         read = m_file->preadv(buffer.iovec(), buffer.iovcnt(), r_offset);
     }
 
-    if (read != r_count) {
+    if (read != (ssize_t)r_count) {
         LOG_ERRNO_RETURN(0, -1, "src file read failed, read: `, expect: `, size: `, offset: `",
                          read, r_count, m_size, r_offset);
     }
 
     auto write = m_local_file->pwritev(buffer.iovec(), buffer.iovcnt(), r_offset);
-    if (write != r_count) {
+    if (write != (ssize_t)r_count) {
         LOG_ERRNO_RETURN(0, -1, "local file write failed, write: `, expect: `, size: `, offset: `",
                          write, r_count, m_size, r_offset);
     }

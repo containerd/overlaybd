@@ -356,7 +356,7 @@ public:
     again:
         iovector_view view((struct iovec*)iov, iovcnt);
         auto count = view.sum();
-        if ((ssize_t)count + offset > filesize)
+        if (count + offset > filesize)
             count = filesize - offset;
         LOG_DEBUG("pulling blob from registry: ", VALUE(m_url), VALUE(offset), VALUE(count));
 

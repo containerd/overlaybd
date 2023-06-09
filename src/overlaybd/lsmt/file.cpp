@@ -180,7 +180,7 @@ struct HeaderTrailer {
 
 class LSMTReadOnlyFile;
 static LSMTReadOnlyFile *open_file_ro(IFile *file, bool ownership, bool reserve_tag);
-static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer = false, size_t st_size = -1);
+static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer = false, ssize_t st_size = -1);
 
 static const uint32_t ALIGNMENT = 512; // same as trim block size.
 static const uint32_t ALIGNMENT4K = 4096;
@@ -1111,7 +1111,7 @@ public:
         LOG_DEBUG("write index to dest_file `, offset: `, size: `*`", dest_file, index_offset,
                   index_size, sizeof(SegmentMapping));
         auto nwrite = dest_file->write(&compact_index[0], index_size * sizeof(SegmentMapping));
-        if (nwrite != (ssize_t)index_size * sizeof(SegmentMapping)) {
+        if (nwrite != (ssize_t)(index_size * sizeof(SegmentMapping))) {
             LOG_ERRNO_RETURN(0, -1, "write index failed");
         }
         nindex = index_size;
@@ -1145,7 +1145,7 @@ public:
     }
 };
 
-static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer, size_t st_size) {
+static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer, ssize_t st_size) {
     if (file == nullptr) {
         LOG_ERRNO_RETURN(0, nullptr, "invalid file ptr (null).");
     }

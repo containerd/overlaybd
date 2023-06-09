@@ -465,10 +465,10 @@ public:
 static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, bool is_data_file,
                                 CompressionFile::HeaderTrailer *pht, off_t offset = -1);
 
-size_t compress_data(ICompressor *compressor, const unsigned char *buf, size_t count,
+ssize_t compress_data(ICompressor *compressor, const unsigned char *buf, size_t count,
                      unsigned char *dest_buf, size_t dest_len, bool gen_crc) {
 
-    size_t compressed_len = 0;
+    ssize_t compressed_len = 0;
     auto ret = compressor->compress((const unsigned char *)buf, count, dest_buf, dest_len);
     if (ret <= 0) {
         LOG_ERRNO_RETURN(0, -1, "compress data failed.");
@@ -589,8 +589,8 @@ public:
             reserved_size = 0;
         }
         auto prev = moffset;
-        for (off_t i = 0; i < count; i += m_opt.block_size) {
-            if (i + m_opt.block_size > count) {
+        for (off_t i = 0; i < (ssize_t)count; i += m_opt.block_size) {
+            if (i + m_opt.block_size > (ssize_t)count) {
                 memcpy(reserved_buf, (unsigned char *)buf + i, count - i);
                 reserved_size = count - i;
                 LOG_DEBUG("reserved data size: `", reserved_size);
@@ -678,7 +678,7 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
     auto ibuf = std::unique_ptr<uint32_t[]>(new uint32_t[pht->index_size]);
     LOG_DEBUG("index_offset: `", pht->index_offset);
     ret = file->pread((void *)(ibuf.get()), index_bytes, pht->index_offset);
-    if (ret < index_bytes) {
+    if (ret < (ssize_t)index_bytes) {
         LOG_ERRNO_RETURN(0, false, "failed to read index");
     }
     jump_table.build(ibuf.get(), pht->index_size,
@@ -824,7 +824,7 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
                           sizeof(uint32_t), moffset, compressed_len[j], crc32_code);
                 compressed_len[j] += sizeof(uint32_t);
                 ret = as->write(&crc32_code, sizeof(uint32_t));
-                if (ret < sizeof(uint32_t)) {
+                if (ret < (ssize_t)sizeof(uint32_t)) {
                     LOG_ERRNO_RETURN(0, -1, "failed to write crc32code, offset: `, crc32: `",
                                      moffset, crc32_code);
                 }
