@@ -12,6 +12,7 @@ file(GLOB_RECURSE src_ocf ocf/src/*.c)
 add_library(ocf_lib STATIC ${src_ocf})
 target_include_directories(ocf_lib PUBLIC include/ ease_bindings/env/)
 target_link_libraries(ocf_lib ocf_env_lib z)
+target_compile_options(ocf_lib PUBLIC -Wno-sign-compare)
 
 # ocf_cache_lib
 file(GLOB src_ocf_cache ocf_cache.cpp ocf_namespace.cpp ease_bindings/*.cpp)

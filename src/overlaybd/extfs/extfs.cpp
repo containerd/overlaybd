@@ -813,7 +813,7 @@ int do_ext2fs_access(ext2_filsys fs, const char *path, int mode) {
     mode_t perms = inode.i_mode & 0777;
     if ((mode & W_OK) && (inode.i_flags & EXT2_IMMUTABLE_FL))
         return -EACCES;
-    if ((mode & perms) == mode)
+    if ((mode & perms) == (mode_t)mode)
         return 0;
     return -EACCES;
 }
@@ -996,7 +996,7 @@ int do_ext2fs_fiemap(ext2_filsys fs, ext2_ino_t ino, struct photon::fs::fiemap* 
     if (ret) return parse_extfs_error(fs, ino, ret);
     map->fm_mapped_extents = blocks.size();
     photon::fs::fiemap_extent *ext_buf = &map->fm_extents[0];
-    for (int i = 0; i < blocks.size(); i++) {
+    for (uint32_t i = 0; i < blocks.size(); i++) {
         LOG_DEBUG("find block ` `", blocks[i].first * fs->blocksize, blocks[i].second * fs->blocksize);
         ext_buf[i].fe_physical = blocks[i].first * fs->blocksize;
         ext_buf[i].fe_length = blocks[i].second * fs->blocksize;

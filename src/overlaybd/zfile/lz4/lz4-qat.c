@@ -25,7 +25,7 @@ LZ4LIB_API int LZ4_compress_qat(LZ4_qat_param *pQat, const unsigned char *const 
                                 size_t src_chunk_len[], unsigned char *compressed_data[],
                                 size_t dst_chunk_len[], size_t n) {
     int32_t status = 0;
-    for (ssize_t i = 0; i < n; i++) {
+    for (size_t i = 0; i < n; i++) {
         int ret = LZ4_compress_default((const char *)raw_data[i], (char *)compressed_data[i],
                                         src_chunk_len[i], 4096);
         dst_chunk_len[i] = ret;
@@ -37,7 +37,7 @@ LZ4LIB_API int LZ4_decompress_qat(LZ4_qat_param *pQat, const unsigned char *cons
                                 size_t src_chunk_len[], unsigned char *decompressed_data[],
                                 size_t dst_chunk_len[], size_t n){
     int32_t status = 0;
-    for (ssize_t i = 0; i < n; i++) {
+    for (size_t i = 0; i < n; i++) {
         int ret = LZ4_decompress_safe((const char *)raw_data[i], (char *)decompressed_data[i],
                                         src_chunk_len[i], 4096);
         dst_chunk_len[i] = ret;

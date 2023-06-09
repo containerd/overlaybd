@@ -191,7 +191,7 @@ int OcfCachedFile::fadvise(off_t offset, off_t len, int advice) {
     if (advice == POSIX_FADV_WILLNEED) {
         void *buf = m_fs->get_io_alloc()->alloc(len);
         DEFER(m_fs->get_io_alloc()->dealloc(buf));
-        int ret = pread(buf, len, offset);
+        auto ret = pread(buf, len, offset);
         if (ret < 0) {
             LOG_ERROR_RETURN(0, -1, "prefetch read failed");
         }

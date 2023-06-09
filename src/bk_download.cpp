@@ -55,7 +55,7 @@ std::string sha256sum(const char *fn) {
     SHA256_Init(&ctx);
     __attribute__((aligned(ALIGNMENT))) char buffer[65536];
     unsigned char sha[32];
-    int recv = 0;
+    ssize_t recv = 0;
     for (off_t offset = 0; offset < stat.st_size; offset += BUFFERSIZE) {
         recv = pread(fd, &buffer, BUFFERSIZE, offset);
         if (recv < 0) {
