@@ -181,6 +181,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | download.delay      | The seconds waiting to start downloading task after the overlaybd device launched.                    |
 | download.delayExtra | A random extra delay is attached to delay, avoiding too many tasks started at the same time.          |
 | download.maxMBps    | The speed limit in MB/s for a downloading task.                                                       |
+| download.blockSize  | The download block size from source, in byte. `262144` is default (256 KB).                           |
 | p2pConfig.enable    | Whether p2p proxy is enabled or not.                                                                  |
 | p2pConfig.address   | The proxy for p2p download, the format is `localhost:<P2PConfig.Port>/<P2PConfig.APIKey>`, depending on dadip2p.yaml |
 | exporterConfig.enable         | whether or not create a server to show Prometheus metrics.                                  |

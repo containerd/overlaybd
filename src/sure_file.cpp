@@ -90,7 +90,7 @@ public:
             if (got_cnt == count)
                 return count;
 
-            if ((ret < 0) && (!m_ifile->m_status < 1) && (errno == EPERM)) {
+            if ((ret < 0) && (m_ifile->m_status < 1) && (errno == EPERM)) {
                 // exit when booting. after boot, hang.
                 m_ifile->set_auth_failed();
                 LOG_ERROR_RETURN(0, -1, "authentication failed during image boot.");

@@ -57,8 +57,8 @@ ImageService *imgservice = nullptr;
 
 class TCMULoop {
 protected:
-    EventLoop *loop;
     struct tcmulib_context *ctx;
+    EventLoop *loop;
     int fd;
 
     int wait_for_readable(EventLoop *) {
@@ -232,8 +232,8 @@ void *handle(void *args) {
 
 class TCMUDevLoop {
 protected:
-    EventLoop *loop;
     struct tcmu_device *dev;
+    EventLoop *loop;
     int fd;
     photon::ThreadPool<32> threadpool;
 
