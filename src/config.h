@@ -51,6 +51,7 @@ struct DownloadConfig : public ConfigUtils::Config {
     APPCFG_PARA(delayExtra, int, 30);
     APPCFG_PARA(maxMBps, int, 100);
     APPCFG_PARA(tryCnt, int, 5);
+    APPCFG_PARA(blockSize, uint32_t, 262144);
 };
 
 struct ImageConfig : public ConfigUtils::Config {

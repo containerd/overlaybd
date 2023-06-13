@@ -98,7 +98,6 @@ IFile *ImageFile::__open_ro_target_file(const std::string &path) {
 IFile *ImageFile::__open_ro_target_remote(const std::string &dir, const std::string &data_digest,
                                                const uint64_t size, int layer_index) {
     std::string url;
-    int64_t extra_range, rand_wait;
 
     if (conf.repoBlobUrl() == "") {
         set_failed("empty repoBlobUrl");
@@ -126,7 +125,6 @@ IFile *ImageFile::__open_ro_target_remote(const std::string &dir, const std::str
 IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &digest,
                                    const uint64_t size, int layer_index) {
     std::string url;
-    int64_t extra_range, rand_wait;
 
     if (conf.repoBlobUrl() == "") {
         set_failed("empty repoBlobUrl");
@@ -184,8 +182,8 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
             LOG_WARN("failed to open source file, ignore download");
         } else {
             BKDL::BkDownload *obj =
-                new BKDL::BkDownload(switch_file, srcfile, size, dir, conf.download().maxMBps(),
-                                     conf.download().tryCnt(), this, digest, m_status);
+                new BKDL::BkDownload(switch_file, srcfile, size, dir, digest, url, m_status,
+                    conf.download().maxMBps(), conf.download().tryCnt(), conf.download().blockSize());
             LOG_DEBUG("add to download list for `", dir);
             dl_list.push_back(obj);
         }
@@ -203,7 +201,8 @@ void ImageFile::start_bk_dl_thread() {
     uint64_t extra_range = conf.download().delayExtra();
     extra_range = (extra_range <= 0) ? 30 : extra_range;
     uint64_t delay_sec = (rand() % extra_range) + conf.download().delay();
-
+    LOG_INFO("background download is enabled, delay `, maxMBps `, tryCnt `, blockSize `",
+             delay_sec, conf.download().maxMBps(), conf.download().tryCnt(), conf.download().blockSize());
     dl_thread_jh = photon::thread_enable_join(
         photon::thread_create11(&BKDL::bk_download_proc, dl_list, delay_sec, m_status));
 }
@@ -211,8 +210,8 @@ void ImageFile::start_bk_dl_thread() {
 struct ParallelOpenTask {
     std::vector<IFile *> &files;
     int eno = 0;
-    std::vector<ImageConfigNS::LayerConfig> &layers;
     int i = 0, nlayers;
+    std::vector<ImageConfigNS::LayerConfig> &layers;
 
     int get_next_job_index() {
         LOG_DEBUG("create job, layer_id: `", i);
@@ -371,8 +370,6 @@ LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
     IFile *idx_file = NULL;
     IFile *target_file = NULL;
     LSMT::IFileRW *ret = NULL;
-
-    int dafa_file_flags = O_RDWR;
 
     data_file = new_sure_file_by_path(upper.data().c_str(), O_RDWR, this);
     if (!data_file) {

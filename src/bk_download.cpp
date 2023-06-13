@@ -22,6 +22,7 @@
 #include <sys/file.h>
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
+#include <photon/common/alog-audit.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/throttled-file.h>
 #include <photon/thread/thread.h>
@@ -185,7 +186,7 @@ bool BkDownload::download_blob() {
     DEFER(delete dst;);
     dst->ftruncate(file_size);
 
-    size_t bs = 256 * 1024;
+    size_t bs = block_size;
     off_t offset = 0;
     void *buff = nullptr;
     // buffer allocate, with 4K alignment
@@ -194,6 +195,7 @@ bool BkDownload::download_blob() {
         LOG_ERRNO_RETURN(0, false, "failed to allocate buffer with ", VALUE(bs));
     DEFER(free(buff));
 
+    LOG_INFO("download blob start. (`)", url);
     while (offset < file_size) {
         if (running != 1) {
             LOG_INFO("image file exit when background downloading");
@@ -216,7 +218,11 @@ bool BkDownload::download_blob() {
     again_read:
         if (!(retry--))
             LOG_ERROR_RETURN(EIO, false, "failed to read at ", VALUE(offset), VALUE(count));
-        auto rlen = src->pread(buff, bs, offset);
+        ssize_t rlen;
+        {
+            SCOPE_AUDIT("bk_download", AU_FILEOP(url, offset, rlen));
+            rlen = src->pread(buff, bs, offset);
+        }
         if (rlen < 0) {
             LOG_WARN("failed to read at ", VALUE(offset), VALUE(count), VALUE(errno), " retry...");
             goto again_read;
