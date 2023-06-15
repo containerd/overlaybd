@@ -31,9 +31,10 @@ using namespace photon::fs;
 class CachedFs : public ICachedFileSystem {
 public:
     CachedFs(IFileSystem *srcFs, ICachePool *fileCachePool, size_t pageSize, size_t refillUnit,
-             IOAlloc *allocator)
+             IOAlloc *allocator, CacheFnTransFunc fn_trans_func)
         : srcFs_(srcFs), fileCachePool_(fileCachePool), pageSize_(pageSize),
           refillUnit_(refillUnit), allocator_(allocator) {
+        fileCachePool_->set_trans_func(fn_trans_func);
     }
 
     ~CachedFs() {
@@ -137,10 +138,10 @@ private:
 namespace FileSystem {
 using namespace photon::fs;
 ICachedFileSystem *new_cached_fs(IFileSystem *src, ICachePool *pool, uint64_t pageSize,
-                                 uint64_t refillUnit, IOAlloc *allocator) {
+                                 uint64_t refillUnit, IOAlloc *allocator, CacheFnTransFunc fn_trans_func) {
     if (!allocator) {
         allocator = new IOAlloc;
     }
-    return new ::Cache::CachedFs(src, pool, pageSize, refillUnit, allocator);
+    return new ::Cache::CachedFs(src, pool, pageSize, refillUnit, allocator, fn_trans_func);
 }
 } // namespace FileSystem

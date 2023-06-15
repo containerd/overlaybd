@@ -35,7 +35,7 @@ const uint64_t kMaxFreeSpace = 50 * kGB;
 const int64_t kEvictionMark = 5ll * kGB;
 
 FileCachePool::FileCachePool(photon::fs::IFileSystem *mediaFs, uint64_t capacityInGB, uint64_t periodInUs,
-                             uint64_t diskAvailInBytes, uint64_t refillUnit, Fn_trans_func name_trans)
+                             uint64_t diskAvailInBytes, uint64_t refillUnit)
     : mediaFs_(mediaFs), capacityInGB_(capacityInGB), periodInUs_(periodInUs),
       diskAvailInBytes_(diskAvailInBytes), refillUnit_(refillUnit), totalUsed_(0), timer_(nullptr),
       running_(false), exit_(false), isFull_(false) {
@@ -44,9 +44,6 @@ FileCachePool::FileCachePool(photon::fs::IFileSystem *mediaFs, uint64_t capacity
     // keep this relation : waterMark < riskMark < capacity
     riskMark_ = std::max(capacityInBytes - kEvictionMark,
                          (static_cast<int64_t>(waterMark_) + capacityInBytes) >> 1);
-    if (name_trans != nullptr) {
-        file_name_trans = name_trans;
-    }
 }
 
 FileCachePool::~FileCachePool() {
@@ -65,8 +62,7 @@ void FileCachePool::Init() {
     timer_ = new photon::Timer(periodInUs_, {this, FileCachePool::timerHandler});
 }
 
-ICacheStore *FileCachePool::do_open(std::string_view pathname, int flags, mode_t mode) {
-    auto filename = file_name_trans(pathname);
+ICacheStore *FileCachePool::do_open(std::string_view filename, int flags, mode_t mode) {
     auto localFile = openMedia(filename, flags, mode);
     if (!localFile) {
         return nullptr;

@@ -62,7 +62,7 @@ ssize_t ICacheStore::pwritev_mutable(struct iovec *iov, int iovcnt, off_t offset
 ICachedFileSystem *new_full_file_cached_fs(IFileSystem *srcFs, IFileSystem *mediaFs,
                                            uint64_t refillUnit, uint64_t capacityInGB,
                                            uint64_t periodInUs, uint64_t diskAvailInBytes,
-                                           IOAlloc *allocator, Fn_trans_func name_trans) {
+                                           IOAlloc *allocator, CacheFnTransFunc name_trans) {
     if (refillUnit % 4096 != 0) {
         LOG_ERROR_RETURN(EINVAL, nullptr, "refill Unit need to be aligned to 4KB")
     }
@@ -71,37 +71,45 @@ ICachedFileSystem *new_full_file_cached_fs(IFileSystem *srcFs, IFileSystem *medi
     }
     Cache::FileCachePool *pool = nullptr;
     pool =
-        new ::Cache::FileCachePool(mediaFs, capacityInGB, periodInUs, diskAvailInBytes, refillUnit, name_trans);
+        new ::Cache::FileCachePool(mediaFs, capacityInGB, periodInUs, diskAvailInBytes, refillUnit);
     pool->Init();
-    return new_cached_fs(srcFs, pool, 4096, refillUnit, allocator);
+    return new_cached_fs(srcFs, pool, 4096, refillUnit, allocator, name_trans);
 }
 
 ICacheStore *ICachePool::open(std::string_view filename, int flags, mode_t mode) {
+    char store_name[4096];
+    ssize_t len = this->fn_trans_func(filename, store_name, sizeof(store_name));
+    std::string_view store_sv = len ? std::string_view(store_name, len) : filename;
     ICacheStore *cache_store = nullptr;
-    auto it = m_stores.find(filename);
+    auto it = m_stores.find(store_sv);
     if (it != m_stores.end())
         cache_store = it->second;
     if (cache_store == nullptr) {
-        cache_store = this->do_open(filename, flags, mode);
+        cache_store = this->do_open(store_sv, flags, mode);
         if (nullptr == cache_store) {
             LOG_ERRNO_RETURN(0, nullptr, "fileCachePool_ open file failed, name : `",
-                             filename.data());
+                             store_sv.data());
         }
-        m_stores.emplace(filename, cache_store);
-        auto it = m_stores.find(filename);
+        m_stores.emplace(store_sv, cache_store);
+        auto it = m_stores.find(store_sv);
         std::string_view map_key = it->first;
-        cache_store->set_pathname(map_key);
+        cache_store->set_store_key(map_key);
+        cache_store->set_src_name(filename);
         cache_store->set_pool(this);
     }
     cache_store->add_ref();
     return cache_store;
 }
 
+void ICachePool::set_trans_func(CacheFnTransFunc fn_trans_func) {
+    this->fn_trans_func = fn_trans_func;
+}
+
 int ICachePool::store_release(ICacheStore *store) {
-    auto iter = m_stores.find(store->get_pathname());
+    auto iter = m_stores.find(store->get_store_key());
     if (iter == m_stores.end()) {
         LOG_ERROR_RETURN(0, -1, "try to erase an unexist store from map m_stores , name : `",
-                         store->get_pathname().data());
+                         store->get_store_key().data());
     }
     m_stores.erase(iter);
     return 0;

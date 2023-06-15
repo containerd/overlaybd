@@ -274,8 +274,19 @@ void ImageService::set_result_file(std::string &filename, std::string &data) {
               data.c_str());
 }
 
-static std::string cache_fn_trans_sha256(std::string_view path) {
-    return std::string(photon::fs::Path(path).basename());
+size_t cache_fn_trans_sha256(void *, std::string_view src, char *dest, size_t size) {
+    auto p = src.find("/sha256:");
+    if (p == std::string_view::npos) {
+        return 0;
+    }
+    size_t len = src.size() - p;
+    if (len + 1 > size) {
+        LOG_WARN("filename length ` exceed `", len, size);
+        return 0;
+    }
+    strncpy(dest, src.data() + p, len + 1);
+    dest[len] = '\0';
+    return len;
 }
 
 bool check_accelerate_url(std::string_view a_url) {
@@ -364,7 +375,6 @@ int ImageService::init() {
         }
 
         global_fs.io_alloc = new IOAlloc;
-
         if (cache_type == "file") {
             auto registry_cache_fs = new_localfs_adaptor(cache_dir.c_str());
             if (registry_cache_fs == nullptr) {
@@ -374,7 +384,7 @@ int ImageService::init() {
             // file cache will delete its src_fs automatically when destructed
             global_fs.remote_fs = FileSystem::new_full_file_cached_fs(
                 global_fs.srcfs, registry_cache_fs, refill_size, cache_size_GB, 10000000,
-                (uint64_t)1048576 * 4096, global_fs.io_alloc, cache_fn_trans_sha256);
+                (uint64_t)1048576 * 4096, global_fs.io_alloc, {nullptr, cache_fn_trans_sha256});
 
         } else if (cache_type == "ocf") {
             auto namespace_dir = std::string(cache_dir + "/namespace");

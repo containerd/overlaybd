@@ -100,8 +100,9 @@ public:
 };
 
 extern "C" {
-ICachedFileSystem *new_cached_fs(photon::fs::IFileSystem *src, ICachePool *pool, uint64_t pageSize,
-                                 uint64_t refillUnit, IOAlloc *allocator);
+ICachedFileSystem *new_cached_fs(photon::fs::IFileSystem *src, ICachePool *pool,
+                                 uint64_t pageSize, uint64_t refillUnit,
+                                 IOAlloc *allocator, CacheFnTransFunc fn_trans_func = nullptr);
 
 /** Full file cache will automatically delete its media_fs when destructed */
 ICachedFileSystem *new_full_file_cached_fs(photon::fs::IFileSystem *srcFs,
@@ -109,7 +110,7 @@ ICachedFileSystem *new_full_file_cached_fs(photon::fs::IFileSystem *srcFs,
                                            uint64_t refillUnit, uint64_t capacityInGB,
                                            uint64_t periodInUs, uint64_t diskAvailInBytes,
                                            IOAlloc *allocator,
-                                           Fn_trans_func name_trans = ICachePool::same_name_trans);
+                                           CacheFnTransFunc fn_trans_func = nullptr);
 
 /**
  * @param blk_size The proper size for cache metadata and IO efficiency.

@@ -19,15 +19,23 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <photon/common/callback.h>
 #include <photon/common/string_view.h>
 #include <photon/common/string-keyed.h>
 #include <photon/common/object.h>
 
 struct iovector;
 
-typedef std::string (*Fn_trans_func)(std::string_view name);
-
 namespace FileSystem {
+// `CacheFnTransFunc` use to transform the filename in the cached store.
+// `std::string_view` is the filename before transformation (as src_name).
+// `char *` is the transformed filename (as store_key).
+// `size_t` is the max buffer length of store_key.
+// If transform occurs an error (such as result length more than buffer size)
+// or there is not necessary to transform, this function returns 0,
+// otherwise, it returns string length after transformation.
+using CacheFnTransFunc = Delegate<size_t, std::string_view, char *, size_t>;
+
 class ICacheStore;
 struct CacheStat {
     uint32_t struct_size = sizeof(CacheStat);
@@ -52,6 +60,8 @@ public:
 
     int store_release(ICacheStore *store);
 
+    void set_trans_func(CacheFnTransFunc fn_trans_func);
+
     virtual ICacheStore *do_open(std::string_view filename, int flags, mode_t mode) = 0;
 
     ICacheStore *find_store_map(std::string_view pathname);
@@ -59,6 +69,7 @@ public:
     static std::string same_name_trans(std::string_view filename) { return std::string(filename); }
 protected:
     unordered_map_string_key<ICacheStore *> m_stores;
+    CacheFnTransFunc fn_trans_func;
 };
 
 class ICacheStore : public Object {
@@ -129,12 +140,20 @@ public:
 
     virtual int fstat(struct stat *buf) = 0;
 
-    virtual std::string_view get_pathname() {
-        return f_name_;
-    };
+    virtual std::string_view get_src_name() {
+        return src_name_;
+    }
 
-    virtual void set_pathname(std::string_view pathname) {
-        f_name_ = pathname;
+    virtual void set_src_name(std::string_view pathname) {
+        src_name_ = pathname.data();
+    }
+
+    virtual std::string_view get_store_key() {
+        return store_key_;
+    }
+
+    virtual void set_store_key(std::string_view pathname) {
+        store_key_ = pathname;
     }
 
     virtual uint32_t get_refcount() {
@@ -147,7 +166,8 @@ public:
 
 protected:
     uint32_t ref_count = 0; // store's referring count
-    std::string_view f_name_;
+    std::string src_name_;
+    std::string_view store_key_;
     ICachePool *pool_;
     ~ICacheStore(){};
 };

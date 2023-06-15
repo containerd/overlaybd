@@ -339,7 +339,7 @@ ssize_t CachedFile::writev(const struct iovec *iov, int iovcnt) {
 }
 
 std::string_view CachedFile::get_pathname() {
-    return get_store()->get_pathname();
+    return get_store()->get_src_name();
 }
 
 ICachedFile *new_cached_file(IFile *src, ICacheStore *store, uint64_t pageSize, uint64_t refillUnit,
