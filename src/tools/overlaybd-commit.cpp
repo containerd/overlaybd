@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
             index_file_path, data_file_path);
         IFile* findex = open_file(lfs, index_file_path.c_str(), O_RDONLY, 0);
         fin = open_warpfile_rw(findex, fdata, nullptr, true);
-    } if (commit_sealed) {
+    } else if (commit_sealed) {
         fin = (IFileRW*)open_file_ro(fdata, true);
         commit_file_path = index_file_path; // the second param is for commit path
     } else {
