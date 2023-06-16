@@ -15,6 +15,7 @@
 */
 
 #include "zfile.h"
+#include <cstdint>
 #include <vector>
 #include <algorithm>
 #include <memory>
@@ -29,6 +30,7 @@
 #include <photon/fs/forwardfs.h>
 #include "crc32/crc32c.h"
 #include "compressor.h"
+#include "photon/common/alog.h"
 
 using namespace photon::fs;
 
@@ -43,6 +45,9 @@ namespace ZFile {
 
 const static size_t BUF_SIZE = 512;
 const static uint32_t NOI_WELL_KNOWN_PRIME = 100007;
+const static uint8_t FLAG_VALID_FALSE = 0;
+const static uint8_t FLAG_VALID_TRUE = 1;
+const static uint8_t FLAG_VALID_CRC_CHECK = 2;
 
 template <typename T>
 static std::unique_ptr<T[]> new_align_mem(size_t _size, size_t alignment = ALIGNMENT_4K) {
@@ -205,7 +210,7 @@ public:
     IFile *m_file = nullptr;
     std::unique_ptr<ICompressor> m_compressor;
     bool m_ownership = false;
-    bool valid = false;
+    uint8_t valid = FLAG_VALID_TRUE;
 
     CompressionFile(IFile *file, bool ownership) : m_file(file), m_ownership(ownership){};
 
@@ -218,12 +223,12 @@ public:
     UNIMPLEMENTED_POINTER(IFileSystem *filesystem() override);
 
     virtual int close() override {
-        valid = false;
+        valid = FLAG_VALID_FALSE;
         return 0;
     }
 
     virtual int fstat(struct stat *buf) override {
-        if (!valid) {
+        if (valid == FLAG_VALID_FALSE) {
             LOG_ERROR_RETURN(EBADF, -1, "object invalid.");
         }
         auto ret = m_file->fstat(buf);
@@ -395,7 +400,7 @@ public:
 
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
 
-        if (!valid) {
+        if (valid == FLAG_VALID_FALSE) {
             LOG_ERROR_RETURN(EBADF, -1, "object invalid.");
         }
         if (m_ht.opt.block_size > MAX_READ_SIZE) {
@@ -424,7 +429,7 @@ public:
             again:
                 auto c = crc32c((void *)block.buffer(), block.compressed_size);
                 if (c != block.crc32_code()) {
-                    if (retry--) {
+                    if ((valid == FLAG_VALID_TRUE) && (retry--)) {
                         int reload_res = block.reload();
                         LOG_ERROR(
                             "checksum failed {offset: `, length: `} (expected ` but got `), reload result: `",
@@ -442,6 +447,11 @@ public:
                             block.m_reader->m_buf_offset, block.compressed_size);
                     }
                 }
+            }
+            if (valid == FLAG_VALID_CRC_CHECK) {
+                LOG_DEBUG("only check crc32 and skip decompression.");
+                readn += block.cp_len;
+                continue;
             }
             if (block.cp_len == m_ht.opt.block_size) {
                 auto dret = m_compressor->decompress(block.buffer(), block.compressed_size,
@@ -721,7 +731,7 @@ again:
 
     zfile->m_compressor.reset(create_compressor(&args));
     zfile->m_ownership = ownership;
-    zfile->valid = true;
+    zfile->valid = FLAG_VALID_TRUE;
     return zfile;
 }
 
@@ -875,6 +885,31 @@ int zfile_decompress(IFile *src, IFile *dst) {
             return -1;
         if (dst->write(raw_buf.get(), readn) != readn) {
             LOG_ERRNO_RETURN(0, -1, "failed to write file into dst");
+        }
+    }
+    return 0;
+}
+
+int zfile_validation_check(IFile *src) {
+    auto file = (CompressionFile *)zfile_open_ro(src, /*verify = */ true);
+    DEFER(delete file);
+    if (file == nullptr) {
+        LOG_ERROR_RETURN(0, -1, "failed to read file.");
+    }
+    if (file->m_ht.opt.verify == 0) {
+        LOG_ERROR_RETURN(0, -1, "source file doesn't have checksum.");
+    }
+    file->valid = FLAG_VALID_CRC_CHECK;
+    struct stat _st;
+    file->fstat(&_st);
+    auto raw_data_size = _st.st_size;
+    size_t block_size = file->m_ht.opt.block_size;
+    auto raw_buf = std::unique_ptr<unsigned char[]>(new unsigned char[block_size]);
+    for (off_t offset = 0; offset < raw_data_size; offset += block_size) {
+        auto len = (ssize_t)std::min(block_size, (size_t)raw_data_size - offset);
+        auto readn = file->pread(raw_buf.get(), len, offset);
+        if (readn != len) {
+            LOG_ERROR_RETURN(0, -1, "crc check error in block `", offset / block_size);
         }
     }
     return 0;

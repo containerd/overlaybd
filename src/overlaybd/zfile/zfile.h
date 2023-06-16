@@ -27,6 +27,9 @@ extern "C" int zfile_compress(photon::fs::IFile *src_file, photon::fs::IFile *ds
 
 extern "C" int zfile_decompress(photon::fs::IFile *src_file, photon::fs::IFile *dst_file);
 
+extern "C" int zfile_validation_check(photon::fs::IFile *src_file);
+
+
 extern "C" photon::fs::IFile *new_zfile_builder(photon::fs::IFile *file,
                                                 const CompressArgs *args = nullptr,
                                                 bool ownership = false);
