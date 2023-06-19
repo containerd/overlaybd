@@ -90,7 +90,6 @@ public:
             LOG_ERROR_RETURN(ENOBUFS, -1, "dst_len should be greater than `", max_dst_size - 1);
         }
         off_t src_offset = 0, dst_offset = 0;
-        int ret = 0;
         for (size_t i = 0; i < n; i++) {
             uncompressed_data[i] = ((unsigned char *)src + src_offset);
             compressed_data[i] = ((unsigned char *)dst + dst_offset);
@@ -119,7 +118,6 @@ public:
                              dst_buffer_capacity / n, src_blk_size);
         }
         off_t src_offset = 0, dst_offset = 0;
-        int ret = 0;
         for (size_t i = 0; i < n; i++) {
             compressed_data[i] = ((unsigned char *)src + src_offset);
             uncompressed_data[i] = ((unsigned char *)dst + dst_offset);

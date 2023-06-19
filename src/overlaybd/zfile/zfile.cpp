@@ -15,6 +15,7 @@
 */
 
 #include "zfile.h"
+#include <errno.h>
 #include <cstdint>
 #include <vector>
 #include <algorithm>
@@ -194,7 +195,10 @@ public:
                     deltas.push_back(0);
                     continue;
                 }
-                assert((uint64_t)deltas[i - 1] + ibuf[i - 1] < (uint64_t)uinttype_max);
+                if ((uint64_t)deltas[i - 1] + ibuf[i - 1] >= (uint64_t)uinttype_max) {
+                    LOG_ERRNO_RETURN(ERANGE, -1, "build block[`] length failed `+` > ` (exceed)",
+                        deltas[i-1], ibuf[i-1], (uint64_t)uinttype_max);
+                }
                 deltas.push_back(deltas[i - 1] + ibuf[i - 1]);
             }
             LOG_INFO("create jump table done. {part_count: `, deltas_count: `, size: `}",
@@ -223,14 +227,10 @@ public:
     UNIMPLEMENTED_POINTER(IFileSystem *filesystem() override);
 
     virtual int close() override {
-        valid = FLAG_VALID_FALSE;
         return 0;
     }
 
     virtual int fstat(struct stat *buf) override {
-        if (valid == FLAG_VALID_FALSE) {
-            LOG_ERROR_RETURN(EBADF, -1, "object invalid.");
-        }
         auto ret = m_file->fstat(buf);
         if (ret != 0)
             return ret;
@@ -272,6 +272,7 @@ public:
             auto begin_offset = m_zfile->m_jump_table[begin];
             auto readn = m_zfile->m_file->pread(m_buf, read_size, begin_offset);
             if (readn != (ssize_t)read_size) {
+                m_eno = (errno ? errno : EIO);
                 LOG_ERRNO_RETURN(0, -1, "read compressed blocks failed. (offset: `, len: `)",
                                  begin_offset, read_size);
             }
@@ -316,7 +317,9 @@ public:
             off_t cp_begin;
             size_t cp_len;
             iterator(BlockReader *reader) : m_reader(reader) {
-                get_current_block();
+                if (get_current_block() != 0) {
+                    m_reader = nullptr;
+                }
             }
             iterator() {
             }
@@ -333,8 +336,12 @@ public:
                 return m_reader->crc32_code();
             }
 
-            void get_current_block() {
+            int get_current_block() {
                 m_reader->m_buf_offset = m_reader->get_buf_offset(m_reader->m_idx);
+                if ((size_t)(m_reader->m_buf_offset) > sizeof(m_buf)) {
+                    m_reader->m_eno = ERANGE;
+                    LOG_ERRNO_RETURN(0, -1, "get inner buffer offset failed.");
+                }
 
                 auto blk_idx = m_reader->m_idx;
                 compressed_size = m_reader->compressed_size();
@@ -350,20 +357,26 @@ public:
                     cp_len = m_reader->get_inblock_offset(m_reader->m_end) + 1;
                 }
                 cp_len -= cp_begin;
+                return 0;
             }
 
             iterator &operator++() {
                 m_reader->m_idx++;
                 if (m_reader->m_idx == m_reader->m_end_idx) {
-                    this->m_reader = nullptr;
-                    return *this; // end();
+                    goto end;
                 }
                 if (m_reader->buf_exceed(m_reader->m_idx)) {
-                    m_reader->read_blocks(m_reader->m_idx, m_reader->m_end_idx);
+                    if (m_reader->read_blocks(m_reader->m_idx, m_reader->m_end_idx) != 0) {
+                        goto end;
+                    }
                     m_reader->m_begin_idx = m_reader->m_idx;
                 }
                 get_current_block();
                 return *this;
+            end:
+                m_reader->m_idx = m_reader->m_end_idx;
+                this->m_reader = nullptr;
+                return *this; // end();
             }
 
             bool operator!=(const iterator &rhs) const {
@@ -378,7 +391,9 @@ public:
         };
 
         iterator begin() {
-            read_blocks(m_idx, m_end_idx);
+            if (read_blocks(m_idx, m_end_idx) != 0) {
+                return iterator();
+            };
             return iterator(this);
         }
 
@@ -395,14 +410,12 @@ public:
         off_t m_end = 0;
         uint8_t m_verify = 0;
         uint32_t m_block_size = 0;
+        uint8_t m_eno = 0;
         unsigned char m_buf[MAX_READ_SIZE]; //{};
     };
 
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
 
-        if (valid == FLAG_VALID_FALSE) {
-            LOG_ERROR_RETURN(EBADF, -1, "object invalid.");
-        }
         if (m_ht.opt.block_size > MAX_READ_SIZE) {
             LOG_ERROR_RETURN(ENOMEM, -1, "block_size: ` > MAX_READ_SIZE (`)", m_ht.opt.block_size,
                              MAX_READ_SIZE);
@@ -414,11 +427,14 @@ public:
         }
         if (count <= 0)
             return 0;
-        assert(offset + count <= m_ht.raw_data_size);
+        if (offset + count > m_ht.raw_data_size) {
+            LOG_ERRNO_RETURN(ERANGE, -1, "pread range exceed (` > `)",
+                offset + count, m_ht.raw_data_size);
+        }
         ssize_t readn = 0; // final will equal to count
-        auto start_addr = buf;
         unsigned char raw[MAX_READ_SIZE];
-        for (auto &block : BlockReader(this, offset, count)) {
+        BlockReader br(this, offset, count);
+        for (auto &block : br) {
             if (buf == nullptr) {
                 //used for prefetch; no copy, no decompress;
                 readn += block.cp_len;
@@ -467,6 +483,9 @@ public:
             }
             readn += block.cp_len;
             buf = (unsigned char *)buf + block.cp_len;
+        }
+        if (br.m_eno != 0) {
+            LOG_ERRNO_RETURN(br.m_eno, -1, "read compressed data failed.");
         }
         return readn;
     }
@@ -598,7 +617,6 @@ public:
             }
             reserved_size = 0;
         }
-        auto prev = moffset;
         for (off_t i = 0; i < (ssize_t)count; i += m_opt.block_size) {
             if (i + m_opt.block_size > (ssize_t)count) {
                 memcpy(reserved_buf, (unsigned char *)buf + i, count - i);
