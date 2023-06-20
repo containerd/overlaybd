@@ -121,6 +121,7 @@ int main(int argc, char **argv) {
 
     set_log_output_level(verbose ? 0 : 1);
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+    DEFER({photon::fini();});
 
     photon::fs::IFile *imgfile = nullptr;
     if (raw) {

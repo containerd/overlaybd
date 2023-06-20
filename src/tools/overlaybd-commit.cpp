@@ -56,6 +56,7 @@ int main(int argc, char **argv) {
     bool compress_zfile = false;
     bool build_fastoci = false;
     bool tar = false, rm_old = false, seal = false, commit_sealed = false;
+    bool verbose = false;
 
     CLI::App app{"this is overlaybd-commit"};
     app.add_option("-m", commit_msg, "add some custom message if needed");
@@ -74,10 +75,12 @@ int main(int argc, char **argv) {
     app.add_option("commit_file", commit_file_path, "commit file path")->type_name("FILEPATH");
     app.add_flag("--seal", seal, "seal only, data_file is output itself")->default_val(false);
     app.add_flag("--commit_sealed", commit_sealed, "commit sealed, index_file is output")->default_val(false);
+    app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     CLI11_PARSE(app, argc, argv);
 
-    set_log_output_level(1);
+    set_log_output_level(verbose ? 0 : 1);
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+    DEFER({photon::fini();});
 
     IFileSystem *lfs = new_localfs_adaptor();
 
@@ -173,6 +176,6 @@ int main(int argc, char **argv) {
     delete zfile_builder;
     delete fout;
     delete fin;
-    printf("lsmt_commit has committed files SUCCESSFULLY\n");
+    printf("overlaybd-commit has committed files SUCCESSFULLY\n");
     return ret;
 }
