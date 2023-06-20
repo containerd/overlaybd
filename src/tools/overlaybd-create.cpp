@@ -52,6 +52,7 @@ int main(int argc, char **argv) {
     std::string data_file_path, index_file_path, warp_index_path;
     bool build_fastoci = false;
     bool mkfs = false;
+    bool verbose = false;
 
     CLI::App app{"this is overlaybd-create"};
     app.add_option("-u", parent_uuid, "parent uuid");
@@ -61,10 +62,12 @@ int main(int argc, char **argv) {
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->required();
     app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->required();
     app.add_option("vsize", vsize, "virtual size(GB)")->type_name("INT")->check(CLI::PositiveNumber)->required();
+    app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     CLI11_PARSE(app, argc, argv);
 
-
+    set_log_output_level(verbose ? 0 : 1);
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+    DEFER({photon::fini();});
 
     vsize *= 1024 * 1024 * 1024;
     const auto flag = O_RDWR | O_EXCL | O_CREAT;
@@ -100,6 +103,6 @@ int main(int argc, char **argv) {
     delete file;
     delete fdata;
     delete findex;
-    printf("lsmt_create has created files SUCCESSFULLY\n");
+    printf("overlaybd-create has created files SUCCESSFULLY\n");
     return 0;
 }

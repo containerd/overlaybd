@@ -57,6 +57,7 @@ int main(int argc, char **argv) {
     std::string fn_src, fn_dst;
     std::string algorithm;
     int block_size;
+    bool verbose = false;
 
     CLI::App app{"this is a zfile tool to create/extract zfile"};
     app.add_flag("-t", tar, "wrapper with tar")->default_val(false);
@@ -72,11 +73,14 @@ int main(int argc, char **argv) {
         ->type_name("FILEPATH")
         ->check(CLI::ExistingFile)
         ->required();
-    app.add_option("target_file", fn_dst, "target file path")->type_name("FILEPATH");//->required();
+    app.add_option("target_file", fn_dst, "target file path")->type_name("FILEPATH");
+    app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     CLI11_PARSE(app, argc, argv);
 
-    set_log_output_level(1);
+    set_log_output_level(verbose ? 0 : 1);
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+    DEFER({photon::fini();});
+
     lfs = new_localfs_adaptor();
     if (verify) {
         auto file = lfs->open(fn_src.c_str(), O_RDONLY);
