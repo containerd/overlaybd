@@ -726,18 +726,20 @@ IFile *zfile_open_ro(IFile *file, bool verify, bool ownership) {
     int retry = 2;
 again:
     if (!load_jump_table(file, &ht, jump_table, true)) {
-        if (verify && retry--) {
+        if (verify) {
             // verify means the source can be evicted. evict and retry
             auto res = file->fallocate(0, 0, -1);
-            LOG_ERROR("failed load_jump_table, fallocate result: `", res);
+            LOG_ERROR("failed to load jump table, fallocate result: `", res);
             if (res < 0) {
-                LOG_ERRNO_RETURN(EIO, nullptr,
-                                 "failed to read index for file: `, fallocate failed, no retry",
-                                 file);
+                LOG_ERRNO_RETURN(0, nullptr,
+                                 "failed to load jump table and failed to evict");
             }
-            goto again;
+            if (retry--) {
+                LOG_INFO("retry loading jump table");
+                goto again;
+            }
         }
-        LOG_ERRNO_RETURN(EIO, nullptr, "failed to read index for file: `", file);
+        LOG_ERRNO_RETURN(0, nullptr, "failed to load jump table");
     }
     auto zfile = new CompressionFile(file, ownership);
     zfile->m_ht = ht;
