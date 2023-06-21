@@ -38,7 +38,7 @@ jobs:
         RELEASE_VERSION=${{ env.RELEASE_VERSION }}
         if [[ -z ${RELEASE_VERSION} ]]; then
           git fetch --tags
-          RELEASE_VERSION=$(git tag -l v* | tail -1)
+          RELEASE_VERSION=$(git tag --sort=v:refname -l v* | tail -1)
         fi
         RELEASE_VERSION=${RELEASE_VERSION#v}
         echo "RELEASE_VERSION=${RELEASE_VERSION}"
