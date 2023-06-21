@@ -371,7 +371,9 @@ public:
                     }
                     m_reader->m_begin_idx = m_reader->m_idx;
                 }
-                get_current_block();
+                if (get_current_block() != 0) {
+                    goto end;
+                }
                 return *this;
             end:
                 m_reader->m_idx = m_reader->m_end_idx;
