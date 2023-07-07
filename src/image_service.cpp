@@ -287,12 +287,8 @@ bool check_accelerate_url(std::string_view a_url) {
     }
     auto cli = photon::net::new_tcp_socket_client();
     DEFER({ delete cli; });
-    LOG_DEBUG("Connecting");
     auto sock = cli->connect({photon::net::IPAddr(host.c_str()), url.port()});
     DEFER({ delete sock; });
-    if (sock == nullptr) {
-        LOG_WARN("P2P accelerate url invalid");
-    }
     return sock != nullptr;
 }
 
@@ -355,10 +351,6 @@ int ImageService::init() {
 
         global_fs.srcfs = registry_fs;
 
-        if (global_conf.p2pConfig().enable() == true) {
-            global_fs.remote_fs = registry_fs;
-            return 0;
-        }
         if (global_conf.enableThread() == true && cache_type == "file") {
             LOG_ERROR_RETURN(0, -1, "multi-thread has not been valid for file cache");
         }
@@ -372,7 +364,7 @@ int ImageService::init() {
                 LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed", cache_dir.c_str());
             }
             // file cache will delete its src_fs automatically when destructed
-            global_fs.remote_fs = FileSystem::new_full_file_cached_fs(
+            global_fs.cached_fs = FileSystem::new_full_file_cached_fs(
                 global_fs.srcfs, registry_cache_fs, refill_size, cache_size_GB, 10000000,
                 (uint64_t)1048576 * 4096, global_fs.io_alloc, cache_fn_trans_sha256);
 
@@ -402,10 +394,15 @@ int ImageService::init() {
             }
             global_fs.media_file = media_file;
 
-            global_fs.remote_fs = FileSystem::new_ocf_cached_fs(global_fs.srcfs, namespace_fs, block_size, refill_size,
+            global_fs.cached_fs = FileSystem::new_ocf_cached_fs(global_fs.srcfs, namespace_fs, block_size, refill_size,
                                                                 media_file, reload_media, global_fs.io_alloc);
         } else if (cache_type == "download") {
-            global_fs.remote_fs = FileSystem::new_download_cached_fs(global_fs.srcfs, 4096, refill_size, global_fs.io_alloc);
+            global_fs.cached_fs = FileSystem::new_download_cached_fs(global_fs.srcfs, 4096, refill_size, global_fs.io_alloc);
+        } else {
+            LOG_ERROR_RETURN(0, -1, "cache type invalid");
+        }
+        if (global_fs.cached_fs == nullptr) {
+            LOG_ERRNO_RETURN(0, -1, "failed to create cached_fs");
         }
 
         if (global_conf.gzipCacheConfig().enable()) {
@@ -426,12 +423,21 @@ int ImageService::init() {
                 gzip_cache_fs, refill_size, cache_size_GB,
                 10000000, (uint64_t)1048576 * 4096, global_fs.io_alloc);
         }
-
-        if (global_fs.remote_fs == nullptr) {
-            LOG_ERROR_RETURN(0, -1, "create remotefs (registryfs + cache) failed.");
-        }
     }
     return 0;
+}
+
+bool enable_acceleration(GlobalFs *global_fs, ImageConfigNS::P2PConfig conf) {
+    if (conf.enable() && check_accelerate_url(conf.address())) {
+        ((RegistryFS*)(global_fs->srcfs))
+            ->setAccelerateAddress(conf.address().c_str());
+        global_fs->remote_fs = global_fs->srcfs;
+        return true;
+    } else {
+        ((RegistryFS*)(global_fs->srcfs))->setAccelerateAddress();
+        global_fs->remote_fs = global_fs->cached_fs;
+        return false;
+    }
 }
 
 ImageFile *ImageService::create_image_file(const char *config_path) {
@@ -449,10 +455,11 @@ ImageFile *ImageService::create_image_file(const char *config_path) {
         cfg.AddMember("download", defaultDlCfg["download"], cfg.GetAllocator());
     }
 
-    if (global_conf.p2pConfig().enable() &&
-        check_accelerate_url(global_conf.p2pConfig().address())) {
-        std::string accelerate_url = global_conf.p2pConfig().address();
-        ((RegistryFS*)(global_fs.remote_fs))->setAccelerateAddress(accelerate_url.c_str());
+    if (enable_acceleration(&global_fs, global_conf.p2pConfig())) {
+        LOG_INFO("use p2p proxy for acceleration, proxy: `",
+            global_conf.p2pConfig().address());
+    } else {
+        LOG_INFO("use cache");
     }
 
     auto resFile = cfg.resultFile();
@@ -473,9 +480,9 @@ ImageService::ImageService(const char *config_path) {
 }
 
 ImageService::~ImageService() {
-    delete global_fs.remote_fs;
     delete global_fs.media_file;
     delete global_fs.namespace_fs;
+    delete global_fs.cached_fs;
     delete global_fs.srcfs;
     delete global_fs.io_alloc;
     LOG_INFO("image service is fully stopped");

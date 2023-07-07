@@ -29,23 +29,20 @@
 
 #include "../image_service.cpp"
 
-TEST(ImageTest, AccelerateURL) {
-    auto tcpserver = photon::net::new_tcp_socket_server();
-    tcpserver->timeout(1000UL*1000);
-    tcpserver->setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
-    tcpserver->bind(64208, photon::net::IPAddr("127.0.0.1"));
-    tcpserver->listen();
-    DEFER(delete tcpserver);
-    auto server = photon::net::http::new_http_server();
-    DEFER(delete server);
-    auto test_handle = [&](void*, photon::net::http::Request &req, photon::net::http::Response &resp, std::string_view) -> int {
-        LOG_INFO("test handle...");
-        return 0;
-    };
-    server->add_handler({nullptr, &test_handle});
-    tcpserver->set_handler(server->get_connection_handler());
-    tcpserver->start_loop();
+photon::net::ISocketServer *new_server(std::string ip, uint16_t port) {
+    auto server = photon::net::new_tcp_socket_server();
+    server->timeout(1000UL*1000);
+    server->setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
+    server->bind(port, photon::net::IPAddr(ip.c_str()));
+    server->listen();
+    server->set_handler(nullptr);
+    server->start_loop();
+    return server;
+}
 
+TEST(ImageTest, AccelerateURL) {
+    auto server = new_server("127.0.0.1", 64208);
+    DEFER(delete server);
 
     EXPECT_EQ(check_accelerate_url("https://127.0.0.1:64208"), true);
     EXPECT_EQ(check_accelerate_url("https://localhost:64208/accelerate"), true);
@@ -55,6 +52,27 @@ TEST(ImageTest, AccelerateURL) {
     EXPECT_EQ(check_accelerate_url("https://localhost:64209/accelerate"), false);
     EXPECT_EQ(check_accelerate_url("https://127.0.0.1:64209/accelerate"), false);
 
+}
+
+TEST(ImageTest, failover) {
+    system("mkdir -p /tmp/overlaybd /var/log");
+    system("echo \'{\"enableAudit\":false,\"logPath\":\"\",\"p2pConfig\":{\"enable\":true,\"address\":\"localhost:64210\"}}\'>/tmp/overlaybd/config.json");
+    ImageService *is = create_image_service("/tmp/overlaybd/config.json");
+    enable_acceleration(&is->global_fs, is->global_conf.p2pConfig());
+    EXPECT_EQ(is->global_fs.remote_fs, is->global_fs.cached_fs);
+    EXPECT_NE(is->global_fs.remote_fs, is->global_fs.srcfs);
+
+    auto server = new_server("127.0.0.1", 64210);
+    enable_acceleration(&is->global_fs, is->global_conf.p2pConfig());
+    EXPECT_NE(is->global_fs.remote_fs, is->global_fs.cached_fs);
+    EXPECT_EQ(is->global_fs.remote_fs, is->global_fs.srcfs);
+
+    delete server;
+    enable_acceleration(&is->global_fs, is->global_conf.p2pConfig());
+    EXPECT_EQ(is->global_fs.remote_fs, is->global_fs.cached_fs);
+    EXPECT_NE(is->global_fs.remote_fs, is->global_fs.srcfs);
+
+    delete is;
 }
 
 int main(int argc, char** argv) {

@@ -29,6 +29,7 @@ using namespace photon::fs;
 struct GlobalFs {
     IFileSystem *remote_fs = nullptr;
     IFileSystem *srcfs = nullptr;
+    IFileSystem *cached_fs = nullptr;
     Cache::GzipCachedFs *gzcache_fs = nullptr;
 
     // ocf cache only
