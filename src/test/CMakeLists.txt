@@ -4,16 +4,16 @@ link_directories($ENV{GFLAGS}/lib)
 include_directories($ENV{GTEST}/googletest/include)
 link_directories($ENV{GTEST}/lib)
 
-add_executable(curl_test test.cpp)
-target_include_directories(curl_test PUBLIC
+add_executable(image_service_test image_service_test.cpp)
+target_include_directories(image_service_test PUBLIC
     ${PHOTON_INCLUDE_DIR}
     ${rapidjson_SOURCE_DIR}/include
 )
-target_link_libraries(curl_test gtest gtest_main gflags pthread photon_static overlaybd_lib overlaybd_image_lib)
+target_link_libraries(image_service_test gtest gtest_main gflags pthread photon_static overlaybd_lib overlaybd_image_lib)
 
 add_test(
-    NAME curl_test
-    COMMAND ${EXECUTABLE_OUTPUT_PATH}/curl_test
+    NAME image_service_test
+    COMMAND ${EXECUTABLE_OUTPUT_PATH}/image_service_test
 )
 
 
