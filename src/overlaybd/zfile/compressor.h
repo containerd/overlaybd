@@ -39,18 +39,18 @@ public:
     const static uint32_t DEFAULT_BLOCK_SIZE = 4096; // 8192;//32768;
 
     uint32_t block_size = DEFAULT_BLOCK_SIZE;
-    uint8_t type = LZ4; // algorithm
+    uint8_t algo = LZ4; // algorithm
     uint8_t level = 0;  // compress level
     uint8_t use_dict = 0;
     uint8_t __padding_0 = 0;
-    uint32_t args = 0; // reserve;
+    uint32_t reserved = 0;
     uint32_t dict_size = 0;
     uint8_t verify = 0;
     uint8_t __padding_1[7] = {0};
 
     CompressOptions(uint8_t type = LZ4, uint32_t block_size = DEFAULT_BLOCK_SIZE,
                     uint8_t verify = 0)
-        : block_size(block_size), type(type), verify(verify) {
+        : block_size(block_size), algo(type), verify(verify) {
     }
 };
 static_assert(sizeof(CompressOptions) == 24, "sizeof(CompressOptions) != 24");
@@ -79,12 +79,12 @@ public:
     */
     virtual int compress(const unsigned char *src, size_t src_len, unsigned char *dst,
                          size_t dst_len) = 0;
-    /* 
+    /*
         return the number of batches in QAT compressing...
     */
     virtual int nbatch() = 0;
     virtual int compress_batch(const unsigned char *src, size_t *src_chunk_len, unsigned char *dst,
-                        size_t dst_buffer_capacity, size_t *dst_chunk_len /* save result chunk length */, 
+                        size_t dst_buffer_capacity, size_t *dst_chunk_len /* save result chunk length */,
                         size_t nchunk) = 0;
     /*
         return decompressed buffer size.
@@ -94,7 +94,7 @@ public:
                            size_t dst_len) = 0;
 
     virtual int decompress_batch(const unsigned char *src, size_t *src_chunk_len, unsigned char *dst,
-                        size_t dst_buffer_capacity, size_t *dst_chunk_len /* save result chunk length */, 
+                        size_t dst_buffer_capacity, size_t *dst_chunk_len /* save result chunk length */,
                         size_t nchunk) = 0;
 };
 

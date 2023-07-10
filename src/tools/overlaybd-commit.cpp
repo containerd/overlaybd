@@ -121,9 +121,9 @@ int main(int argc, char **argv) {
             algorithm = "lz4";
         }
         if (algorithm == "lz4") {
-            opt.type = ZFile::CompressOptions::LZ4;
+            opt.algo = ZFile::CompressOptions::LZ4;
         } else if (algorithm == "zstd") {
-            opt.type = ZFile::CompressOptions::ZSTD;
+            opt.algo = ZFile::CompressOptions::ZSTD;
         } else {
             fprintf(stderr, "invalid '--algorithm' parameters.\n");
             exit(-1);

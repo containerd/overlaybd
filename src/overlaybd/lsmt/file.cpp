@@ -165,8 +165,7 @@ struct HeaderTrailer {
 
     UUID::String uuid;        // 37 bytes.
     UUID::String parent_uuid; // 37 bytes.
-    uint8_t from;             // DEPRECATED
-    uint8_t to;               // DEPRECATED
+    uint16_t reserved;          // Reserved.
 
     static const uint8_t LSMT_V1 = 1;     // v1 (UUID check)
     static const uint8_t LSMT_SUB_V1 = 1; // .1 deprecated level range.
