@@ -99,9 +99,9 @@ int main(int argc, char **argv) {
     CompressOptions opt;
     opt.verify = 1;
     if (algorithm == "lz4") {
-        opt.type = CompressOptions::LZ4;
+        opt.algo = CompressOptions::LZ4;
     } else if (algorithm == "zstd") {
-        opt.type = CompressOptions::ZSTD;
+        opt.algo = CompressOptions::ZSTD;
     }
     opt.block_size = block_size * 1024;
     if ((opt.block_size & (opt.block_size - 1)) != 0 || (block_size > 64 || block_size < 4)) {

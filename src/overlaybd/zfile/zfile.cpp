@@ -150,7 +150,7 @@ public:
         // offset 40, 48, 56, 64
         uint64_t index_offset; // in bytes
         uint64_t index_size;   // # of SegmentMappings
-        uint64_t raw_data_size;
+        uint64_t original_file_size;
         uint64_t reserved_0;
         // offset 72
         CompressOptions opt;
@@ -234,7 +234,7 @@ public:
         auto ret = m_file->fstat(buf);
         if (ret != 0)
             return ret;
-        buf->st_size = m_ht.raw_data_size;
+        buf->st_size = m_ht.original_file_size;
         return ret;
     }
 
@@ -422,16 +422,16 @@ public:
             LOG_ERROR_RETURN(ENOMEM, -1, "block_size: ` > MAX_READ_SIZE (`)", m_ht.opt.block_size,
                              MAX_READ_SIZE);
         }
-        if (offset + count > m_ht.raw_data_size) {
+        if (offset + count > m_ht.original_file_size) {
             LOG_WARN("the read range exceeds raw_file_size.(`>`)", count + offset,
-                     m_ht.raw_data_size);
-            count = m_ht.raw_data_size - offset;
+                     m_ht.original_file_size);
+            count = m_ht.original_file_size - offset;
         }
         if (count <= 0)
             return 0;
-        if (offset + count > m_ht.raw_data_size) {
+        if (offset + count > m_ht.original_file_size) {
             LOG_ERRNO_RETURN(ERANGE, -1, "pread range exceed (` > `)",
-                offset + count, m_ht.raw_data_size);
+                offset + count, m_ht.original_file_size);
         }
         ssize_t readn = 0; // final will equal to count
         unsigned char raw[MAX_READ_SIZE];
@@ -522,7 +522,7 @@ public:
         : m_dest(file), m_opt(args->opt), m_ownership(ownership) {
 
         LOG_INFO("create stream compressing object. [ block size: `, type: `, enable_checksum: `]",
-                 m_opt.block_size, m_opt.type, m_opt.verify);
+                 m_opt.block_size, m_opt.algo, m_opt.verify);
     }
 
     int init(const CompressArgs *args) {
@@ -577,7 +577,7 @@ public:
         auto pht = (CompressionFile::HeaderTrailer *)m_ht;
         pht->index_offset = index_offset;
         pht->index_size = index_size;
-        pht->raw_data_size = raw_data_size;
+        pht->original_file_size = raw_data_size;
         LOG_INFO("write trailer.");
         auto ret = write_header_trailer(m_dest, false, true, true, pht);
         if (ret < 0)
@@ -748,7 +748,7 @@ again:
     zfile->m_jump_table = std::move(jump_table);
     CompressArgs args(ht.opt);
     ht.opt.verify = ht.opt.verify && verify;
-    LOG_DEBUG("compress type: `, bs: `, verify_checksum: `", ht.opt.type, ht.opt.block_size,
+    LOG_DEBUG("compress type: `, bs: `, verify_checksum: `", ht.opt.algo, ht.opt.block_size,
               ht.opt.verify);
 
     zfile->m_compressor.reset(create_compressor(&args));
@@ -792,7 +792,7 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     }
     CompressOptions opt = args->opt;
     LOG_INFO("create compress file. [ block size: `, type: `, enable_checksum: `]", opt.block_size,
-             opt.type, opt.verify);
+             opt.algo, opt.verify);
     auto compressor = create_compressor(args);
     DEFER(delete compressor);
     if (compressor == nullptr)
@@ -874,7 +874,7 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     }
     pht->index_offset = index_offset;
     pht->index_size = index_size;
-    pht->raw_data_size = raw_data_size;
+    pht->original_file_size = raw_data_size;
     LOG_INFO("write trailer.");
     ret = write_header_trailer(as, false, true, true, pht);
     if (ret < 0)

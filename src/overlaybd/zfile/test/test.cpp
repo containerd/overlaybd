@@ -166,7 +166,7 @@ TEST_F(ZFileTest, verify_compression) {
                     LOG_ERROR("err: `(`)", errno, strerror(errno));
                 }
                 CompressOptions opt;
-                opt.type = algorithm;
+                opt.algo = algorithm;
                 opt.verify = enable_crc;
                 opt.block_size = 1<<bs;
                 CompressArgs args(opt);
@@ -216,7 +216,7 @@ TEST_F(ZFileTest, validation_check) {
         LOG_ERROR("err: `(`)", errno, strerror(errno));
     }
     CompressOptions opt;
-    opt.type = CompressOptions::LZ4;
+    opt.algo = CompressOptions::LZ4;
     opt.verify = 1;
     CompressArgs args(opt);
     int ret = zfile_compress(fsrc.get(), fdst.get(), &args);

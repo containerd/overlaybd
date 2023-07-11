@@ -172,7 +172,7 @@ public:
             LOG_ERROR_RETURN(EINVAL, -1, "BaseCompressor init failed");
         }
         auto opt = &args->opt;
-        if (opt->type != CompressOptions::LZ4) {
+        if (opt->algo != CompressOptions::LZ4) {
             LOG_ERROR_RETURN(EINVAL, -1,
                              "Compression type invalid. (expected: CompressionOptions::LZ4)");
         }
@@ -268,7 +268,7 @@ public:
             LOG_ERROR_RETURN(EINVAL, -1, "BaseCompressor init failed");
         }
         const CompressOptions *opt = &args->opt;
-        if (opt->type != CompressOptions::ZSTD) {
+        if (opt->algo != CompressOptions::ZSTD) {
             LOG_ERROR_RETURN(EINVAL, -1,
                              "Compression type invalid.(expected: CompressionOptions::ZSTD)");
         }
@@ -345,7 +345,7 @@ ICompressor *create_compressor(const CompressArgs *args) {
     ICompressor *rst = nullptr;
     int init_flg = 0;
     const CompressOptions &opt = args->opt;
-    switch (opt.type) {
+    switch (opt.algo) {
 
     case CompressOptions::LZ4:
         rst = new LZ4Compressor;
