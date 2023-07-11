@@ -19,6 +19,7 @@ namespace Cache {
 
 class GzipCachedFs {
 public:
+    virtual ~GzipCachedFs() {}
     virtual photon::fs::IFile *open_cached_gzip_file(photon::fs::IFile *file, const char *file_name) = 0;
 };
 GzipCachedFs *new_gzip_cached_fs(photon::fs::IFileSystem *mediaFs, uint64_t refillUnit,
