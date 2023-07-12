@@ -483,8 +483,10 @@ ImageService::~ImageService() {
     delete global_fs.media_file;
     delete global_fs.namespace_fs;
     delete global_fs.cached_fs;
+    delete global_fs.gzcache_fs;
     delete global_fs.srcfs;
     delete global_fs.io_alloc;
+    delete exporter;
     LOG_INFO("image service is fully stopped");
 }
 

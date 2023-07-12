@@ -123,11 +123,11 @@ int main(int argc, char **argv) {
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     DEFER({photon::fini();});
 
+    ImageService *imgservice = nullptr;
     photon::fs::IFile *imgfile = nullptr;
     if (raw) {
         imgfile = open_file(image_config_path.c_str(), O_RDWR, 0644);
     } else {
-        ImageService * imgservice = nullptr;
         if (config_path.empty()) {
             imgservice = create_image_service();
         } else {
@@ -139,11 +139,14 @@ int main(int argc, char **argv) {
         }
         imgfile = imgservice->create_image_file(image_config_path.c_str());
     }
-
     if (imgfile == nullptr) {
         fprintf(stderr, "failed to create image file\n");
         exit(-1);
     }
+    DEFER({
+        delete imgfile;
+        delete imgservice;
+    });
 
     if (mkfs) {
         if (make_extfs(imgfile) < 0) {
@@ -162,6 +165,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "new subfs failed, %s\n", strerror(errno));
         exit(-1);
     }
+    DEFER({delete target;});
 
     photon::fs::IFile* src_file = nullptr;
     SHA256CheckedFile* checksum_file = nullptr;
@@ -199,9 +203,6 @@ int main(int argc, char **argv) {
         }
         fprintf(stdout, "overlaybd-apply done\n");
     }
-
-    delete target;
-    delete imgfile;
 
     return 0;
 }
