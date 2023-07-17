@@ -82,7 +82,7 @@ public:
         uint64_t try_cnt = 0;
         size_t got_cnt = 0;
         auto time_st = photon::now;
-        while (m_ifile && m_ifile->m_status >= 0 && photon::now - time_st < 31 * 1000 * 1000) {
+        while (m_ifile && m_ifile->m_status >= 0 && photon::now - time_st < 1000UL * INT32_MAX) {
             // exit on image in exit status, or timeout
             ssize_t ret = m_file->pread((char *)buf + got_cnt, count - got_cnt, offset + got_cnt);
             if (ret > 0)
