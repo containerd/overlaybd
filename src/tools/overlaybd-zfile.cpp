@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "failed to open file %s\n", fn_src.c_str());
             exit(-1);
         }
-        if (verify_crc(file)!=0) {
+        if (verify_crc(new_tar_file_adaptor(file))!=0) {
             printf("%s is not a valid zfile blob or checksum can't be found.\n", fn_src.c_str());
             return -1;
         }
