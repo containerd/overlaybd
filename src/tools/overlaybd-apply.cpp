@@ -202,6 +202,7 @@ int main(int argc, char **argv) {
             }
         }
         fprintf(stdout, "overlaybd-apply done\n");
+        fprintf(stderr, "%s\n",  sha256_checksum.c_str());
     }
 
     return 0;
