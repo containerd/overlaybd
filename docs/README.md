@@ -4,6 +4,12 @@ Overlaybd (overlay block device) is a novel layering block-level image format, w
 
 Overlaybd was first proposed by Alibaba Cloud and widely used in Alibaba cloud services. It became a sub-project of containerd in 2021.
 
+As an image format, overlaybd has 2 core component:
+
+- Overlaybd is a layering image format, provideing a merged view of a sequence of block-based layers as a virtual block device. [SPEC](https://containerd.github.io/overlaybd/#/specs/lsmt.md)
+
+- Zfile is a compression file format which support seekalbe online decompression. [SPEC](https://containerd.github.io/overlaybd/#/specs/zfile.md)
+
 
 # Components
 
@@ -37,12 +43,19 @@ Use p2p protocol to speed up HTTP file download for registry in large-scale clus
 
 Overlaybd is a block-device-based image format, which has much lower complexity than filesystem-based implementations. For example, cross-layer hardlink and non-copy commands like chown are very complex for filesystem-based image without copying up, but is natively supported by overlaybd.
 
-<img src="assets/cold_startup_latency.png" style="width: 30%; margin-right: 2%"/>
-<img src="assets/warm_startup_latency.png" style="width: 30%; margin-right: 2%"/>
-<img src="assets/startup_latency_with_prefetch.png" style="width: 30%"/>
-<img src="assets/batch_code_startup_latency.png" style="width: 30%; margin-right: 2%"/>
-<img src="assets/time_pull_image.png" style="width: 30%; margin-right: 2%"/>
-<img src="assets/time_launch_app.png" style="width: 30%"/>
+<style>
+.pic {
+    width: 30%; margin-right: 2%;
+    background-color: #3f3f3f;
+}
+</style>
+
+<img src="assets/cold_startup_latency.png" class="pic"/>
+<img src="assets/warm_startup_latency.png" class="pic"/>
+<img src="assets/startup_latency_with_prefetch.png" class="pic"/>
+<img src="assets/batch_code_startup_latency.png" class="pic"/>
+<img src="assets/time_pull_image.png" class="pic"/>
+<img src="assets/time_launch_app.png" class="pic"/>
 
 ## High Reliability
 
