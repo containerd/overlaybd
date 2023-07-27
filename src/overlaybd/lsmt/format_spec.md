@@ -31,7 +31,8 @@ The format of header is described as below. All fields are little-endian.
 | user_tag     | 134       |     256      | commit message (user-defined text) |
 | reserved     | 390       |     3706     | reserved space for future use (offset 390 ~ 4095), should be 0 |
 
-***flags:**
+**flags:**
+
 |    Field    | Offset (bits) | Description |
 |    :---:    |    :----:     | :---        |
 |  is_header  |       0       | header (1) or trailer (0) |

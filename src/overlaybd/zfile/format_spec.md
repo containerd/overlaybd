@@ -38,7 +38,8 @@ The format of header is described as below. All fields are little-endian.
 | reserved|      89        |      7       | reserved space, should be 0 |
 | reserved|      96       |     416      | reserved space for future use (offset 96 ~ 511), should be 0 |
 
-***flags:**
+**flags:**
+
 |    Field    | Offset (bits) | Description |
 |    :---:    |    :----:     | :---        |
 |  is_header  |       0       | header (1) or trailer (0) |
