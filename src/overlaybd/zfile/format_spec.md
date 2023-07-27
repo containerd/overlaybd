@@ -35,8 +35,7 @@ The format of header is described as below. All fields are little-endian.
 | reserved|      79        |      5       | reserved space, should be 0 |
 | dict_size    | 84        |   uint32_t   | size of the dictionary section, 0 for non-existence |
 | verify  |      88        |     bool     | whether these exists a 4-byte CRC32 checksum following each compressed block |
-| reserved|      89        |      7       | reserved space, should be 0 |
-| reserved|      96       |     416      | reserved space for future use (offset 96 ~ 511), should be 0 |
+| reserved|      96       |     416      | reserved space for future use (offset 89 ~ 511), should be 0 |
 
 **flags:**
 
