@@ -72,4 +72,5 @@ public:
         if (!file) return nullptr;
         return new MetricFile(file, metrics);
     }
+
 };

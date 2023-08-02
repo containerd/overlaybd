@@ -54,24 +54,61 @@ TEST(ImageTest, AccelerateURL) {
 
 }
 
+
+int request_metrics() {
+      auto request = new photon::net::cURL();
+    DEFER({ delete request; });
+
+    auto request_url = "localhost:9863/metrics";
+    LOG_INFO("request url: `", request_url);
+    photon::net::StringWriter writer;
+    auto ret = request->GET(request_url, &writer, (int64_t)1000000);
+    if (ret != 200) {
+        LOG_ERRNO_RETURN(0, -1, "connect to exporter failed. http response code: `", ret);
+    }
+    LOG_INFO("response: `", writer.string);
+    return 0;
+}
+
 TEST(ImageTest, failover) {
     system("mkdir -p /tmp/overlaybd /var/log");
     system("echo \'{\"enableAudit\":false,\"logPath\":\"\",\"p2pConfig\":{\"enable\":true,\"address\":\"localhost:64210\"}}\'>/tmp/overlaybd/config.json");
     ImageService *is = create_image_service("/tmp/overlaybd/config.json");
-    enable_acceleration(&is->global_fs, is->global_conf.p2pConfig());
+    is->enable_acceleration();
     EXPECT_EQ(is->global_fs.remote_fs, is->global_fs.cached_fs);
     EXPECT_NE(is->global_fs.remote_fs, is->global_fs.srcfs);
 
     auto server = new_server("127.0.0.1", 64210);
-    enable_acceleration(&is->global_fs, is->global_conf.p2pConfig());
+    is->enable_acceleration();
     EXPECT_NE(is->global_fs.remote_fs, is->global_fs.cached_fs);
     EXPECT_EQ(is->global_fs.remote_fs, is->global_fs.srcfs);
 
     delete server;
-    enable_acceleration(&is->global_fs, is->global_conf.p2pConfig());
+    is->enable_acceleration();
     EXPECT_EQ(is->global_fs.remote_fs, is->global_fs.cached_fs);
     EXPECT_NE(is->global_fs.remote_fs, is->global_fs.srcfs);
+    EXPECT_NE(request_metrics(), 0);
 
+    delete is;
+}
+
+
+TEST(ImageTest, enableMetrics) {
+    system("mkdir -p /tmp/overlaybd /var/log");
+    system("echo \'{\"enableAudit\":false,\"logPath\":\"\",\"p2pConfig\":{\"enable\":true,\"address\":\"localhost:64210\"}, \"exporterConfig\": {\"enable\": true}}\'>/tmp/overlaybd/config.json");
+    ImageService *is = create_image_service("/tmp/overlaybd/config.json");
+    is->enable_acceleration();
+    EXPECT_EQ(is->global_fs.remote_fs, is->global_fs.cached_fs);
+    EXPECT_NE(is->global_fs.remote_fs, is->global_fs.srcfs);
+    EXPECT_EQ(request_metrics(), 0);
+
+    auto server = new_server("127.0.0.1", 64210);
+    is->enable_acceleration();
+    EXPECT_NE(is->global_fs.remote_fs, is->global_fs.cached_fs);
+    EXPECT_EQ(is->global_fs.remote_fs, is->global_fs.srcfs);
+    EXPECT_EQ(request_metrics(), 0);
+
+    delete server;
     delete is;
 }
 
