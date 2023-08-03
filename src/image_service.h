@@ -27,6 +27,7 @@ using namespace photon::fs;
 
 
 struct GlobalFs {
+    IFileSystem *underlay_registryfs = nullptr;
     IFileSystem *remote_fs = nullptr;
     IFileSystem *srcfs = nullptr;
     IFileSystem *cached_fs = nullptr;
@@ -44,7 +45,7 @@ struct ImageAuthResponse : public ConfigUtils::Config {
     APPCFG_PARA(traceId, std::string, "");
 	APPCFG_PARA(success, bool, false);
 	APPCFG_PARA(data, ImageConfigNS::AuthConfig);
-}; 
+};
 
 struct ImageFile;
 
@@ -54,11 +55,13 @@ public:
     ~ImageService();
     int init();
     ImageFile *create_image_file(const char *image_config_path);
+    // bool enable_acceleration(GlobalFs *global_fs, ImageConfigNS::P2PConfig conf);
+    bool enable_acceleration();
+
     ImageConfigNS::GlobalConfig global_conf;
     struct GlobalFs global_fs;
     std::unique_ptr<OverlayBDMetric> metrics;
     ExporterServer *exporter = nullptr;
-    bool show_metrics;
 
 private:
     int read_global_config_and_set();
