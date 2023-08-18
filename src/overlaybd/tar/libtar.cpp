@@ -76,6 +76,18 @@ int UnTar::set_file_perms(const char *filename) {
     return 0;
 }
 
+ssize_t UnTar::dump_tar_headers(photon::fs::IFile *as) {
+    ssize_t count = 0;
+    while (read_header(as) == 0) {
+        if (TH_ISREG(header)) {
+            auto size = get_size();
+            file->lseek(((size + T_BLOCKSIZE - 1) / T_BLOCKSIZE) * T_BLOCKSIZE, SEEK_CUR); // skip size
+        }
+        count++;
+    }
+    return count;
+}
+
 int UnTar::extract_all() {
     int i, count = 0;
     unpackedPaths.clear();
@@ -111,7 +123,6 @@ int UnTar::extract_all() {
 
 int UnTar::extract_file() {
     int i;
-
     // normalize name
     std::string npath = remove_last_slash(get_pathname());
     const char *filename = npath.c_str();
@@ -195,35 +206,44 @@ int UnTar::extract_file() {
 
 int UnTar::extract_regfile_meta_only(const char *filename) {
     size_t size = get_size();
-
-    LOG_DEBUG("  ==> extracting: ` (` bytes) (fastoci index)\n", filename, size);
+    LOG_DEBUG("  ==> extracting: ` (` bytes) (fastoci index)", filename, size);
     photon::fs::IFile *fout = fs->open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0666);
     if (fout == nullptr) {
         return -1;
     }
     DEFER({delete fout;});
 
-    auto p = file->lseek(0, SEEK_CUR);
-    fout->fallocate(0, 0, size);
+    off_t p = 0;
+    if (from_tar_idx) {
+        p = *((off_t*)&header.devmajor);
+    } else {
+        p = file->lseek(0, SEEK_CUR);
+    }
     struct photon::fs::fiemap_t<8192> fie(0, size);
-    fout->fiemap(&fie);
+
+    if (fout->fallocate(0, 0, size) != 0 || fout->fiemap(&fie)!=0 ){
+        return -1;
+    }
+    auto count = ((size+ T_BLOCKSIZE - 1) / T_BLOCKSIZE) * T_BLOCKSIZE;
     for (uint32_t i = 0; i < fie.fm_mapped_extents; i++) {
         LSMT::RemoteMapping lba;
         lba.offset = fie.fm_extents[i].fe_physical;
-        lba.count = fie.fm_extents[i].fe_length;
+        lba.count = (fie.fm_extents[i].fe_length < count ? fie.fm_extents[i].fe_length : count);
         lba.roffset = p;
         int nwrite = fs_base_file->ioctl(LSMT::IFileRW::RemoteData, lba);
         if (nwrite < 0) {
             LOG_ERRNO_RETURN(0, -1, "failed to write lba");
         }
         p += nwrite;
+        count-=lba.count;
     }
 
     struct stat st;
     fout->fstat(&st);
     LOG_DEBUG("reg file size `", st.st_size);
-
-    file->lseek( ((size+511)/512)*512, SEEK_CUR); // skip size
+    if (not from_tar_idx) {
+        file->lseek(((size+ T_BLOCKSIZE - 1) / T_BLOCKSIZE) * T_BLOCKSIZE, SEEK_CUR); // skip size
+    }
     return 0;
 }
 

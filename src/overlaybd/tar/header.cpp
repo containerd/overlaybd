@@ -141,7 +141,7 @@ size_t TarCore::get_size() {
 #define BIT_ISSET(bitmask, bit) ((bitmask) & (bit))
 static const char ZERO_BLOCK[T_BLOCKSIZE] = {0};
 
-int TarCore::read_header_internal() {
+int TarCore::read_header_internal(photon::fs::IFile *dump) {
     int i;
     int num_zero_blocks = 0;
 
@@ -173,14 +173,24 @@ int TarCore::read_header_internal() {
             LOG_ERROR("failed check crc");
             return -2;
         }
-
+        if (dump) {
+            if (TH_ISREG(header)) {
+                off_t file_offset = file->lseek(0, SEEK_CUR);
+                *(off_t*)(&header.devmajor) = file_offset; // tmp save
+                LOG_DEBUG("regfile: `, inner_offset: `(expected: `)",
+                    get_pathname(), *(off_t*)(&header.devmajor), file_offset);
+            }
+            if (dump->write(&header, T_BLOCKSIZE) != T_BLOCKSIZE) {
+                LOG_ERRNO_RETURN(0, -1, "dump tarheader failed");
+            }
+        };
         break;
     }
 
     return i;
 }
 
-int TarCore::read_sepcial_file(char *&buf) {
+int TarCore::read_sepcial_file(char *&buf, photon::fs::IFile *dump) {
     size_t j, blocks;
     char *ptr;
     size_t sz = header.get_size();
@@ -200,12 +210,14 @@ int TarCore::read_sepcial_file(char *&buf) {
                 errno = EINVAL;
             return -1;
         }
+        if (dump && dump->write(ptr, T_BLOCKSIZE) != T_BLOCKSIZE) {
+            LOG_ERRNO_RETURN(0, -1, "dump tarheader failed");
+        }
     }
-
     return sz;
 }
 
-int TarCore::read_header() {
+int TarCore::read_header(photon::fs::IFile *dump) {
 
     if (header.gnu_longname != nullptr)
         free(header.gnu_longname);
@@ -217,7 +229,7 @@ int TarCore::read_header() {
         pax = nullptr;
     }
 
-    int i = read_header_internal();
+    int i = read_header_internal(dump);
     if (i == 0)
         return 1;
     else if (i != T_BLOCKSIZE) {
@@ -234,13 +246,13 @@ int TarCore::read_header() {
         switch (header.typeflag) {
         /* check for GNU long link extention */
         case GNU_LONGLINK_TYPE:
-            sz = read_sepcial_file(header.gnu_longlink);
+            sz = read_sepcial_file(header.gnu_longlink, dump);
             LOG_DEBUG("found gnu longlink ", VALUE(sz));
             if (sz < 0) return -1;
             break;
         /* check for GNU long name extention */
         case GNU_LONGNAME_TYPE:
-            sz = read_sepcial_file(header.gnu_longname);
+            sz = read_sepcial_file(header.gnu_longname, dump);
             LOG_DEBUG("found gnu longname ", VALUE(sz));
             if (sz < 0) return -1;
             break;
@@ -248,7 +260,7 @@ int TarCore::read_header() {
         case PAX_HEADER:
             if (pax == nullptr)
                 pax = new PaxHeader();
-            sz = read_sepcial_file(pax->pax_buf);
+            sz = read_sepcial_file(pax->pax_buf, dump);
             LOG_DEBUG("found pax header ", VALUE(sz));
             if (sz < 0) return -1;
             i = pax->read_pax(sz);
@@ -261,12 +273,12 @@ int TarCore::read_header() {
         case PAX_GLOBAL_HEADER:
             if (pax == nullptr)
                 pax = new PaxHeader();
-            sz = read_sepcial_file(pax->pax_buf);
+            sz = read_sepcial_file(pax->pax_buf, dump);
             LOG_WARN("found and ignored pax global header ", VALUE(sz));
             break;
         }
 
-        i = read_header_internal();
+        i = read_header_internal(dump);
         if (i != T_BLOCKSIZE) {
             if (i != -1)
                 errno = EINVAL;
