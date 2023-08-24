@@ -160,7 +160,7 @@ public:
     char *get_pathname();
     char *get_linkname();
     size_t get_size();
-    int read_header();
+    int read_header(photon::fs::IFile *dump = nullptr);
     bool has_pax_header() {
         return pax != nullptr;
     }
@@ -176,23 +176,26 @@ private:
     char *th_linkname = nullptr;
     PaxHeader *pax = nullptr;
 
-    int read_header_internal();
-    int read_sepcial_file(char *&buf);
+    int read_header_internal(photon::fs::IFile *dump = nullptr);
+    int read_sepcial_file(char *&buf, photon::fs::IFile *dump = nullptr);
 };
 
 class UnTar : public TarCore {
 public:
-    UnTar(photon::fs::IFile *file, photon::fs::IFileSystem *fs, int options,
+    UnTar(photon::fs::IFile *src_file, photon::fs::IFileSystem *target_fs, int options,
         uint64_t fs_blocksize = FS_BLOCKSIZE, photon::fs::IFile *bf = nullptr,
-        bool meta_only = false)
-        : TarCore(file, options, fs_blocksize), fs(fs), fs_base_file(bf), meta_only(meta_only) {}
+        bool meta_only = false, bool from_tar_idx = false)
+        : TarCore(src_file, options, fs_blocksize), fs(target_fs),
+            fs_base_file(bf), meta_only(meta_only), from_tar_idx(from_tar_idx){}
 
     int extract_all();
+    ssize_t dump_tar_headers(photon::fs::IFile* file);
 
 private:
     photon::fs::IFileSystem *fs = nullptr; // target
     photon::fs::IFile *fs_base_file = nullptr;
     bool meta_only;
+    bool from_tar_idx;
     std::set<std::string> unpackedPaths;
     std::list<std::pair<std::string, int>> dirs; // <path, utime>
 

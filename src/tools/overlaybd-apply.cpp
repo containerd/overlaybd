@@ -38,84 +38,26 @@
 #include "../image_service.h"
 #include "../image_file.h"
 #include "CLI11.hpp"
-#include <openssl/sha.h>
+#include "comm_func.h"
 
 using namespace std;
 using namespace photon::fs;
 
-class SHA256CheckedFile: public VirtualReadOnlyFile {
-public:
-    IFile *m_file;
-    SHA256_CTX ctx = {0};
-    size_t total_read = 0;
-
-    SHA256CheckedFile(IFile *file): m_file(file) {
-        SHA256_Init(&ctx);
-    }
-    ~SHA256CheckedFile() {
-        delete m_file;
-    }
-    virtual IFileSystem *filesystem() override {
-        return nullptr;
-    }
-    ssize_t read(void *buf, size_t count) override {
-        auto rc = m_file->read(buf, count);
-        if (rc > 0 && SHA256_Update(&ctx, buf, rc) < 0) {
-            LOG_ERROR("sha256 calculate error");
-            return -1;
-        }
-        return rc;
-    }
-    off_t lseek(off_t offset, int whence) override {
-        return m_file->lseek(offset, whence);
-    }
-    std::string sha256_checksum() {
-        // read trailing data
-        char buf[64*1024];
-        auto rc = m_file->read(buf, 64*1024);
-        if (rc == 64*1024) {
-            LOG_WARN("too much trailing data");
-        }
-        if (rc > 0 && SHA256_Update(&ctx, buf, rc) < 0) {
-            LOG_ERROR("sha256 calculate error");
-            return "";
-        }
-        // calc sha256 result
-        unsigned char sha[32];
-        SHA256_Final(sha, &ctx);
-        char res[SHA256_DIGEST_LENGTH * 2];
-        for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
-            sprintf(res + (i * 2), "%02x", sha[i]);
-        return "sha256:" + std::string(res, SHA256_DIGEST_LENGTH * 2);
-    }
-    int fstat(struct stat *buf) override {
-        return m_file->fstat(buf);
-    }
-};
-
-IFile *open_file(const char *fn, int flags, mode_t mode = 0) {
-    auto file = open_localfile_adaptor(fn, flags, mode, 0);
-    if (!file) {
-        fprintf(stderr, "failed to open file '%s', %d: %s\n", fn, errno, strerror(errno));
-        exit(-1);
-    }
-    return file;
-}
-
 int main(int argc, char **argv) {
-    string commit_msg;
-    string parent_uuid;
     std::string image_config_path, input_path, gz_index_path, config_path, sha256_checksum;
+    string tarheader;
     bool raw = false, mkfs = false, verbose = false;
 
     CLI::App app{"this is overlaybd-apply, apply OCIv1 tar layer to overlaybd format"};
     app.add_flag("--raw", raw, "apply to raw image")->default_val(false);
     app.add_flag("--mkfs", mkfs, "mkfs before apply")->default_val(false);
+
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
-    app.add_option("--service_config_path", config_path, "overlaybd image service config path")->type_name("FILEPATH")->check(CLI::ExistingFile);
+    app.add_option("--service_config_path", config_path, "overlaybd image service config path")->type_name("FILEPATH")->check(CLI::ExistingFile)->default_val("/etc/overlaybd/overlaybd.json");
     app.add_option("--gz_index_path", gz_index_path, "build gzip index if layer is gzip, only used with fastoci")->type_name("FILEPATH");
     app.add_option("--checksum", sha256_checksum, "sha256 checksum for origin uncompressed data");
     app.add_option("input_path", input_path, "input OCIv1 tar layer path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
+
     app.add_option("image_config_path", image_config_path, "overlaybd image config path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     CLI11_PARSE(app, argc, argv);
 
@@ -123,21 +65,13 @@ int main(int argc, char **argv) {
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     DEFER({photon::fini();});
 
+
     ImageService *imgservice = nullptr;
     photon::fs::IFile *imgfile = nullptr;
     if (raw) {
         imgfile = open_file(image_config_path.c_str(), O_RDWR, 0644);
     } else {
-        if (config_path.empty()) {
-            imgservice = create_image_service();
-        } else {
-            imgservice = create_image_service(config_path.c_str());
-        }
-        if (imgservice == nullptr) {
-            fprintf(stderr, "failed to create image service\n");
-            exit(-1);
-        }
-        imgfile = imgservice->create_image_file(image_config_path.c_str());
+        create_overlaybd(config_path, image_config_path, imgservice, imgfile);
     }
     if (imgfile == nullptr) {
         fprintf(stderr, "failed to create image file\n");
@@ -147,25 +81,10 @@ int main(int argc, char **argv) {
         delete imgfile;
         delete imgservice;
     });
+    bool gen_fastoci = (gz_index_path != "" );
 
-    if (mkfs) {
-        if (make_extfs(imgfile) < 0) {
-            fprintf(stderr, "mkfs failed, %s\n", strerror(errno));
-            exit(-1);
-        }
-    }
-    // for now, buffer_file can't be used with fastoci
-    auto extfs = new_extfs(imgfile, gz_index_path == "");
-    if (!extfs) {
-        fprintf(stderr, "new extfs failed, %s\n", strerror(errno));
-        exit(-1);
-    }
-    auto target = new_subfs(extfs, "/", true);
-    if (!target) {
-        fprintf(stderr, "new subfs failed, %s\n", strerror(errno));
-        exit(-1);
-    }
-    DEFER({delete target;});
+    auto target = create_ext4fs(imgfile, mkfs, !gen_fastoci, "/");
+    DEFER({ delete target; });
 
     photon::fs::IFile* src_file = nullptr;
     SHA256CheckedFile* checksum_file = nullptr;
@@ -189,7 +108,9 @@ int main(int argc, char **argv) {
     }
 
     photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
-    auto tar = new UnTar(src_file, target, 0, 4096, base_file, gz_index_path != "");
+
+    auto tar = new UnTar(src_file, target, 0, 4096, base_file, gen_fastoci);
+
     if (tar->extract_all() < 0) {
         fprintf(stderr, "failed to extract\n");
         exit(-1);
