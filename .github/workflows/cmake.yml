@@ -87,7 +87,7 @@ jobs:
         ls obd_mp
         sudo diff -r --exclude "lost+found" test_data obd_mp
         sudo umount obd_mp
-    - name: E2E Test FastOCI
+    - name: E2E Test turboOCIv1
       working-directory: ${{github.workspace}}/build
       shell: bash
       run: |
@@ -118,9 +118,3 @@ jobs:
       working-directory: ${{github.workspace}}/build
       shell: bash
       run: ctest -j8 --output-on-failure -C $BUILD_TYPE
-
-
-
-
-
-

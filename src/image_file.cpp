@@ -384,7 +384,7 @@ LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
     }
 
     if (upper.target() != "") {
-        LOG_INFO("fastoci upper layer : `, `, `, `", upper.index(), upper.data(), upper.target());
+        LOG_INFO("turboOCIv1 upper layer : `, `, `, `", upper.index(), upper.data(), upper.target());
         target_file = new_sure_file_by_path(upper.target().c_str(), O_RDWR, this);
         if (!target_file) {
             LOG_ERROR("open(`,flags), `:`", upper.target(), errno, strerror(errno));

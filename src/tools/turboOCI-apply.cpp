@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
     bool raw = false, mkfs = false, verbose = false;
     bool export_tar_headers = false, import_tar_headers = false;
 
-    CLI::App app{"this is fastoci-apply, apply OCIv1 tar layer to overlaybd-fastoci format"};
+    CLI::App app{"this is turboOCI-apply, apply OCIv1 tar layer to 'Overlaybd-TurboOCI v1' format"};
     app.add_flag("--mkfs", mkfs, "mkfs before apply")->default_val(false);
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     app.add_option("--service_config_path", config_path, "overlaybd image service config path")
@@ -73,10 +73,10 @@ int main(int argc, char **argv) {
         ->check(CLI::ExistingFile)
         ->default_val("/etc/overlaybd/overlaybd.json");
     app.add_option("--gz_index_path", gz_index_path,
-                   "build gzip index if layer is gzip, only used with fastoci")
+                   "build gzip index if layer is gzip, only used with turboOCI")
         ->type_name("FILEPATH")
         ->default_val("gzip.meta");
-    app.add_flag("--import", import_tar_headers, "generate fastoci file from <input_path>")
+    app.add_flag("--import", import_tar_headers, "generate turboOCI file from <input_path>")
         ->default_val(false);
     app.add_flag("--export", export_tar_headers, "export tar meta from <input_path>")
         ->default_val(false);
@@ -121,20 +121,20 @@ int main(int argc, char **argv) {
         delete imgservice;
     });
 
-    // for now, buffer_file can't be used with fastoci
+    // for now, buffer_file can't be used with turboOCI
     auto target = create_ext4fs(imgfile, mkfs, false, "/");
     DEFER({ delete target; });
 
     photon::fs::IFile *base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
-    bool gen_fastoci = true;
+    bool gen_turboOCI = true;
     int option = (import_tar_headers ? TAR_IGNORE_CRC : 0);
     auto tar =
-        new UnTar(src_file, target, option, 4096, base_file, gen_fastoci, import_tar_headers);
+        new UnTar(src_file, target, option, 4096, base_file, gen_turboOCI, import_tar_headers);
 
     if (tar->extract_all() < 0) {
         fprintf(stderr, "failed to extract\n");
         exit(-1);
     }
-    fprintf(stdout, "fastoci-apply done\n");
+    fprintf(stdout, "turboOCI-apply done\n");
     return 0;
 }

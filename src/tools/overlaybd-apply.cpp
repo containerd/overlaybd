@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
 
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     app.add_option("--service_config_path", config_path, "overlaybd image service config path")->type_name("FILEPATH")->check(CLI::ExistingFile)->default_val("/etc/overlaybd/overlaybd.json");
-    app.add_option("--gz_index_path", gz_index_path, "build gzip index if layer is gzip, only used with fastoci")->type_name("FILEPATH");
+    app.add_option("--gz_index_path", gz_index_path, "build gzip index if layer is gzip, only used with turboOCIv1")->type_name("FILEPATH");
     app.add_option("--checksum", sha256_checksum, "sha256 checksum for origin uncompressed data");
     app.add_option("input_path", input_path, "input OCIv1 tar layer path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
 
@@ -81,9 +81,9 @@ int main(int argc, char **argv) {
         delete imgfile;
         delete imgservice;
     });
-    bool gen_fastoci = (gz_index_path != "" );
+    bool gen_turboOCI = (gz_index_path != "" );
 
-    auto target = create_ext4fs(imgfile, mkfs, !gen_fastoci, "/");
+    auto target = create_ext4fs(imgfile, mkfs, !gen_turboOCI, "/");
     DEFER({ delete target; });
 
     photon::fs::IFile* src_file = nullptr;
@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
 
     photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
 
-    auto tar = new UnTar(src_file, target, 0, 4096, base_file, gen_fastoci);
+    auto tar = new UnTar(src_file, target, 0, 4096, base_file, gen_turboOCI);
 
     if (tar->extract_all() < 0) {
         fprintf(stderr, "failed to extract\n");
