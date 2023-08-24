@@ -41,7 +41,7 @@ IFileSystem *lfs = nullptr;
 
 int verify_crc(IFile* src_file) {
 
-    if (!is_zfile(src_file)) {
+    if (is_zfile(src_file) != 1) {
         fprintf(stderr, "format error! <source_file> should be a zfile.\n");
         exit(-1);
     }

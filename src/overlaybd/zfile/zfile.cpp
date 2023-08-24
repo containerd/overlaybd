@@ -938,6 +938,9 @@ int zfile_validation_check(IFile *src) {
 }
 
 int is_zfile(IFile *file) {
+    if (!file) {
+        LOG_ERROR_RETURN(0, -1, "file is nullptr.");
+    }
     char buf[CompressionFile::HeaderTrailer::SPACE];
     auto ret = file->pread(buf, CompressionFile::HeaderTrailer::SPACE, 0);
     if (ret < (ssize_t)CompressionFile::HeaderTrailer::SPACE)
