@@ -50,6 +50,7 @@ int main(int argc, char **argv) {
     string parent_uuid;
     bool sparse = false;
     std::string data_file_path, index_file_path, warp_index_path;
+    bool build_turboOCI = false;
     bool build_fastoci = false;
     bool mkfs = false;
     bool verbose = false;
@@ -57,13 +58,16 @@ int main(int argc, char **argv) {
     CLI::App app{"this is overlaybd-create"};
     app.add_option("-u", parent_uuid, "parent uuid");
     app.add_flag("-s", sparse, "create sparse RW layer")->default_val(false);
-    app.add_flag("--fastoci", build_fastoci, "commit using fastoci format")->default_val(false);
+    app.add_flag("--turboOCI", build_turboOCI, "commit using turboOCI format")->default_val(false);
+    app.add_flag("--fastoci", build_fastoci, "commit using turboOCI format(depracated)")->default_val(false);
     app.add_flag("--mkfs", mkfs, "mkfs after create")->default_val(false);
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->required();
     app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->required();
     app.add_option("vsize", vsize, "virtual size(GB)")->type_name("INT")->check(CLI::PositiveNumber)->required();
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     CLI11_PARSE(app, argc, argv);
+
+    build_turboOCI = build_turboOCI || build_fastoci;
 
     set_log_output_level(verbose ? 0 : 1);
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
@@ -76,7 +80,7 @@ int main(int argc, char **argv) {
     IFile* findex = open_file(index_file_path.c_str(), flag, mode);
     IFile* file = nullptr;
 
-    if (build_fastoci) {
+    if (build_turboOCI) {
         LSMT::WarpFileArgs args(findex, fdata, nullptr);
         args.virtual_size = vsize;
         file = LSMT::create_warpfile(args, false);

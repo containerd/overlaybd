@@ -16,10 +16,10 @@ target_include_directories(overlaybd-apply PUBLIC ${PHOTON_INCLUDE_DIR} ${rapidj
 target_link_libraries(overlaybd-apply photon_static overlaybd_lib overlaybd_image_lib)
 set_target_properties(overlaybd-apply PROPERTIES INSTALL_RPATH "/opt/overlaybd/lib")
 
-add_executable(fastoci-apply fastoci-apply.cpp comm_func.cpp)
-target_include_directories(fastoci-apply PUBLIC ${PHOTON_INCLUDE_DIR} ${rapidjson_SOURCE_DIR}/include)
-target_link_libraries(fastoci-apply photon_static overlaybd_lib overlaybd_image_lib)
-set_target_properties(fastoci-apply PROPERTIES INSTALL_RPATH "/opt/overlaybd/lib")
+add_executable(turboOCI-apply turboOCI-apply.cpp comm_func.cpp)
+target_include_directories(turboOCI-apply PUBLIC ${PHOTON_INCLUDE_DIR} ${rapidjson_SOURCE_DIR}/include)
+target_link_libraries(turboOCI-apply photon_static overlaybd_lib overlaybd_image_lib)
+set_target_properties(turboOCI-apply PROPERTIES INSTALL_RPATH "/opt/overlaybd/lib")
 
 
 install(TARGETS
@@ -27,6 +27,6 @@ install(TARGETS
     overlaybd-create
     overlaybd-zfile
     overlaybd-apply
-    fastoci-apply
+    turboOCI-apply
     DESTINATION /opt/overlaybd/bin
 )

@@ -167,10 +167,10 @@ TEST_F(TarTest, tar_meta) {
     make_extfs(verify_dev);
     auto verify_ext4fs = new_extfs(verify_dev, false);
     auto verifyfs = new_subfs(verify_ext4fs, "/", true);
-    auto fastoci_verify = new UnTar(src_file, verifyfs, 0, 4096, verify_dev, true);
-    ASSERT_EQ(0, fastoci_verify->extract_all());
+    auto turboOCI_verify = new UnTar(src_file, verifyfs, 0, 4096, verify_dev, true);
+    ASSERT_EQ(0, turboOCI_verify->extract_all());
     verify_ext4fs->sync();
-    delete fastoci_verify;
+    delete turboOCI_verify;
     delete verifyfs;
 
     src_file->lseek(0, 0);
@@ -187,9 +187,9 @@ TEST_F(TarTest, tar_meta) {
     make_extfs(imgfile);
     auto extfs = new_extfs(imgfile, false);
     auto target = new_subfs(extfs, "/", true);
-    auto fastoci_mock = new UnTar(tar_idx, target, TAR_IGNORE_CRC, 4096, imgfile, true, true);
-    auto ret = fastoci_mock->extract_all();
-    delete fastoci_mock;
+    auto turboOCI_mock = new UnTar(tar_idx, target, TAR_IGNORE_CRC, 4096, imgfile, true, true);
+    auto ret = turboOCI_mock->extract_all();
+    delete turboOCI_mock;
     delete target;
 
     ASSERT_EQ(0, ret);

@@ -65,7 +65,7 @@ photon::fs::IFileSystem *create_ext4fs(photon::fs::IFile *imgfile, bool mkfs,
             exit(-1);
         }
     }
-    // for now, buffer_file can't be used with fastoci
+    // for now, buffer_file can't be used with turboOCI
     auto extfs = new_extfs(imgfile, enable_buffer);
     if (!extfs) {
         fprintf(stderr, "new extfs failed, %s\n", strerror(errno));

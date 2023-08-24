@@ -206,7 +206,7 @@ int UnTar::extract_file() {
 
 int UnTar::extract_regfile_meta_only(const char *filename) {
     size_t size = get_size();
-    LOG_DEBUG("  ==> extracting: ` (` bytes) (fastoci index)", filename, size);
+    LOG_DEBUG("  ==> extracting: ` (` bytes) (turboOCIv1 index)", filename, size);
     photon::fs::IFile *fout = fs->open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0666);
     if (fout == nullptr) {
         return -1;
