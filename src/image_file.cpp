@@ -31,7 +31,6 @@
 #include "overlaybd/zfile/zfile.h"
 #include "config.h"
 #include "image_file.h"
-#include "sure_file.h"
 #include "switch_file.h"
 #include "overlaybd/gzip/gz.h"
 #include "overlaybd/gzindex/gzfile.h"
@@ -168,13 +167,6 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
         LOG_ERROR_RETURN(0, nullptr, "failed to open switch file `", url);
     }
 
-    IFile *sure_file = new_sure_file(switch_file, this);
-    if (!sure_file) {
-        set_failed("failed to open sure file `" + url);
-        delete switch_file;
-        LOG_ERROR_RETURN(0, nullptr, "failed to open sure file `", url);
-    }
-
     if (conf.HasMember("download") && conf.download().enable() == 1) {
         // download from registry, verify sha256 after downloaded.
         IFile *srcfile = image_service.global_fs.srcfs->open(url.c_str(), O_RDONLY);
@@ -189,7 +181,7 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
         }
     }
 
-    return sure_file;
+    return switch_file;
 }
 
 void ImageFile::start_bk_dl_thread() {
@@ -370,14 +362,13 @@ LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
     IFile *idx_file = NULL;
     IFile *target_file = NULL;
     LSMT::IFileRW *ret = NULL;
-
-    data_file = new_sure_file_by_path(upper.data().c_str(), O_RDWR, this);
+    data_file = open_localfile_adaptor(upper.data().c_str(), O_RDWR, 0644);
     if (!data_file) {
         LOG_ERROR("open(`,flags), `:`", upper.data(), errno, strerror(errno));
         goto ERROR_EXIT;
     }
 
-    idx_file = new_sure_file_by_path(upper.index().c_str(), O_RDWR, this);
+    idx_file = open_localfile_adaptor(upper.index().c_str(), O_RDWR, 0644);
     if (!idx_file) {
         LOG_ERROR("open(`,flags), `:`", upper.index(), errno, strerror(errno));
         goto ERROR_EXIT;
@@ -385,13 +376,13 @@ LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
 
     if (upper.target() != "") {
         LOG_INFO("turboOCIv1 upper layer : `, `, `, `", upper.index(), upper.data(), upper.target());
-        target_file = new_sure_file_by_path(upper.target().c_str(), O_RDWR, this);
+        target_file = open_localfile_adaptor(upper.target().c_str(), O_RDWR, 0644);
         if (!target_file) {
             LOG_ERROR("open(`,flags), `:`", upper.target(), errno, strerror(errno));
             goto ERROR_EXIT;
         }
         if (upper.gzipIndex() != "") {
-            auto gzip_index = new_sure_file_by_path(upper.gzipIndex().c_str(), O_RDWR, this);
+            auto gzip_index = open_localfile_adaptor(upper.gzipIndex().c_str(), O_RDWR, 0644);
             if (!gzip_index) {
                 LOG_ERROR("open(`,flags), `:`", upper.gzipIndex(), errno, strerror(errno));
                 goto ERROR_EXIT;
