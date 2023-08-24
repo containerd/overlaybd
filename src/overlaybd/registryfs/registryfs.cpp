@@ -425,7 +425,7 @@ public:
                 LOG_WARN("failed to perform HTTP GET, going to retry ", VALUE(code), VALUE(offset),
                          VALUE(count), VALUE(ret_len), eno);
 
-                photon::thread_usleep(1000);
+                photon::thread_usleep(10000);
                 goto again;
             } else {
                 LOG_ERROR_RETURN(ENOENT, -1, "failed to perform HTTP GET ", VALUE(m_url),

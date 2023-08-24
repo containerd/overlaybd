@@ -49,8 +49,10 @@ static IFile *try_open_zfile(IFile *file, bool verify, const char *file_path) {
             LOG_ERROR_RETURN(0, nullptr, "zfile_open_ro failed, path: `: error: `(`)", file_path,
                              errno, strerror(errno));
         }
+        LOG_INFO("open file as zfile");
         return zf;
     }
+    LOG_INFO("file is not zfile format");
     return file;
 }
 
@@ -83,6 +85,10 @@ public:
         }
 
         file = try_open_zfile(new_tar_file_adaptor(file), false, m_filepath.c_str());
+        if (file == nullptr) {
+            LOG_ERROR("failed to open commit file as zfile, path: `", m_filepath);
+            return;
+        }
         LOG_INFO("switch to localfile '`' success.", m_filepath);
         m_local_file = file;
     }

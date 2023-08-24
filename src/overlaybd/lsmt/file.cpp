@@ -1528,7 +1528,7 @@ void *do_parallel_load_index(void *param) {
             return nullptr;
         }
         auto file = job->get_file();
-        LOG_INFO("check file if normalfile or LSMTFile");
+        LOG_INFO("check `-th file is normal file or LSMT file", job->i);
         IMemoryIndex *pi = nullptr;
         LSMT::SegmentMapping *p = nullptr;
         auto type = file->ioctl(IFileRO::GetType);
@@ -1560,6 +1560,7 @@ void *do_parallel_load_index(void *param) {
             LOG_ERROR_RETURN(0, nullptr, "failed to create memory index!");
         }
         job->set_index(pi);
+        LOG_INFO("load index from `-th file done", job->i);
     }
     return NULL;
 }

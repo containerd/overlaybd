@@ -301,20 +301,23 @@ private:
 
 int is_tar_file(IFile *file) {
     TarHeader th_buf;
-    if (file->pread(&th_buf, T_BLOCKSIZE, 0) != T_BLOCKSIZE) {
-        LOG_DEBUG("error read tar file header");
+    auto ret = file->pread(&th_buf, T_BLOCKSIZE, 0);
+    if (ret < 0) {
+        LOG_ERROR_RETURN(0, -1, "read tar file header failed");
+    } else if (ret != T_BLOCKSIZE) {
+        LOG_WARN("read tar file header error, expect `, ret `", T_BLOCKSIZE, ret);
         return 0;
     }
     if (strncmp(th_buf.magic, TMAGIC, TMAGLEN - 1) != 0) {
-        LOG_DEBUG("unknown magic value in tar header");
+        LOG_INFO("unknown magic value in tar header");
         return 0;
     }
     if (strncmp(th_buf.version, TVERSION, TVERSLEN) != 0) {
-        LOG_DEBUG("unknown version value in tar header");
+        LOG_INFO("unknown version value in tar header");
         return 0;
     }
     if (!th_buf.crc_ok()) {
-        LOG_DEBUG("tar header checksum error");
+        LOG_INFO("tar header checksum error");
         return 0;
     }
     return 1;
@@ -329,11 +332,16 @@ IFile *new_tar_file(IFile *file, bool create) {
 }
 
 IFile *open_tar_file(IFile *file) {
-    if (is_tar_file(file) == 1) {
+    auto ret = is_tar_file(file);
+    if (ret == 1) {
+        LOG_INFO("open file as tar file");
         return new_tar_file(file);
+    } else if (ret == 0) {
+        LOG_INFO("open file as normal file");
+        return file;
+    } else {
+        LOG_ERROR_RETURN(0, nullptr, "open tar file failed");
     }
-    LOG_DEBUG("not tar file, open as normal file");
-    return file; // open as normal file
 }
 
 IFileSystem *new_tar_fs_adaptor(IFileSystem *fs) {
