@@ -44,15 +44,13 @@ int UnTar::set_file_perms(const char *filename) {
     /* change owner/group */
     if (geteuid() == 0) {
         if (fs->lchown(filename, uid, gid) == -1) {
-            LOG_ERROR("lchown failed, filename `, `", filename, strerror(errno));
-            return -1;
+            LOG_ERRNO_RETURN(0, -1, "lchown failed, filename `, uid `, gid `", filename, uid, gid);
         }
     }
 
     /* change access/modification time */
     if (fs->lutimes(filename, tv) == -1) {
-        LOG_ERROR("lutimes failed, filename `, `", filename, strerror(errno));
-        return -1;
+        LOG_ERRNO_RETURN(0, -1, "lutimes failed, filename `", filename);
     }
 
     /* change permissions */
@@ -69,8 +67,7 @@ int UnTar::set_file_perms(const char *filename) {
         return 0;
     }
     if (fs->chmod(filename, mode) == -1) {
-        LOG_ERROR("chmod failed `", strerror(errno));
-        return -1;
+        LOG_ERRNO_RETURN(0, -1, "chmod failed, filename `, mode `", filename, mode);
     }
 
     return 0;
@@ -95,8 +92,7 @@ int UnTar::extract_all() {
 
     while ((i = read_header()) == 0) {
         if (extract_file() != 0) {
-            LOG_ERROR("extract failed, filename `, `", get_pathname(), strerror(errno));
-            return -1;
+            LOG_ERRNO_RETURN(0, -1, "extract failed, filename `", get_pathname());
         }
         if (TH_ISDIR(header)) {
             dirs.emplace_back(std::make_pair(std::string(get_pathname()), header.get_mtime()));
@@ -111,8 +107,7 @@ int UnTar::extract_all() {
         tv[0].tv_sec = tv[1].tv_sec = dir.second;
         tv[0].tv_usec = tv[1].tv_usec = 0;
         if (fs->lutimes(path.c_str(), tv) == -1) {
-            LOG_ERROR("utime failed, filename `, `", dir.first.c_str(), strerror(errno));
-            return -1;
+            LOG_ERRNO_RETURN(0, -1, "utime failed, filename `", dir.first.c_str());
         }
     }
 
@@ -151,15 +146,11 @@ int UnTar::extract_file() {
         } else {
             if (!S_ISDIR(s.st_mode)) {
                 if (fs->unlink(npath.c_str()) == -1 && errno != ENOENT) {
-                    LOG_ERROR("remove exist file ` failed, `", npath.c_str(), strerror(errno));
-                    errno = EEXIST;
-                    return -1;
+                    LOG_ERRNO_RETURN(EEXIST, -1, "remove exist file ` failed", npath.c_str());
                 }
             } else if (!TH_ISDIR(header)) {
                 if (remove_all(npath) == -1) {
-                    LOG_ERROR("remove exist dir ` failed, `", npath.c_str(), strerror(errno));
-                    errno = EEXIST;
-                    return -1;
+                    LOG_ERRNO_RETURN(EEXIST, -1, "remove exist dir ` failed", npath.c_str());
                 }
             }
         }
@@ -290,8 +281,7 @@ int UnTar::extract_hardlink(const char *filename) {
     char *linktgt = get_linkname();
     LOG_DEBUG("  ==> extracting: ` (link to `)", filename, linktgt);
     if (fs->link(linktgt, filename) == -1) {
-        LOG_ERROR("link failed, `", strerror(errno));
-        return -1;
+        LOG_ERRNO_RETURN(0, -1, "link failed, filename `, linktgt `", filename, linktgt);
     }
     return 0;
 }
@@ -300,8 +290,7 @@ int UnTar::extract_symlink(const char *filename) {
     char *linktgt = get_linkname();
     LOG_DEBUG("  ==> extracting: ` (symlink to `)", filename, linktgt);
     if (fs->symlink(linktgt, filename) == -1) {
-        LOG_ERROR("symlink failed, `", strerror(errno));
-        return -1;
+        LOG_ERRNO_RETURN(0, -1, "symlink failed, filename `, linktgt `", filename, linktgt);
     }
     return 0;
 }
@@ -327,8 +316,7 @@ int UnTar::extract_block_char_fifo(const char *filename) {
 
     LOG_DEBUG("  ==> extracting: ` (block/char/fifo `,`)", filename, devmaj, devmin);
     if (fs->mknod(filename, mode, makedev(devmaj, devmin)) == -1) {
-        LOG_ERROR("block/char/fifo failed, `", strerror(errno));
-        return -1;
+        LOG_ERRNO_RETURN(0, -1, "block/char/fifo failed, filename `", filename);
     }
 
     return 0;

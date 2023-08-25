@@ -128,8 +128,7 @@ bool BkDownload::download_done() {
 
     int ret = lfs->rename(old_name.c_str(), new_name.c_str());
     if (ret != 0) {
-        LOG_ERROR("rename(`,`), `:`", old_name, new_name, errno, strerror(errno));
-        return false;
+        LOG_ERRNO_RETURN(0, false, "rename(`,`) failed", old_name, new_name);
     }
     LOG_INFO("download verify done. rename(`,`) success", old_name, new_name);
     return true;

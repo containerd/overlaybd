@@ -332,6 +332,9 @@ IFile *new_tar_file(IFile *file, bool create) {
 }
 
 IFile *open_tar_file(IFile *file) {
+    if (!file) {
+        LOG_ERROR_RETURN(0, nullptr, "file is nullptr");
+    }
     auto ret = is_tar_file(file);
     if (ret == 1) {
         LOG_INFO("open file as tar file");
