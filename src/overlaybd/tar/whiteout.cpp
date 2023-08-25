@@ -59,14 +59,12 @@ int UnTar::remove_all(const std::string &path, bool rmdir) {
             return 0;
         }
     } else {
-        LOG_ERROR("get path ` stat failed, errno `:`", path, errno, strerror(errno));
-        return -1;
+        LOG_ERRNO_RETURN(0, -1, "get path ` stat failed", path);
     }
 
     auto dirs = fs->opendir(path.c_str());
     if (dirs == nullptr) {
-        LOG_ERROR("open dir ` failed, errno `:`", path, errno, strerror(errno));
-        return -1;
+        LOG_ERRNO_RETURN(0, -1, "open dir ` failed", path);
     }
     dirent *dirInfo;
     while ((dirInfo = dirs->get()) != nullptr) {

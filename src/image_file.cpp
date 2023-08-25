@@ -58,7 +58,7 @@ IFile *ImageFile::__open_ro_file(const std::string &path) {
     auto file = open_localfile_adaptor(path.c_str(), flags, 0644, ioengine);
     if (!file) {
         set_failed("failed to open local file " + path);
-        LOG_ERROR_RETURN(0, nullptr, "open(`),`:`", path, errno, strerror(errno));
+        LOG_ERRNO_RETURN(0, nullptr, "open(`) failed", path);
     }
 
     if (flags & O_DIRECT) {
@@ -67,8 +67,7 @@ IFile *ImageFile::__open_ro_file(const std::string &path) {
         if (!aligned_file) {
             set_failed("failed to open aligned_file_adaptor " + path);
             delete file;
-            LOG_ERROR_RETURN(0, nullptr, "new_aligned_file_adaptor(`) failed, `:`", path, errno,
-                             strerror(errno));
+            LOG_ERRNO_RETURN(0, nullptr, "new_aligned_file_adaptor(`) failed", path);
         }
         file = aligned_file;
     }
@@ -77,8 +76,7 @@ IFile *ImageFile::__open_ro_file(const std::string &path) {
     if (!switch_file) {
         set_failed("failed to open switch file `" + path);
         delete file;
-        LOG_ERROR_RETURN(0, nullptr, "new_switch_file(`) failed, `,:`", path, errno,
-                         strerror(errno));
+        LOG_ERRNO_RETURN(0, nullptr, "new_switch_file(`) failed", path);
     }
     file = switch_file;
 
@@ -89,7 +87,7 @@ IFile *ImageFile::__open_ro_target_file(const std::string &path) {
     auto file = open_localfile_adaptor(path.c_str(), O_RDONLY, 0644, 0);
     if (!file) {
         set_failed("failed to open local data file " + path);
-        LOG_ERROR_RETURN(0, nullptr, "open(`),`:`", path, errno, strerror(errno));
+        LOG_ERRNO_RETURN(0, nullptr, "open(`) failed", path);
     }
     return file;
 }
@@ -281,7 +279,7 @@ int ImageFile::open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer,
         auto gz_index = open_localfile_adaptor(layer.gzipIndex().c_str(), O_RDONLY, 0644, 0);
         if (!gz_index) {
             set_failed("failed to open gzip index " + layer.gzipIndex());
-            LOG_ERROR_RETURN(0, -1, "open(`),`:`", layer.gzipIndex(), errno, strerror(errno));
+            LOG_ERRNO_RETURN(0, -1, "open(`) failed", layer.gzipIndex());
         }
         target_file = new_gzfile(target_file, gz_index, true);
         if (image_service.global_conf.gzipCacheConfig().enable() && layer.targetDigest() != "") {

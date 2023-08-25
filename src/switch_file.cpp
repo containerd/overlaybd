@@ -46,13 +46,12 @@ static IFile *try_open_zfile(IFile *file, bool verify, const char *file_path) {
     if (is_zfile == 1) {
         auto zf = ZFile::zfile_open_ro(file, verify, true);
         if (!zf) {
-            LOG_ERROR_RETURN(0, nullptr, "zfile_open_ro failed, path: `: error: `(`)", file_path,
-                             errno, strerror(errno));
+            LOG_ERRNO_RETURN(0, nullptr, "zfile_open_ro failed, path: `", file_path);
         }
-        LOG_INFO("open file as zfile");
+        LOG_INFO("open file as zfile format, path: `", file_path);
         return zf;
     }
-    LOG_INFO("file is not zfile format");
+    LOG_INFO("file is not zfile format, path: `", file_path);
     return file;
 }
 

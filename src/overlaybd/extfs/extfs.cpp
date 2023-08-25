@@ -57,15 +57,13 @@ ext2_filsys do_ext2fs_open(io_manager extfs_manager) {
     );
     if (ret) {
         errno = -parse_extfs_error(nullptr, 0, ret);
-        LOG_ERROR("failed ext2fs_open, errno `:`", errno, strerror(errno));
-        return nullptr;
+        LOG_ERRNO_RETURN(0, nullptr, "failed ext2fs_open");
     }
     ret = ext2fs_read_bitmaps(fs);
     if (ret) {
         errno = -parse_extfs_error(fs, 0, ret);
-        LOG_ERROR("failed ext2fs_read_bitmaps, errno `:`", errno, strerror(errno));
         ext2fs_close(fs);
-        return nullptr;
+        LOG_ERRNO_RETURN(0, nullptr, "failed ext2fs_read_bitmaps");
     }
     LOG_INFO("ext2fs opened");
     return fs;
