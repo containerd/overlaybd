@@ -39,7 +39,6 @@ using namespace photon::fs;
 static IFile *try_open_zfile(IFile *file, bool verify, const char *file_path) {
     auto is_zfile = ZFile::is_zfile(file);
     if (is_zfile == -1) {
-        delete file;
         LOG_ERRNO_RETURN(0, nullptr, "check file type failed.");
     }
     // open zfile
@@ -82,9 +81,16 @@ public:
             LOG_ERROR("failed to open commit file, path: `", m_filepath);
             return;
         }
-
-        file = try_open_zfile(new_tar_file_adaptor(file), false, m_filepath.c_str());
-        if (file == nullptr) {
+        auto tarfile = new_tar_file_adaptor(file);
+        if (tarfile == nullptr) {
+            delete file;
+            LOG_ERROR("failed to open commit file as tar file, path: `", m_filepath);
+            return;
+        }
+        file = tarfile;
+        auto zfile = try_open_zfile(file, false, m_filepath.c_str());
+        if (zfile == nullptr) {
+            delete file;
             LOG_ERROR("failed to open commit file as zfile, path: `", m_filepath);
             return;
         }
@@ -157,11 +163,11 @@ public:
 };
 
 ISwitchFile *new_switch_file(IFile *source, bool local, const char *file_path) {
-    // if tar file, open tar file
     int retry = 1;
 again:
-    auto file = try_open_zfile(new_tar_file_adaptor(source), !local, file_path);
+    auto file = try_open_zfile(source, !local, file_path);
     if (file == nullptr) {
+        LOG_ERROR("failed to open source file as zfile, path: `, retry: `", file_path, retry);
         if (retry--) // may retry after cache evict
             goto again;
         return nullptr;
