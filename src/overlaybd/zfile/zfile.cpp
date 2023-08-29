@@ -338,13 +338,18 @@ public:
 
             int get_current_block() {
                 m_reader->m_buf_offset = m_reader->get_buf_offset(m_reader->m_idx);
-                if ((size_t)(m_reader->m_buf_offset) > sizeof(m_buf)) {
+                if ((size_t)(m_reader->m_buf_offset) >= sizeof(m_buf)) {
                     m_reader->m_eno = ERANGE;
                     LOG_ERRNO_RETURN(0, -1, "get inner buffer offset failed.");
                 }
 
                 auto blk_idx = m_reader->m_idx;
                 compressed_size = m_reader->compressed_size();
+                if ((size_t)(m_reader->m_buf_offset) + compressed_size > sizeof(m_buf)) {
+                    m_reader->m_eno = ERANGE;
+                    LOG_ERRNO_RETURN(0, -1, "inner buffer offset (`) + compressed size (`) overflow.",
+                                    m_reader->m_buf_offset, compressed_size);
+                }
 
                 if (blk_idx == m_reader->m_begin_idx) {
                     cp_begin = m_reader->get_inblock_offset(m_reader->m_offset);

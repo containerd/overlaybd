@@ -34,6 +34,7 @@
 #include "switch_file.h"
 #include "overlaybd/gzip/gz.h"
 #include "overlaybd/gzindex/gzfile.h"
+#include "overlaybd/tar/tar_file.h"
 
 #define PARALLEL_LOAD_INDEX 32
 using namespace photon::fs;
@@ -71,10 +72,18 @@ IFile *ImageFile::__open_ro_file(const std::string &path) {
         }
         file = aligned_file;
     }
+
+    auto tar_file = new_tar_file_adaptor(file);
+    if (!tar_file) {
+        set_failed("failed to open file as tar file " + path);
+        delete file;
+        LOG_ERROR_RETURN(0, nullptr, "new_tar_file_adaptor(`) failed", path);
+    }
+    file = tar_file;
     // set to local, no need to switch, for zfile and audit
     ISwitchFile *switch_file = new_switch_file(file, true, path.c_str());
     if (!switch_file) {
-        set_failed("failed to open switch file `" + path);
+        set_failed("failed to open switch file " + path);
         delete file;
         LOG_ERRNO_RETURN(0, nullptr, "new_switch_file(`) failed", path);
     }
@@ -158,10 +167,17 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
     remote_file->ioctl(SET_SIZE, size);
     remote_file->ioctl(SET_LOCAL_DIR, dir);
 
-    ISwitchFile *switch_file = new_switch_file(remote_file);
-    if (!switch_file) {
-        set_failed("failed to open switch file `" + url);
+    IFile *tar_file = new_tar_file_adaptor(remote_file);
+    if (!tar_file) {
+        set_failed("failed to open remote file as tar file " + url);
         delete remote_file;
+        LOG_ERROR_RETURN(0, nullptr, "failed to open remote file as tar file `", url);
+    }
+
+    ISwitchFile *switch_file = new_switch_file(tar_file, false, url.c_str());
+    if (!switch_file) {
+        set_failed("failed to open switch file " + url);
+        delete tar_file;
         LOG_ERROR_RETURN(0, nullptr, "failed to open switch file `", url);
     }
 
