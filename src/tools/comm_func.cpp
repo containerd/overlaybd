@@ -18,7 +18,7 @@
 #include "../overlaybd/tar/tar_file.h"
 #include <openssl/sha.h>
 #include <photon/fs/subfs.h>
-
+#include <photon/fs/localfs.h>
 #include "../overlaybd/extfs/extfs.h"
 #include "../image_service.h"
 #include "../image_file.h"

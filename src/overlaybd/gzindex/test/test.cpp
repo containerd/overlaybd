@@ -16,16 +16,25 @@
 
 #include "../gzfile.h"
 #include "../../cache/gzip_cache/cached_fs.h"
+#include "../../gzip/gz.h"
 #include "../../cache/cache.h"
+#include <cstring>
+#include <gtest/gtest-death-test.h>
 #include <photon/photon.h>
 #include <photon/common/io-alloc.h>
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
+#include <photon/io/fd-events.h>
+#include <photon/net/socket.h>
+#include <photon/thread/thread11.h>
+// #include <photon/net/
 #include <gtest/gtest.h>
 #include <iostream>
 #include <fcntl.h>
+#include <unistd.h>
 #include <zlib.h>
 #include <vector>
+#include "../../../tools/sha256file.h"
 
 struct PreadTestCase {
     off_t offset;
@@ -82,8 +91,8 @@ protected:
     void test_pread(PreadTestCase t) {
         char *buf1 = new char[t.count];
         char *buf2 = new char[t.count];
-        DEFER(delete []buf1);
-        DEFER(delete []buf2);
+        DEFER(delete[] buf1);
+        DEFER(delete[] buf2);
         ssize_t ret1 = defile->pread(buf1, t.count, t.offset);
         ssize_t ret2 = gzfile->pread(buf2, t.count, t.offset);
         EXPECT_EQ(ret1, t.ret);
@@ -114,7 +123,7 @@ private:
     static int buildDataFile() {
         // uncompressed data
         unsigned char *buf = new unsigned char[vsize];
-        DEFER(delete []buf);
+        DEFER(delete[] buf);
         for (size_t i = 0; i < vsize; i++) {
             auto j = rand() % 256;
             buf[i] = j;
@@ -129,7 +138,7 @@ private:
         // gzip data
         size_t gzlen = compressBound(vsize) + 4096;
         unsigned char *gzbuf = new unsigned char[gzlen];
-        DEFER(delete []gzbuf);
+        DEFER(delete[] gzbuf);
         if (gzip_compress(buf, vsize, gzbuf, gzlen) != 0) {
             LOG_ERRNO_RETURN(0, -1, "failed to gzip_compress(...)");
         }
@@ -155,10 +164,12 @@ private:
         return 0;
     }
 
-    static int gzip_compress(unsigned char *in, size_t in_len, unsigned char *out, size_t &out_len) {
+    static int gzip_compress(unsigned char *in, size_t in_len, unsigned char *out,
+                             size_t &out_len) {
         z_stream strm;
         memset(&strm, 0, sizeof(strm));
-        int ret = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, MAX_WBITS + 16, 8, Z_DEFAULT_STRATEGY);
+        int ret = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, MAX_WBITS + 16, 8,
+                               Z_DEFAULT_STRATEGY);
         if (ret != Z_OK) {
             LOG_ERRNO_RETURN(0, -1, "failed to deflateInit2(...)");
         }
@@ -185,14 +196,128 @@ const char *GzIndexTest::fn_defile = "/fdata";
 const char *GzIndexTest::fn_gzdata = "/fdata.gz";
 const char *GzIndexTest::fn_gzindex = "/findex";
 
+char uds_path[] = "/tmp/udstest.sock";
+
+int download(const std::string &url, const std::string &out) {
+    if (::access(out.c_str(), 0) == 0)
+        return 0;
+    auto base = std::string(basename(url.c_str()));
+    // download file
+    std::string cmd = "curl -s -o " + out + " " + url;
+    LOG_INFO(VALUE(cmd.c_str()));
+    auto ret = system(cmd.c_str());
+    if (ret != 0) {
+        LOG_ERRNO_RETURN(0, -1, "download failed: `", url.c_str());
+    }
+    return 0;
+}
+
+void handler(photon::net::ISocketStream *sock) {
+    ASSERT_NE(nullptr, sock);
+    LOG_DEBUG("Accepted");
+    photon::thread_yield();
+    char recv[65536];
+    size_t count = 0;
+    auto dst = photon::fs::open_localfile_adaptor("/tmp/dest", O_TRUNC | O_CREAT | O_RDWR);
+    auto idx_file =
+        photon::fs::open_localfile_adaptor("/tmp/dest.gz_idx", O_TRUNC | O_CREAT | O_RDWR);
+    DEFER(delete dst);
+    DEFER(delete idx_file);
+
+    sock->read(recv, sizeof(size_t));
+    // inf(sock, dst);
+    auto st_size = *(ssize_t *)recv;
+    auto gzfile = open_gzstream_file(sock, st_size, idx_file);
+    ASSERT_NE(gzfile, nullptr);
+    DEFER(delete gzfile);
+    while (true) {
+        auto readn = gzfile->read(recv, 65536);
+        if (readn <= 0)
+            break;
+        count += readn;
+        dst->write(recv, readn);
+    }
+    LOG_INFO("RECV `", count);
+    save_gzip_index(gzfile);
+    ASSERT_STREQ(sha256sum("/tmp/dest").c_str(), "sha256:562688d70dcd1596556e7c671c1266f6e9c22b4f4fb8344efa8bed88fc2bac7b");
+}
+
+void uds_server() {
+    auto sock = photon::net::new_uds_server(true);
+    DEFER({ delete (sock); });
+    ASSERT_EQ(0, sock->bind(uds_path));
+    ASSERT_EQ(0, sock->listen(100));
+    char path[PATH_MAX];
+    ASSERT_EQ(0, sock->getsockname(path, PATH_MAX));
+    EXPECT_EQ(0, strcmp(path, uds_path));
+    LOG_INFO("uds server listening `", path);
+    handler(sock->accept());
+    photon::thread_yield_to(nullptr);
+}
+
+void uds_client(photon::fs::IFile *file) {
+    photon::thread_yield_to(nullptr);
+    auto cli = photon::net::new_uds_client();
+    DEFER({ delete cli; });
+    LOG_DEBUG("Connecting");
+    auto sock = cli->connect(uds_path);
+    DEFER(delete sock);
+    LOG_DEBUG(VALUE(sock), VALUE(errno));
+    char path[PATH_MAX];
+    sock->getpeername(path, PATH_MAX);
+    EXPECT_EQ(0, strcmp(path, uds_path));
+    struct stat st;
+    file->fstat(&st);
+    LOG_INFO("Connected `, start send file data(size: `)", path, st.st_size);
+    char buff[65536];
+    sock->write((void *)&st.st_size, sizeof(st.st_size));
+    auto count = 0;
+    while (true) {
+        auto readn = file->read(buff, 65536);
+        ASSERT_NE(readn, -1);
+        auto ret = sock->write(buff, readn);
+        count += readn;
+        LOG_INFO("write ` bytes", ret);
+        ASSERT_EQ(ret, readn);
+        if (readn != 65536)
+            break;
+    }
+    LOG_INFO("SEND: `", count);
+}
+
+TEST_F(GzIndexTest, stream) {
+    set_log_output_level(0);
+    LOG_INFO("start streamFile test");
+    std::string fn_test_tgz = "/tmp/go1.17.6.linux-amd64.tar.gz";
+    ASSERT_EQ(
+        0, download("https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz",
+                    fn_test_tgz.c_str()));
+
+    auto jh1 = photon::thread_enable_join(photon::thread_create11(uds_server));
+
+    auto file = photon::fs::open_localfile_adaptor(fn_test_tgz.c_str(), O_RDONLY);
+    // auto dst = photon::fs::open_localfile_adaptor("/tmp/dest", O_TRUNC | O_CREAT |O_RDWR, 0644);
+    ASSERT_NE(file, nullptr);
+    // inf(file, dst);
+    uds_client(file);
+
+    photon::thread_join(jh1);
+    remove(uds_path);
+    file->lseek(0, SEEK_SET);
+    auto fn_test_tgz_idx = fn_test_tgz + ".index";
+    if (::access(fn_test_tgz_idx.c_str(), 0) != 0){
+        ASSERT_EQ(create_gz_index(file, fn_test_tgz_idx.c_str()), 0);
+    }
+}
+
 TEST_F(GzIndexTest, pread) {
     std::vector<PreadTestCase> t{
         {0, 1, 1},
         {0, 10, 10},
         {1000000, 1000000, 1000000},
         {2000000, 1500000, 1500000},
-        {(off_t) vsize - 10, 10, 10},
-        {(off_t) vsize - 1, 1, 1},
+        {(off_t)vsize - 10, 10, 10},
+        {(off_t)vsize - 1, 1, 1},
     };
     group_test_pread(t);
 }
@@ -203,11 +328,11 @@ TEST_F(GzIndexTest, pread_oob) {
         {-1, 2, -1},
         {-1, 10000, -1},
         {-9999, 10000, -1},
-        {(off_t) vsize, 1, 0},
-        {(off_t) vsize - 1, 2, 1},
-        {(off_t) vsize - 400, 1000, 400},
-        {(off_t) vsize + 1, 1, 0},
-        {(off_t) vsize + 10000, 10000, 0},
+        {(off_t)vsize, 1, 0},
+        {(off_t)vsize - 1, 2, 1},
+        {(off_t)vsize - 400, 1000, 400},
+        {(off_t)vsize + 1, 1, 0},
+        {(off_t)vsize + 10000, 10000, 0},
     };
     group_test_pread(t);
 }
@@ -218,8 +343,9 @@ TEST_F(GzIndexTest, pread_rand) {
     for (size_t i = 0; i < n; i++) {
         size_t x = rand() % vsize;
         size_t y = rand() % vsize;
-        if (x > y) std::swap(x, y);
-        t.push_back({(off_t) x , y - x, (ssize_t) (y - x)});
+        if (x > y)
+            std::swap(x, y);
+        t.push_back({(off_t)x, y - x, (ssize_t)(y - x)});
     }
     group_test_pread(t);
 }
@@ -232,7 +358,6 @@ TEST_F(GzIndexTest, fstat) {
     EXPECT_EQ(defile->fstat(&st), 0);
     EXPECT_EQ(static_cast<size_t>(st.st_size), data_size);
 }
-
 
 class GzCacheTest : public ::testing::Test {
 protected:
@@ -307,8 +432,8 @@ protected:
     void test_pread(PreadTestCase t) {
         char *buf1 = new char[t.count];
         char *buf2 = new char[t.count];
-        DEFER(delete []buf1);
-        DEFER(delete []buf2);
+        DEFER(delete[] buf1);
+        DEFER(delete[] buf2);
         ssize_t ret1 = defile->pread(buf1, t.count, t.offset);
         ssize_t ret2 = gzfile->pread(buf2, t.count, t.offset);
         EXPECT_EQ(ret1, t.ret);
@@ -326,6 +451,7 @@ protected:
             test_pread(t[i]);
         }
     }
+
 private:
     static photon::fs::IFileSystem *lfs;
     static Cache::GzipCachedFs *cfs;
@@ -339,7 +465,7 @@ private:
     static int buildDataFile() {
         // uncompressed data
         unsigned char *buf = new unsigned char[vsize];
-        DEFER(delete []buf);
+        DEFER(delete[] buf);
         for (size_t i = 0; i < vsize; i++) {
             auto j = rand() % 256;
             buf[i] = j;
@@ -354,7 +480,7 @@ private:
         // gzip data
         size_t gzlen = compressBound(vsize) + 4096;
         unsigned char *gzbuf = new unsigned char[gzlen];
-        DEFER(delete []gzbuf);
+        DEFER(delete[] gzbuf);
         if (gzip_compress(buf, vsize, gzbuf, gzlen) != 0) {
             LOG_ERRNO_RETURN(0, -1, "failed to gzip_compress(...)");
         }
@@ -380,10 +506,12 @@ private:
         return 0;
     }
 
-    static int gzip_compress(unsigned char *in, size_t in_len, unsigned char *out, size_t &out_len) {
+    static int gzip_compress(unsigned char *in, size_t in_len, unsigned char *out,
+                             size_t &out_len) {
         z_stream strm;
         memset(&strm, 0, sizeof(strm));
-        int ret = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, MAX_WBITS + 16, 8, Z_DEFAULT_STRATEGY);
+        int ret = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, MAX_WBITS + 16, 8,
+                               Z_DEFAULT_STRATEGY);
         if (ret != Z_OK) {
             LOG_ERRNO_RETURN(0, -1, "failed to deflateInit2(...)");
         }
@@ -419,14 +547,14 @@ TEST_F(GzCacheTest, cache_store) {
     std::vector<PreadTestCase> t{
         {0, 1, 1},
         {5 << 20, 1, 1},
-        {(off_t) vsize - 1, 1, 1},
+        {(off_t)vsize - 1, 1, 1},
     };
     group_test_pread(t);
 
     unsigned char *cbuf1 = new unsigned char[vsize];
     unsigned char *cbuf2 = new unsigned char[vsize];
-    DEFER(delete []cbuf1);
-    DEFER(delete []cbuf2);
+    DEFER(delete[] cbuf1);
+    DEFER(delete[] cbuf2);
     auto fp1 = fopen("/tmp/gzip_src/fdata", "r");
     auto fp2 = fopen("/tmp/gzip_cache_decompress/fdata", "r");
     DEFER(fclose(fp1));
@@ -434,9 +562,14 @@ TEST_F(GzCacheTest, cache_store) {
     fread(cbuf1, 1, vsize, fp1);
     fread(cbuf2, 1, vsize, fp2);
     // refill_size is 1MB
+<<<<<<< HEAD
     for (size_t i = 0; i < vsize; i++) {
         if (check_in_interval(i, 0, 1 << 20) ||
             check_in_interval(i, vsize - (1 << 20), vsize) ||
+=======
+    for (int i = 0; i < vsize; i++) {
+        if (check_in_interval(i, 0, 1 << 20) || check_in_interval(i, vsize - (1 << 20), vsize) ||
+>>>>>>> [feat] new features for gzip/tar module:
             check_in_interval(i, 5 << 20, 6 << 20)) {
             EXPECT_EQ(cbuf1[i], cbuf2[i]);
         } else {
@@ -451,8 +584,8 @@ TEST_F(GzCacheTest, pread) {
         {0, 10, 10},
         {1000000, 1000000, 1000000},
         {2000000, 1500000, 1500000},
-        {(off_t) vsize - 10, 10, 10},
-        {(off_t) vsize - 1, 1, 1},
+        {(off_t)vsize - 10, 10, 10},
+        {(off_t)vsize - 1, 1, 1},
     };
     group_test_pread(t);
 }
@@ -463,8 +596,9 @@ TEST_F(GzCacheTest, pread_rand) {
     for (size_t i = 0; i < n; i++) {
         size_t x = rand() % vsize;
         size_t y = rand() % vsize;
-        if (x > y) std::swap(x, y);
-        t.push_back({(off_t) x , y - x, (ssize_t) (y - x)});
+        if (x > y)
+            std::swap(x, y);
+        t.push_back({(off_t)x, y - x, (ssize_t)(y - x)});
     }
     group_test_pread(t);
 }
@@ -475,11 +609,11 @@ TEST_F(GzCacheTest, pread_oob) {
         {-1, 2, -1},
         {-1, 10000, -1},
         {-9999, 10000, -1},
-        {(off_t) vsize, 1, 0},
-        {(off_t) vsize - 1, 2, 1},
-        {(off_t) vsize - 400, 1000, 400},
-        {(off_t) vsize + 1, 1, 0},
-        {(off_t) vsize + 10000, 10000, 0},
+        {(off_t)vsize, 1, 0},
+        {(off_t)vsize - 1, 2, 1},
+        {(off_t)vsize - 400, 1000, 400},
+        {(off_t)vsize + 1, 1, 0},
+        {(off_t)vsize + 10000, 10000, 0},
     };
     group_test_pread(t);
 }
@@ -490,8 +624,9 @@ TEST_F(GzCacheTest, pread_little) {
     for (size_t i = 0; i < n; i++) {
         size_t x = rand() % vsize;
         size_t y = x + rand() % 4096;
-        if (y >= vsize) y = vsize - 1;
-        t.push_back({(off_t) x , y - x, (ssize_t) (y - x)});
+        if (y >= vsize)
+            y = vsize - 1;
+        t.push_back({(off_t)x, y - x, (ssize_t)(y - x)});
     }
     group_test_pread(t);
 }
@@ -505,7 +640,6 @@ TEST_F(GzCacheTest, fstat) {
     EXPECT_EQ(static_cast<size_t>(st.st_size), data_size);
 }
 
-
 int main(int argc, char **argv) {
     auto seed = 154574045;
     std::cerr << "seed = " << seed << std::endl;
@@ -516,5 +650,6 @@ int main(int argc, char **argv) {
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     auto ret = RUN_ALL_TESTS();
     photon::fini();
-    if (ret) LOG_ERROR_RETURN(0, ret, VALUE(ret));
+    if (ret)
+        LOG_ERROR_RETURN(0, ret, VALUE(ret));
 }

@@ -38,7 +38,6 @@
 #include "../image_service.h"
 #include "../image_file.h"
 #include "CLI11.hpp"
-#include <openssl/sha.h>
 #include "comm_func.h"
 
 using namespace std;
