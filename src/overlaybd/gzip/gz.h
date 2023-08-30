@@ -18,5 +18,9 @@
 
 #include <vector>
 #include <photon/fs/filesystem.h>
+#include <photon/net/socket.h>
 
 photon::fs::IFile* open_gzfile_adaptor(const char *path);
+photon::fs::IFile* open_gzstream_file(IStream *sock, ssize_t st_size, photon::fs::IFile *save_idx_as = nullptr);
+
+int save_gzip_index(photon::fs::IFile *gz_stream_file);
