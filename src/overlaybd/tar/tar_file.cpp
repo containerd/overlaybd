@@ -158,6 +158,12 @@ public:
     virtual ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override {
         return m_file->pwritev(iov, iovcnt, offset + base_offset);
     }
+    virtual int fallocate(int mode, off_t offset, off_t len) override {
+        return m_file->fallocate(mode, offset + base_offset, len);
+    }
+    virtual int fadvise(off_t offset, off_t len, int advice) override {
+        return m_file->fadvise(offset + base_offset, len, advice);
+    }
 
     virtual int close() override {
         if (is_new_tar()) {

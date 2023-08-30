@@ -182,6 +182,8 @@ public:
         }
 
         int build(const uint32_t *ibuf, size_t n, off_t offset_begin, uint32_t block_size) {
+            partial_offset.clear();
+            deltas.clear();
             group_size = (uinttype_max + 1) / block_size;
             partial_offset.reserve(n / group_size + 1);
             deltas.reserve(n + 1);
@@ -196,8 +198,8 @@ public:
                     continue;
                 }
                 if ((uint64_t)deltas[i - 1] + ibuf[i - 1] >= (uint64_t)uinttype_max) {
-                    LOG_ERRNO_RETURN(ERANGE, -1, "build block[`] length failed `+` > ` (exceed)",
-                        deltas[i-1], ibuf[i-1], (uint64_t)uinttype_max);
+                    LOG_ERROR_RETURN(ERANGE, -1, "build block[`] length failed `+` > ` (exceed)",
+                        i-1, deltas[i-1], ibuf[i-1], (uint64_t)uinttype_max);
                 }
                 deltas.push_back(deltas[i - 1] + ibuf[i - 1]);
             }
@@ -255,14 +257,16 @@ public:
         int reload(size_t idx) {
             auto read_size = get_blocks_length(idx, idx + 1);
             auto begin_offset = m_zfile->m_jump_table[idx];
+            LOG_WARN("trim and reload. (idx: `, offset: `, len: `)", idx, begin_offset, read_size);
             int trim_res = m_zfile->m_file->trim(begin_offset, read_size);
             if (trim_res < 0) {
-                LOG_ERROR_RETURN(0, -1, "failed to trim block idx: `", idx);
+                LOG_ERRNO_RETURN(0, -1, "trim block failed. (idx: `, offset: `, len: `)",
+                                 idx, begin_offset, read_size);
             }
             auto readn = m_zfile->m_file->pread(m_buf + m_buf_offset, read_size, begin_offset);
             if (readn != (ssize_t)read_size) {
-                LOG_ERRNO_RETURN(0, -1, "read compressed blocks failed. (offset: `, len: `)",
-                                 begin_offset, read_size);
+                LOG_ERRNO_RETURN(0, -1, "read compressed blocks failed. (idx: `, offset: `, len: `)",
+                                 idx, begin_offset, read_size);
             }
             return 0;
         }
@@ -716,9 +720,12 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
     if (ret < (ssize_t)index_bytes) {
         LOG_ERRNO_RETURN(0, false, "failed to read index");
     }
-    jump_table.build(ibuf.get(), pht->index_size,
+    ret = jump_table.build(ibuf.get(), pht->index_size,
                      CompressionFile::HeaderTrailer::SPACE + pht->opt.dict_size,
                      pht->opt.block_size);
+    if (ret != 0) {
+        LOG_ERRNO_RETURN(0, false, "failed to build jump table");
+    }
     if (pheader_trailer)
         *pheader_trailer = *pht;
     return true;
