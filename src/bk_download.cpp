@@ -31,49 +31,13 @@
 #include <unistd.h>
 #include "switch_file.h"
 #include "image_file.h"
+#include "tools/sha256file.h"
 
 using namespace photon::fs;
 
 static constexpr size_t ALIGNMENT = 4096;
 
 namespace BKDL {
-
-std::string sha256sum(const char *fn) {
-    constexpr size_t BUFFERSIZE = 65536;
-    int fd = open(fn, O_RDONLY | O_DIRECT);
-    if (fd < 0) {
-        LOG_ERROR("failed to open `", fn);
-        return "";
-    }
-    DEFER(close(fd););
-
-    struct stat stat;
-    if (::fstat(fd, &stat) < 0) {
-        LOG_ERROR("failed to stat `", fn);
-        return "";
-    }
-    SHA256_CTX ctx = {0};
-    SHA256_Init(&ctx);
-    __attribute__((aligned(ALIGNMENT))) char buffer[65536];
-    unsigned char sha[32];
-    ssize_t recv = 0;
-    for (off_t offset = 0; offset < stat.st_size; offset += BUFFERSIZE) {
-        recv = pread(fd, &buffer, BUFFERSIZE, offset);
-        if (recv < 0) {
-            LOG_ERROR("io error: `", fn);
-            return "";
-        }
-        if (SHA256_Update(&ctx, buffer, recv) < 0) {
-            LOG_ERROR("sha256 calculate error: `", fn);
-            return "";
-        }
-    }
-    SHA256_Final(sha, &ctx);
-    char res[SHA256_DIGEST_LENGTH * 2];
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
-        sprintf(res + (i * 2), "%02x", sha[i]);
-    return "sha256:" + std::string(res, SHA256_DIGEST_LENGTH * 2);
-}
 
 bool check_downloaded(const std::string &dir) {
     std::string fn = dir + "/" + COMMIT_FILE_NAME;

@@ -26,6 +26,8 @@
 #include "../../lsmt/file.h"
 #include "../libtar.h"
 #include "../tar_file.cpp"
+#include "../../gzip/gz.h"
+#include "../../../tools/sha256file.h"
 
 
 #define FILE_SIZE (2 * 1024 * 1024)
@@ -36,12 +38,12 @@ protected:
         fs = photon::fs::new_localfs_adaptor();
 
         ASSERT_NE(nullptr, fs);
-        if (fs->access(base.c_str(), 0) != 0) {
-            auto ret = fs->mkdir(base.c_str(), 0755);
+        if (fs->access(workdir.c_str(), 0) != 0) {
+            auto ret = fs->mkdir(workdir.c_str(), 0755);
             ASSERT_EQ(0, ret);
         }
 
-        fs = photon::fs::new_subfs(fs, base.c_str(), true);
+        fs = photon::fs::new_subfs(fs, workdir.c_str(), true);
         ASSERT_NE(nullptr, fs);
     }
     virtual void TearDown() override{
@@ -52,10 +54,24 @@ protected:
             delete fs;
     }
 
-    int download(const std::string &url) {
+    int download(const std::string &url, const std::string &out) {
+        if (fs->access(out.c_str(), 0) == 0)
+            return 0;
+        auto base = std::string(basename(url.c_str()));
+        // download file
+        std::string cmd = "curl -s -o " + workdir + "/" + out + " " + url;
+        LOG_INFO(VALUE(cmd.c_str()));
+        auto ret = system(cmd.c_str());
+        if (ret != 0) {
+            LOG_ERRNO_RETURN(0, -1, "download failed: `", url.c_str());
+        }
+        return 0;
+    }
+
+    int download_decomp(const std::string &url) {
         // download file
         std::string cmd = "wget -q -O - " + url +" | gzip -d -c >" +
-                          base + "/latest.tar";
+                          workdir + "/latest.tar";
         LOG_INFO(VALUE(cmd.c_str()));
         auto ret = system(cmd.c_str());
         if (ret != 0) {
@@ -132,14 +148,14 @@ protected:
         return 0;
     }
 
-    std::string base = "/tmp/tar_test";
+    std::string workdir = "/tmp/tar_test";
     photon::fs::IFileSystem *fs;
     std::vector<std::string> filelist;
 };
 // photon::fs::IFileSystem *TarTest::fs = nullptr;
 
 TEST_F(TarTest, untar) {
-    ASSERT_EQ(0, download("https://github.com/containerd/overlaybd/archive/refs/tags/latest.tar.gz"));
+    ASSERT_EQ(0, download_decomp("https://github.com/containerd/overlaybd/archive/refs/tags/latest.tar.gz"));
     auto tarf = fs->open("latest.tar", O_RDONLY, 0666);
     ASSERT_NE(nullptr, tarf);
     DEFER(delete tarf);
@@ -157,8 +173,7 @@ TEST_F(TarTest, untar) {
 
 TEST_F(TarTest, tar_meta) {
     // set_log_output_level(0);
-    ASSERT_EQ(0, download("https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz"));
-    // ASSERT_EQ(0, download("https://github.com/containerd/overlaybd/archive/refs/tags/latest.tar.gz"));
+    ASSERT_EQ(0, download_decomp("https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz"));
 
     auto src_file = fs->open("latest.tar", O_RDONLY, 0666);
     ASSERT_NE(nullptr, src_file);
@@ -178,7 +193,7 @@ TEST_F(TarTest, tar_meta) {
     auto tar_idx = fs->open("latest.tar.meta", O_TRUNC | O_CREAT | O_RDWR, 0644);
     auto imgfile = createDevice("mock", src_file);
     DEFER(delete imgfile;);
-    auto tar = new UnTar(src_file, nullptr, 0, 4096, nullptr, false);
+    auto tar = new UnTar(src_file, nullptr, 0, 4096, nullptr, true);
     auto obj_count = tar->dump_tar_headers(tar_idx);
     EXPECT_NE(-1, obj_count);
     LOG_INFO("objects count: `", obj_count);
@@ -197,7 +212,42 @@ TEST_F(TarTest, tar_meta) {
     delete tar_idx;
     delete tar;
 
-    // EXPECT_EQ(0, ret);
+}
+
+TEST_F(TarTest, stream) {
+    set_log_output_level(1);
+    std::string fn_test_idx = "dest.gz_idx";
+    std::string fn_test_tgz = "go1.17.6.linux-amd64.tar.gz";
+    ASSERT_EQ(
+        0, download("https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz",
+                    fn_test_tgz.c_str()));
+
+    auto src_file = fs->open(fn_test_tgz.c_str(), O_RDONLY, 0666);
+    auto idx_file = fs->open(fn_test_idx.c_str(), O_TRUNC|O_CREAT|O_RDWR, 0644);
+    struct stat st;
+    src_file->fstat(&st);
+    auto streamfile = open_gzstream_file(src_file, st.st_size, idx_file);
+    ASSERT_NE(nullptr, src_file);
+    DEFER(delete src_file);
+
+    set_log_output_level(0);
+
+    auto turboOCI_stream = new UnTar(streamfile, nullptr, 0, 4096, nullptr, true);
+    DEFER(delete turboOCI_stream);
+
+    auto tar_idx =  fs->open("stream.tar.meta", O_TRUNC | O_CREAT | O_RDWR, 0644);
+    DEFER(delete tar_idx);
+    auto obj_count = turboOCI_stream->dump_tar_headers(tar_idx);
+    EXPECT_NE(-1, obj_count);
+    tar_idx->lseek(0, SEEK_SET);
+    auto tar_meta_sha256 = new_sha256_file(tar_idx, false);
+    DEFER(delete tar_meta_sha256);
+    ASSERT_STREQ(tar_meta_sha256->sha256_checksum().c_str(), "sha256:c5aaa64a1b70964758e190b88b3e65528607b0002bffe42513bc65ac6e65f337");
+    save_gzip_index(streamfile);
+    idx_file->lseek(0, SEEK_SET);
+    auto gz_idx_sha256 = new_sha256_file(idx_file, false);
+    DEFER(delete gz_idx_sha256);
+    ASSERT_STREQ(tar_meta_sha256->sha256_checksum().c_str(), "sha256:af3ffd4965d83f3d235c48ce75e16a1f2edf12d0e5d82816d7066a8485aade82");
 }
 
 TEST_F(TarTest, tar_header_check) {
