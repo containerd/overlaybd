@@ -138,8 +138,7 @@ public:
         op.req.reset(Verb::GET, *actual_url);
         // set token if needed
         if (actual_info->mode == UrlMode::Self && !actual_info->info.empty()) {
-            op.req.headers.insert(kAuthHeaderKey, "Bearer ");
-            op.req.headers.value_append(actual_info->info);
+            op.req.headers.insert(kAuthHeaderKey, actual_info->info);
         }
         op.req.headers.range(offset, offset + count - 1);
         op.set_enable_proxy(m_client->has_proxy());
