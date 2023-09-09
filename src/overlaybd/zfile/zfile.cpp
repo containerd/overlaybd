@@ -86,13 +86,16 @@ public:
 
         // offset 24, 28, 32
         uint32_t size = sizeof(HeaderTrailer);
-        uint32_t __padding = 0;
+        // uint32_t __padding = 0;
+        uint32_t digest = 0;
         uint64_t flags;
 
         static const uint32_t FLAG_SHIFT_HEADER = 0; // 1:header     0:trailer
         static const uint32_t FLAG_SHIFT_TYPE = 1;   // 1:data file, 0:index file
         static const uint32_t FLAG_SHIFT_SEALED = 2; // 1:YES,       0:NO
-        static const uint32_t FLAG_SHIFT_HEADER_OVERWRITE = 3;
+        static const uint32_t FLAG_SHIFT_HEADER_OVERWRITE = 3; // overwrite trailer info to header
+        static const uint32_t FLAG_SHIFT_CALC_DIGEST = 4; // caculate digest for zfile header/trailer and jumptable
+        static const uint32_t FLAG_SHIFT_IDX_COMP = 5; // compress zfile index(jumptable)
 
         uint32_t get_flag_bit(uint32_t shift) const {
             return flags & (1 << shift);
@@ -121,6 +124,17 @@ public:
         bool is_sealed() const {
             return get_flag_bit(FLAG_SHIFT_SEALED);
         }
+        bool is_digest_enabled() {
+            return get_flag_bit(FLAG_SHIFT_CALC_DIGEST);
+        }
+        bool is_valid() {
+            if (!is_digest_enabled()) return true;
+            auto saved_crc = this->digest;
+            this->digest = 0;
+            DEFER(this->digest = saved_crc;);
+            auto crc = crc32::crc32c(this, CompressionFile::HeaderTrailer::SPACE);
+            return crc == saved_crc;
+        }
         void set_header() {
             set_flag_bit(FLAG_SHIFT_HEADER);
         }
@@ -143,6 +157,14 @@ public:
             set_flag_bit(FLAG_SHIFT_HEADER_OVERWRITE);
         }
 
+        void set_digest_enable() {
+            set_flag_bit(FLAG_SHIFT_CALC_DIGEST);
+        }
+
+        void set_compress_index() {
+            set_flag_bit(FLAG_SHIFT_IDX_COMP);
+        }
+
         void set_compress_option(const CompressOptions &opt) {
             this->opt = opt;
         }
@@ -151,7 +173,8 @@ public:
         uint64_t index_offset; // in bytes
         uint64_t index_size;   // # of SegmentMappings
         uint64_t original_file_size;
-        uint64_t reserved_0;
+        uint32_t index_crc;
+        uint32_t reserved_0;
         // offset 72
         CompressOptions opt;
 
@@ -181,7 +204,8 @@ public:
             return deltas.size();
         }
 
-        int build(const uint32_t *ibuf, size_t n, off_t offset_begin, uint32_t block_size) {
+        int build(const uint32_t *ibuf, size_t n, off_t offset_begin, uint32_t block_size,
+                  bool enable_crc) {
             partial_offset.clear();
             deltas.clear();
             group_size = (uinttype_max + 1) / block_size;
@@ -190,7 +214,11 @@ public:
             auto raw_offset = offset_begin;
             partial_offset.push_back(raw_offset);
             deltas.push_back(0);
+            size_t min_blksize = (enable_crc ? sizeof(uint32_t) : 0);
             for (ssize_t i = 1; i < (ssize_t)n + 1; i++) {
+                if (ibuf[i - 1] <= min_blksize) {
+                    LOG_ERRNO_RETURN(EIO, -1, "unexpected block size(id: `):", i - 1, ibuf[i - 1]);
+                }
                 raw_offset += ibuf[i - 1];
                 if ((i % group_size) == 0) {
                     partial_offset.push_back(raw_offset);
@@ -199,7 +227,7 @@ public:
                 }
                 if ((uint64_t)deltas[i - 1] + ibuf[i - 1] >= (uint64_t)uinttype_max) {
                     LOG_ERROR_RETURN(ERANGE, -1, "build block[`] length failed `+` > ` (exceed)",
-                        i-1, deltas[i-1], ibuf[i-1], (uint64_t)uinttype_max);
+                                     i - 1, deltas[i - 1], ibuf[i - 1], (uint64_t)uinttype_max);
                 }
                 deltas.push_back(deltas[i - 1] + ibuf[i - 1]);
             }
@@ -260,13 +288,14 @@ public:
             LOG_WARN("trim and reload. (idx: `, offset: `, len: `)", idx, begin_offset, read_size);
             int trim_res = m_zfile->m_file->trim(begin_offset, read_size);
             if (trim_res < 0) {
-                LOG_ERRNO_RETURN(0, -1, "trim block failed. (idx: `, offset: `, len: `)",
-                                 idx, begin_offset, read_size);
+                LOG_ERRNO_RETURN(0, -1, "trim block failed. (idx: `, offset: `, len: `)", idx,
+                                 begin_offset, read_size);
             }
             auto readn = m_zfile->m_file->pread(m_buf + m_buf_offset, read_size, begin_offset);
             if (readn != (ssize_t)read_size) {
-                LOG_ERRNO_RETURN(0, -1, "read compressed blocks failed. (idx: `, offset: `, len: `)",
-                                 idx, begin_offset, read_size);
+                LOG_ERRNO_RETURN(0, -1,
+                                 "read compressed blocks failed. (idx: `, offset: `, len: `)", idx,
+                                 begin_offset, read_size);
             }
             return 0;
         }
@@ -351,8 +380,9 @@ public:
                 compressed_size = m_reader->compressed_size();
                 if ((size_t)(m_reader->m_buf_offset) + compressed_size > sizeof(m_buf)) {
                     m_reader->m_eno = ERANGE;
-                    LOG_ERRNO_RETURN(0, -1, "inner buffer offset (`) + compressed size (`) overflow.",
-                                    m_reader->m_buf_offset, compressed_size);
+                    LOG_ERRNO_RETURN(0, -1,
+                                     "inner buffer offset (`) + compressed size (`) overflow.",
+                                     m_reader->m_buf_offset, compressed_size);
                 }
 
                 if (blk_idx == m_reader->m_begin_idx) {
@@ -439,15 +469,15 @@ public:
         if (count <= 0)
             return 0;
         if (offset + count > m_ht.original_file_size) {
-            LOG_ERRNO_RETURN(ERANGE, -1, "pread range exceed (` > `)",
-                offset + count, m_ht.original_file_size);
+            LOG_ERRNO_RETURN(ERANGE, -1, "pread range exceed (` > `)", offset + count,
+                             m_ht.original_file_size);
         }
         ssize_t readn = 0; // final will equal to count
         unsigned char raw[MAX_READ_SIZE];
         BlockReader br(this, offset, count);
         for (auto &block : br) {
             if (buf == nullptr) {
-                //used for prefetch; no copy, no decompress;
+                // used for prefetch; no copy, no decompress;
                 readn += block.cp_len;
                 continue;
             }
@@ -506,7 +536,7 @@ static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, boo
                                 CompressionFile::HeaderTrailer *pht, off_t offset = -1);
 
 ssize_t compress_data(ICompressor *compressor, const unsigned char *buf, size_t count,
-                     unsigned char *dest_buf, size_t dest_len, bool gen_crc) {
+                      unsigned char *dest_buf, size_t dest_len, bool gen_crc) {
 
     ssize_t compressed_len = 0;
     auto ret = compressor->compress((const unsigned char *)buf, count, dest_buf, dest_len);
@@ -584,6 +614,7 @@ public:
             LOG_ERRNO_RETURN(0, -1, "failed to write index.");
         }
         auto pht = (CompressionFile::HeaderTrailer *)m_ht;
+        pht->index_crc = crc32::crc32c(&m_block_len[0], index_bytes);
         pht->index_offset = index_offset;
         pht->index_size = index_size;
         pht->original_file_size = raw_data_size;
@@ -674,7 +705,9 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
     if (!pht->verify_magic() || !pht->is_header()) {
         LOG_ERROR_RETURN(0, false, "header magic/type don't match");
     }
-
+    if (pht->is_valid() == false) {
+        LOG_ERROR_RETURN(0, false, "digest verification failed.");
+    }
     struct stat stat;
     ret = file->fstat(&stat);
     if (ret < 0) {
@@ -720,12 +753,20 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
     if (ret < (ssize_t)index_bytes) {
         LOG_ERRNO_RETURN(0, false, "failed to read index");
     }
+    if (pht->is_digest_enabled()) {
+        LOG_INFO("check jumptable CRC32 (` expected)", pht->index_crc);
+        auto crc = crc32::crc32c(ibuf.get(), index_bytes);
+        if (crc != pht->index_crc) {
+            LOG_ERRNO_RETURN(0, false, "checksum of jumptable is incorrect");
+        }
+    }
     ret = jump_table.build(ibuf.get(), pht->index_size,
-                     CompressionFile::HeaderTrailer::SPACE + pht->opt.dict_size,
-                     pht->opt.block_size);
+                           CompressionFile::HeaderTrailer::SPACE + pht->opt.dict_size,
+                           pht->opt.block_size, pht->opt.verify);
     if (ret != 0) {
         LOG_ERRNO_RETURN(0, false, "failed to build jump table");
     }
+
     if (pheader_trailer)
         *pheader_trailer = *pht;
     return true;
@@ -745,8 +786,7 @@ again:
             auto res = file->fallocate(0, 0, -1);
             LOG_ERROR("failed to load jump table, fallocate result: `", res);
             if (res < 0) {
-                LOG_ERRNO_RETURN(0, nullptr,
-                                 "failed to load jump table and failed to evict");
+                LOG_ERRNO_RETURN(0, nullptr, "failed to load jump table and failed to evict");
             }
             if (retry--) {
                 LOG_INFO("retry loading jump table");
@@ -787,7 +827,10 @@ static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, boo
     if (offset != -1)
         pht->set_header_overwrite();
 
-    LOG_INFO("pht->opt.dict_size: `", pht->opt.dict_size);
+    pht->set_digest_enable(); // by default
+    pht->digest = 0;
+    pht->digest = crc32::crc32c(pht, CompressionFile::HeaderTrailer::SPACE);
+    LOG_INFO("save header/trailer with digest: `", pht->digest);
     if (offset == -1) {
         return (int)file->write(pht, CompressionFile::HeaderTrailer::SPACE);
     }
@@ -812,7 +855,6 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     char buf[CompressionFile::HeaderTrailer::SPACE] = {};
     auto pht = new (buf) CompressionFile::HeaderTrailer;
     pht->set_compress_option(opt);
-
     LOG_INFO("write header.");
     auto ret = write_header_trailer(as, true, false, true, pht);
     if (ret < 0) {
@@ -884,6 +926,7 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     if (as->write(&block_len[0], index_bytes) != index_bytes) {
         LOG_ERRNO_RETURN(0, -1, "failed to write index.");
     }
+    pht->index_crc = crc32::crc32c(&block_len[0], index_bytes);
     pht->index_offset = index_offset;
     pht->index_size = index_size;
     pht->original_file_size = raw_data_size;
@@ -961,6 +1004,10 @@ int is_zfile(IFile *file) {
     if (!pht->verify_magic() || !pht->is_header()) {
         LOG_DEBUG("file: ` is not a zfile object", file);
         return 0;
+    }
+    if (!pht->is_valid()) {
+        LOG_ERRNO_RETURN(0, -1,
+            "file: ` is a zfile object but verify digest failed.", file);
     }
     LOG_DEBUG("file: ` is a zfile object", file);
     return 1;

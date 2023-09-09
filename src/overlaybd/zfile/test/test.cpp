@@ -227,6 +227,38 @@ TEST_F(ZFileTest, validation_check) {
     EXPECT_NE(zfile_validation_check(fdst.get()), 0);
 }
 
+TEST_F(ZFileTest, ht_check) {
+    // log_output_level = 1;
+    auto fn_src = "verify.data";
+    auto fn_zfile = "verify.zfile";
+    auto src = lfs->open(fn_src, O_CREAT | O_TRUNC | O_RDWR /*| O_DIRECT */, 0644);
+    unique_ptr<IFile> fsrc(src);
+    if (!fsrc) {
+        LOG_ERROR("err: `(`)", errno, strerror(errno));
+    }
+    randwrite(fsrc.get(), 1024);
+    struct stat _st;
+    if (fsrc->fstat(&_st) != 0) {
+        LOG_ERROR("err: `(`)", errno, strerror(errno));
+        return;
+    }
+    auto dst = lfs->open(fn_zfile, O_CREAT | O_TRUNC | O_RDWR /*| O_DIRECT */, 0644);
+    unique_ptr<IFile> fdst(dst);
+    if (!fdst) {
+        LOG_ERROR("err: `(`)", errno, strerror(errno));
+    }
+    CompressOptions opt;
+    opt.algo = CompressOptions::LZ4;
+    opt.verify = 1;
+    CompressArgs args(opt);
+    int ret = zfile_compress(fsrc.get(), fdst.get(), &args);
+    EXPECT_EQ(ret, 0);
+    auto x=2324;
+    dst->pwrite(&x, sizeof(x), 400);
+    EXPECT_NE(zfile_validation_check(fdst.get()), 0);
+    EXPECT_EQ(is_zfile(dst), -1);
+}
+
 TEST_F(ZFileTest, dsa) {
     const int buf_size = 1024;
     const int crc_count = 3000;
