@@ -181,7 +181,8 @@ public:
             return deltas.size();
         }
 
-        int build(const uint32_t *ibuf, size_t n, off_t offset_begin, uint32_t block_size) {
+        int build(const uint32_t *ibuf, size_t n, off_t offset_begin, uint32_t block_size,
+                  bool enable_crc) {
             partial_offset.clear();
             deltas.clear();
             group_size = (uinttype_max + 1) / block_size;
@@ -190,7 +191,11 @@ public:
             auto raw_offset = offset_begin;
             partial_offset.push_back(raw_offset);
             deltas.push_back(0);
+            size_t min_blksize = (enable_crc ? sizeof(uint32_t) : 0);
             for (ssize_t i = 1; i < (ssize_t)n + 1; i++) {
+                if (ibuf[i - 1] <= min_blksize) {
+                    LOG_ERRNO_RETURN(EIO, -1, "unexpected block size(id: `):", i - 1, ibuf[i - 1]);
+                }
                 raw_offset += ibuf[i - 1];
                 if ((i % group_size) == 0) {
                     partial_offset.push_back(raw_offset);
@@ -199,7 +204,7 @@ public:
                 }
                 if ((uint64_t)deltas[i - 1] + ibuf[i - 1] >= (uint64_t)uinttype_max) {
                     LOG_ERROR_RETURN(ERANGE, -1, "build block[`] length failed `+` > ` (exceed)",
-                        i-1, deltas[i-1], ibuf[i-1], (uint64_t)uinttype_max);
+                                     i - 1, deltas[i - 1], ibuf[i - 1], (uint64_t)uinttype_max);
                 }
                 deltas.push_back(deltas[i - 1] + ibuf[i - 1]);
             }
@@ -260,13 +265,14 @@ public:
             LOG_WARN("trim and reload. (idx: `, offset: `, len: `)", idx, begin_offset, read_size);
             int trim_res = m_zfile->m_file->trim(begin_offset, read_size);
             if (trim_res < 0) {
-                LOG_ERRNO_RETURN(0, -1, "trim block failed. (idx: `, offset: `, len: `)",
-                                 idx, begin_offset, read_size);
+                LOG_ERRNO_RETURN(0, -1, "trim block failed. (idx: `, offset: `, len: `)", idx,
+                                 begin_offset, read_size);
             }
             auto readn = m_zfile->m_file->pread(m_buf + m_buf_offset, read_size, begin_offset);
             if (readn != (ssize_t)read_size) {
-                LOG_ERRNO_RETURN(0, -1, "read compressed blocks failed. (idx: `, offset: `, len: `)",
-                                 idx, begin_offset, read_size);
+                LOG_ERRNO_RETURN(0, -1,
+                                 "read compressed blocks failed. (idx: `, offset: `, len: `)", idx,
+                                 begin_offset, read_size);
             }
             return 0;
         }
@@ -351,8 +357,9 @@ public:
                 compressed_size = m_reader->compressed_size();
                 if ((size_t)(m_reader->m_buf_offset) + compressed_size > sizeof(m_buf)) {
                     m_reader->m_eno = ERANGE;
-                    LOG_ERRNO_RETURN(0, -1, "inner buffer offset (`) + compressed size (`) overflow.",
-                                    m_reader->m_buf_offset, compressed_size);
+                    LOG_ERRNO_RETURN(0, -1,
+                                     "inner buffer offset (`) + compressed size (`) overflow.",
+                                     m_reader->m_buf_offset, compressed_size);
                 }
 
                 if (blk_idx == m_reader->m_begin_idx) {
@@ -439,15 +446,15 @@ public:
         if (count <= 0)
             return 0;
         if (offset + count > m_ht.original_file_size) {
-            LOG_ERRNO_RETURN(ERANGE, -1, "pread range exceed (` > `)",
-                offset + count, m_ht.original_file_size);
+            LOG_ERRNO_RETURN(ERANGE, -1, "pread range exceed (` > `)", offset + count,
+                             m_ht.original_file_size);
         }
         ssize_t readn = 0; // final will equal to count
         unsigned char raw[MAX_READ_SIZE];
         BlockReader br(this, offset, count);
         for (auto &block : br) {
             if (buf == nullptr) {
-                //used for prefetch; no copy, no decompress;
+                // used for prefetch; no copy, no decompress;
                 readn += block.cp_len;
                 continue;
             }
@@ -506,7 +513,7 @@ static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, boo
                                 CompressionFile::HeaderTrailer *pht, off_t offset = -1);
 
 ssize_t compress_data(ICompressor *compressor, const unsigned char *buf, size_t count,
-                     unsigned char *dest_buf, size_t dest_len, bool gen_crc) {
+                      unsigned char *dest_buf, size_t dest_len, bool gen_crc) {
 
     ssize_t compressed_len = 0;
     auto ret = compressor->compress((const unsigned char *)buf, count, dest_buf, dest_len);
@@ -721,8 +728,8 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
         LOG_ERRNO_RETURN(0, false, "failed to read index");
     }
     ret = jump_table.build(ibuf.get(), pht->index_size,
-                     CompressionFile::HeaderTrailer::SPACE + pht->opt.dict_size,
-                     pht->opt.block_size);
+                           CompressionFile::HeaderTrailer::SPACE + pht->opt.dict_size,
+                           pht->opt.block_size, pht->opt.verify);
     if (ret != 0) {
         LOG_ERRNO_RETURN(0, false, "failed to build jump table");
     }
@@ -745,8 +752,7 @@ again:
             auto res = file->fallocate(0, 0, -1);
             LOG_ERROR("failed to load jump table, fallocate result: `", res);
             if (res < 0) {
-                LOG_ERRNO_RETURN(0, nullptr,
-                                 "failed to load jump table and failed to evict");
+                LOG_ERRNO_RETURN(0, nullptr, "failed to load jump table and failed to evict");
             }
             if (retry--) {
                 LOG_INFO("retry loading jump table");
