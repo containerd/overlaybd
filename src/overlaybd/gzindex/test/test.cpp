@@ -23,6 +23,7 @@
 #include <photon/photon.h>
 #include <photon/common/io-alloc.h>
 #include <photon/common/alog.h>
+#include <photon/common/alog-stdstring.h>
 #include <photon/fs/localfs.h>
 #include <photon/io/fd-events.h>
 #include <photon/net/socket.h>
@@ -196,11 +197,11 @@ const char *GzIndexTest::fn_defile = "/fdata";
 const char *GzIndexTest::fn_gzdata = "/fdata.gz";
 const char *GzIndexTest::fn_gzindex = "/findex";
 
-char uds_path[] = "/tmp/udstest.sock";
+char uds_path[] = "/tmp/gzstream_test/stream_conv.sock";
 
 int download(const std::string &url, const std::string &out) {
-    if (::access(out.c_str(), 0) == 0)
-        return 0;
+    // if (::access(out.c_str(), 0) == 0)
+    //     return 0;
     auto base = std::string(basename(url.c_str()));
     // download file
     std::string cmd = "curl -s -o " + out + " " + url;
@@ -219,27 +220,27 @@ void handler(photon::net::ISocketStream *sock) {
     char recv[65536];
     size_t count = 0;
     auto dst = photon::fs::open_localfile_adaptor("/tmp/dest", O_TRUNC | O_CREAT | O_RDWR);
-    auto idx_file =
-        photon::fs::open_localfile_adaptor("/tmp/dest.gz_idx", O_TRUNC | O_CREAT | O_RDWR);
     DEFER(delete dst);
-    DEFER(delete idx_file);
-
-    sock->read(recv, sizeof(size_t));
-    // inf(sock, dst);
-    auto st_size = *(ssize_t *)recv;
-    auto gzfile = open_gzstream_file(sock, st_size, idx_file);
-    ASSERT_NE(gzfile, nullptr);
-    DEFER(delete gzfile);
+    // sock->read(recv, sizeof(ssize_t));
+    // auto st_size = *(size_t*)recv;
+    auto gzstream = open_gzstream_file(sock, 0);
+    ASSERT_NE(gzstream, nullptr);
+    DEFER(delete gzstream);
     while (true) {
-        auto readn = gzfile->read(recv, 65536);
+        auto readn = gzstream->read(recv, 65536);
         if (readn <= 0)
             break;
+
         count += readn;
         dst->write(recv, readn);
     }
-    LOG_INFO("RECV `", count);
-    save_gzip_index(gzfile);
-    ASSERT_STREQ(sha256sum("/tmp/dest").c_str(), "sha256:562688d70dcd1596556e7c671c1266f6e9c22b4f4fb8344efa8bed88fc2bac7b");
+    auto fn_idx = gzstream->save_index();
+    LOG_INFO("RECV `, fn_idx: `", count, fn_idx.c_str());
+
+
+    // ASSERT_STREQ(sha256sum("/tmp/dest").c_str(), "sha256:562688d70dcd1596556e7c671c1266f6e9c22b4f4fb8344efa8bed88fc2bac7b");
+    // ASSERT_STREQ(sha256sum(fn_idx.c_str()).c_str(), "sha256:af3ffd4965d83f3d235c48ce75e16a1f2edf12d0e5d82816d7066a8485aade82");
+
 }
 
 void uds_server() {
@@ -256,6 +257,7 @@ void uds_server() {
 }
 
 void uds_client(photon::fs::IFile *file) {
+
     photon::thread_yield_to(nullptr);
     auto cli = photon::net::new_uds_client();
     DEFER({ delete cli; });
@@ -269,45 +271,56 @@ void uds_client(photon::fs::IFile *file) {
     struct stat st;
     file->fstat(&st);
     LOG_INFO("Connected `, start send file data(size: `)", path, st.st_size);
+    // sock->write(&st.st_size, sizeof(st.st_size));
     char buff[65536];
-    sock->write((void *)&st.st_size, sizeof(st.st_size));
     auto count = 0;
     while (true) {
         auto readn = file->read(buff, 65536);
         ASSERT_NE(readn, -1);
         auto ret = sock->write(buff, readn);
         count += readn;
-        LOG_INFO("write ` bytes", ret);
         ASSERT_EQ(ret, readn);
         if (readn != 65536)
             break;
     }
     LOG_INFO("SEND: `", count);
+
+    return;
 }
 
 TEST_F(GzIndexTest, stream) {
-    set_log_output_level(0);
+    std::string workdir = "/tmp/gzstream_test/";
+    mkdir(workdir.c_str(), 0755);
+    auto lfs = photon::fs::new_localfs_adaptor(workdir.c_str());
     LOG_INFO("start streamFile test");
-    std::string fn_test_tgz = "/tmp/go1.17.6.linux-amd64.tar.gz";
-    ASSERT_EQ(
-        0, download("https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz",
-                    fn_test_tgz.c_str()));
-
-    auto jh1 = photon::thread_enable_join(photon::thread_create11(uds_server));
-
-    auto file = photon::fs::open_localfile_adaptor(fn_test_tgz.c_str(), O_RDONLY);
-    // auto dst = photon::fs::open_localfile_adaptor("/tmp/dest", O_TRUNC | O_CREAT |O_RDWR, 0644);
-    ASSERT_NE(file, nullptr);
-    // inf(file, dst);
-    uds_client(file);
-
-    photon::thread_join(jh1);
-    remove(uds_path);
-    file->lseek(0, SEEK_SET);
-    auto fn_test_tgz_idx = fn_test_tgz + ".index";
-    if (::access(fn_test_tgz_idx.c_str(), 0) != 0){
-        ASSERT_EQ(create_gz_index(file, fn_test_tgz_idx.c_str()), 0);
+    std::vector<std::string> filelist = {
+       "https://dadi-shared.oss-cn-beijing.aliyuncs.com/cri-containerd-cni-1.5.2-linux-amd64.tar.gz",
+       "https://dadi-shared.oss-cn-beijing.aliyuncs.com/containerd-1.4.4-linux-amd64.tar.gz",
+       "https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.13.linux-amd64.tar.gz",
+        "https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz"
+    };
+    std::vector<std::string> tar_sha256sum = {
+        "sha256:05e8b01c1ddb6ba4f8c84e7dbc76529bdc09861f9ce17c213a49e8c334f184ed",
+        "sha256:0ccf983abf0b0fb64cc969079982bc34761ce22d7a3236a40d49d840d150e09a",
+        "sha256:1041ec4e2f40156e0731be175388be4c67aeceb44829f988df213e9fd5f26dc9",
+        "sha256:562688d70dcd1596556e7c671c1266f6e9c22b4f4fb8344efa8bed88fc2bac7b"
+    };
+    int i = 0;
+    for (auto test_tgz : filelist) {
+        auto jh1 = photon::thread_enable_join(photon::thread_create11(uds_server));
+        std::string fn_test_tgz = basename(test_tgz.c_str());
+        ASSERT_EQ(
+            0, download(test_tgz, (workdir + fn_test_tgz).c_str()));
+        auto file = lfs->open(fn_test_tgz.c_str(), O_RDONLY);
+        std::string tar_sha256="", idx_sha256="";
+        uds_client(file);
+        photon::thread_join(jh1);
+        auto dst_sha256 = sha256sum("/tmp/dest");
+        ASSERT_STREQ(dst_sha256.c_str(), tar_sha256sum[i++].c_str());
+        lfs->unlink(fn_test_tgz.c_str());
     }
+    remove(uds_path);
+
 }
 
 TEST_F(GzIndexTest, pread) {

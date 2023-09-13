@@ -18,6 +18,7 @@
 #include <string>
 #include <iostream>
 #include <sstream>
+#include <sys/types.h>
 #include <vector>
 #include <zlib.h>
 #include "photon/common/checksum/crc32c.h"
@@ -91,4 +92,4 @@ int init_index_header(photon::fs::IFile* src, IndexFileHeader &h,  off_t span, i
 
 int create_index_entry(z_stream strm, IndexFilterRecorder *filter, off_t en_pos, off_t de_pos, unsigned char *window);
 
-int save_index_to_file(IndexFileHeader &h, INDEX& index, photon::fs::IFile *index_file);
+int save_index_to_file(IndexFileHeader &h, INDEX& index, photon::fs::IFile *index_file, ssize_t gzip_file_size = -1);
