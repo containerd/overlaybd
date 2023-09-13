@@ -18,9 +18,16 @@
 
 #include <vector>
 #include <photon/fs/filesystem.h>
+#include <photon/fs/virtual-file.h>
 #include <photon/net/socket.h>
 
-photon::fs::IFile* open_gzfile_adaptor(const char *path);
-photon::fs::IFile* open_gzstream_file(IStream *sock, ssize_t st_size, photon::fs::IFile *save_idx_as = nullptr);
+class IGzFile :  public photon::fs::VirtualReadOnlyFile {
+public :
+    // return filename
+    virtual std::string save_index() = 0;
+    virtual std::string sha256_checksum() = 0;
+};
 
-int save_gzip_index(photon::fs::IFile *gz_stream_file);
+photon::fs::IFile* open_gzfile_adaptor(const char *path);
+IGzFile* open_gzstream_file(IStream *sock, ssize_t st_size,
+    bool save_index = true, const char *uid = nullptr, const char *workdir = nullptr);

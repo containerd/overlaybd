@@ -22,6 +22,7 @@
 #include <photon/fs/subfs.h>
 #include <photon/common/alog.h>
 #include <vector>
+#include "../../gzindex/gzfile.h"
 #include "../../extfs/extfs.h"
 #include "../../lsmt/file.h"
 #include "../libtar.h"
@@ -54,12 +55,14 @@ protected:
             delete fs;
     }
 
-    int download(const std::string &url, const std::string &out) {
+    int download(const std::string &url, std::string out) {
+        if (out == "") {
+            out = workdir + "/" + std::string(basename(url.c_str()));
+        }
         if (fs->access(out.c_str(), 0) == 0)
             return 0;
-        auto base = std::string(basename(url.c_str()));
         // download file
-        std::string cmd = "curl -s -o " + workdir + "/" + out + " " + url;
+        std::string cmd = "curl -s -o " + out + " " + url;
         LOG_INFO(VALUE(cmd.c_str()));
         auto ret = system(cmd.c_str());
         if (ret != 0) {
@@ -216,39 +219,90 @@ TEST_F(TarTest, tar_meta) {
 
 TEST_F(TarTest, stream) {
     set_log_output_level(1);
-    std::string fn_test_idx = "dest.gz_idx";
     std::string fn_test_tgz = "go1.17.6.linux-amd64.tar.gz";
     ASSERT_EQ(
         0, download("https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz",
-                    fn_test_tgz.c_str()));
-
-    auto src_file = fs->open(fn_test_tgz.c_str(), O_RDONLY, 0666);
-    auto idx_file = fs->open(fn_test_idx.c_str(), O_TRUNC|O_CREAT|O_RDWR, 0644);
-    struct stat st;
-    src_file->fstat(&st);
-    auto streamfile = open_gzstream_file(src_file, st.st_size, idx_file);
-    ASSERT_NE(nullptr, src_file);
-    DEFER(delete src_file);
-
+                    ""));
     set_log_output_level(0);
 
-    auto turboOCI_stream = new UnTar(streamfile, nullptr, 0, 4096, nullptr, true);
-    DEFER(delete turboOCI_stream);
+    for (int i = 0; i < 3; i++) {
+        auto src_file = fs->open(fn_test_tgz.c_str(), O_RDONLY, 0644);
+        struct stat st;
+        src_file->fstat(&st);
+        auto streamfile = open_gzstream_file(src_file, 0);
+        auto fn = ("/tmp/tar_test/" + fn_test_tgz);
+        ASSERT_NE(nullptr, src_file);
+        DEFER(delete src_file);
 
-    auto tar_idx =  fs->open("stream.tar.meta", O_TRUNC | O_CREAT | O_RDWR, 0644);
-    DEFER(delete tar_idx);
-    auto obj_count = turboOCI_stream->dump_tar_headers(tar_idx);
-    EXPECT_NE(-1, obj_count);
-    tar_idx->lseek(0, SEEK_SET);
-    auto tar_meta_sha256 = new_sha256_file(tar_idx, false);
-    DEFER(delete tar_meta_sha256);
-    ASSERT_STREQ(tar_meta_sha256->sha256_checksum().c_str(), "sha256:c5aaa64a1b70964758e190b88b3e65528607b0002bffe42513bc65ac6e65f337");
-    save_gzip_index(streamfile);
-    idx_file->lseek(0, SEEK_SET);
-    auto gz_idx_sha256 = new_sha256_file(idx_file, false);
-    DEFER(delete gz_idx_sha256);
-    ASSERT_STREQ(tar_meta_sha256->sha256_checksum().c_str(), "sha256:af3ffd4965d83f3d235c48ce75e16a1f2edf12d0e5d82816d7066a8485aade82");
+        auto turboOCI_stream = new UnTar(streamfile, nullptr, 0, 4096, nullptr, true);
+        DEFER(delete turboOCI_stream);
+
+        auto tar_idx =  fs->open("stream.tar.meta", O_TRUNC | O_CREAT | O_RDWR, 0644);
+        DEFER(delete tar_idx);
+        auto obj_count = turboOCI_stream->dump_tar_headers(tar_idx);
+        EXPECT_NE(-1, obj_count);
+        tar_idx->lseek(0, SEEK_SET);
+        auto tar_meta_sha256 = new_sha256_file(tar_idx, false);
+        DEFER(delete tar_meta_sha256);
+        ASSERT_STREQ(tar_meta_sha256->sha256_checksum().c_str(), "sha256:c5aaa64a1b70964758e190b88b3e65528607b0002bffe42513bc65ac6e65f337");
+        auto idx_fn = streamfile->save_index();
+        // auto idx_fn = "/tmp/test.idx";
+
+        // create_gz_index(src_file, idx_fn);
+        auto idx_sha256 = sha256sum(idx_fn.c_str());
+        delete streamfile;
+        ASSERT_STREQ(idx_sha256.c_str(), "sha256:af3ffd4965d83f3d235c48ce75e16a1f2edf12d0e5d82816d7066a8485aade82");
+    }
 }
+
+// TEST_F(TarTest, stream_tar_meta) {
+//     // set_log_output_level(0);
+//     std::vector<std::string> filelist {
+//         "https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz"
+//     };
+//     for (auto file : filelist){
+//         ASSERT_EQ(0, download(, ""));
+
+
+//         auto src_file = fs->open("latest.tar", O_RDONLY, 0666);
+//         ASSERT_NE(nullptr, src_file);
+//         DEFER(delete src_file);
+//         auto verify_dev = createDevice("verify", src_file);
+//         make_extfs(verify_dev);
+//         auto verify_ext4fs = new_extfs(verify_dev, false);
+//         auto verifyfs = new_subfs(verify_ext4fs, "/", true);
+//         auto turboOCI_verify = new UnTar(src_file, verifyfs, 0, 4096, verify_dev, true);
+//         ASSERT_EQ(0, turboOCI_verify->extract_all());
+//         verify_ext4fs->sync();
+//         delete turboOCI_verify;
+//         delete verifyfs;
+
+//         src_file->lseek(0, 0);
+
+//         auto tar_idx = fs->open("latest.tar.meta", O_TRUNC | O_CREAT | O_RDWR, 0644);
+//         auto imgfile = createDevice("mock", src_file);
+//         DEFER(delete imgfile;);
+//         auto tar = new UnTar(src_file, nullptr, 0, 4096, nullptr, true);
+//         auto obj_count = tar->dump_tar_headers(tar_idx);
+//         EXPECT_NE(-1, obj_count);
+//         LOG_INFO("objects count: `", obj_count);
+//         tar_idx->lseek(0,0);
+
+//         make_extfs(imgfile);
+//         auto extfs = new_extfs(imgfile, false);
+//         auto target = new_subfs(extfs, "/", true);
+//         auto turboOCI_mock = new UnTar(tar_idx, target, TAR_IGNORE_CRC, 4096, imgfile, true, true);
+//         auto ret = turboOCI_mock->extract_all();
+//         delete turboOCI_mock;
+//         delete target;
+
+//         ASSERT_EQ(0, ret);
+//         EXPECT_EQ(0, do_verify(verify_dev, imgfile));
+//         delete tar_idx;
+//         delete tar;
+//     }
+
+// }
 
 TEST_F(TarTest, tar_header_check) {
     auto fn = "data";

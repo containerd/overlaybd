@@ -189,13 +189,14 @@ public:
             fs_base_file(bf), meta_only(meta_only), from_tar_idx(from_tar_idx){}
 
     int extract_all();
+    // return number of objects in this tarfile
     ssize_t dump_tar_headers(photon::fs::IFile* file);
 
 private:
     photon::fs::IFileSystem *fs = nullptr; // target
     photon::fs::IFile *fs_base_file = nullptr;
-    bool meta_only;
-    bool from_tar_idx;
+    bool meta_only = false;
+    bool from_tar_idx = false;
     std::set<std::string> unpackedPaths;
     std::list<std::pair<std::string, int>> dirs; // <path, utime>
 

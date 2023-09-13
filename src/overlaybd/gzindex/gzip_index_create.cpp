@@ -13,13 +13,16 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
+// #include "../zfile/crc32/crc32c.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
 #include <sys/fcntl.h>
+
 #include "gzfile_index.h"
+
 #include "photon/common/alog.h"
 #include "photon/common/alog-stdstring.h"
 #include "photon/fs/localfs.h"
@@ -271,14 +274,19 @@ static int get_compressed_index(const IndexFileHeader& h, const INDEX& index, un
         out_len = index_len;
         return 0;
     }
-
+    LOG_INFO("index crc: `", crc32(0, buf, index_len));
     return zlib_compress(h.dict_compress_level, buf, index_len, out, out_len);
 }
 
-int save_index_to_file(IndexFileHeader &h, INDEX& index, photon::fs::IFile *index_file) {
+int save_index_to_file(IndexFileHeader &h, INDEX& index, photon::fs::IFile *index_file, ssize_t gzip_file_size) {
     int indx_cmpr_buf_len = index.size() * sizeof(IndexEntry) * 2 + 4096;
     unsigned char *buf = new unsigned char[indx_cmpr_buf_len];
     DEFER(delete []buf);
+
+    if (gzip_file_size != -1) {
+        LOG_INFO("save gzip file size: `", gzip_file_size);
+        h.gzip_file_size = gzip_file_size;
+    }
 
     if (get_compressed_index(h, index, buf, indx_cmpr_buf_len) != 0) {
         LOG_ERROR_RETURN(0, -1, "Failed to get_compress_index");
@@ -355,7 +363,6 @@ int create_gz_index(photon::fs::IFile* gzip_file, const char *index_file_path, o
     if (init_index_header(gzip_file, h, span, dict_compress_algo,  dict_compress_level) != 0) {
         LOG_ERRNO_RETURN(0, -1, "init index header failed.");
     }
-
     INDEX index;
     int ret = build_index(h, gzip_file, index, index_file);
     if (ret != 0) {
