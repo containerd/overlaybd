@@ -111,30 +111,5 @@ int main(int argc, char *argv[]){
     server = new StreamConvertor;
     DEFER(delete server);
     server->start_uds_server();
-
+    return 0;
 }
-
-// TEST_F(GzIndexTest, stream) {
-//     set_log_output_level(0);
-//     LOG_INFO("start streamFile test");
-//     std::string fn_test_tgz = "/tmp/go1.17.6.linux-amd64.tar.gz";
-//     ASSERT_EQ(
-//         0, download("https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz",
-//                     fn_test_tgz.c_str()));
-
-//     auto jh1 = photon::thread_enable_join(photon::thread_create11(uds_server));
-
-//     auto file = photon::fs::open_localfile_adaptor(fn_test_tgz.c_str(), O_RDONLY);
-//     // auto dst = photon::fs::open_localfile_adaptor("/tmp/dest", O_TRUNC | O_CREAT |O_RDWR, 0644);
-//     ASSERT_NE(file, nullptr);
-//     // inf(file, dst);
-//     uds_client(file);
-
-//     photon::thread_join(jh1);
-//     remove(uds_path);
-//     file->lseek(0, SEEK_SET);
-//     auto fn_test_tgz_idx = fn_test_tgz + ".index";
-//     if (::access(fn_test_tgz_idx.c_str(), 0) != 0){
-//         ASSERT_EQ(create_gz_index(file, fn_test_tgz_idx.c_str()), 0);
-//     }
-// }
