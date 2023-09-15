@@ -14,13 +14,13 @@
    limitations under the License.
 */
 
-#include <cstring>
 #include <gtest/gtest.h>
 #include <fcntl.h>
 #include <photon/photon.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/subfs.h>
 #include <photon/common/alog.h>
+#include <photon/common/alog-stdstring.h>
 #include <vector>
 #include "../../gzindex/gzfile.h"
 #include "../../extfs/extfs.h"
@@ -55,7 +55,7 @@ protected:
             delete fs;
     }
 
-    int download(const std::string &url, std::string out) {
+    int download(const std::string &url, std::string out = "") {
         if (out == "") {
             out = workdir + "/" + std::string(basename(url.c_str()));
         }
@@ -132,8 +132,9 @@ protected:
 
         ssize_t LEN = 1UL<<20;
         char vbuf[1UL<<20], tbuf[1UL<<20];
+        // set_log_output_level(0);
         for (off_t i = 0; i < count; i+=LEN) {
-            // LOG_INFO("`", i);
+            LOG_DEBUG("`", i);
             auto ret_v = verify->pread(vbuf, LEN, i);
             auto ret_t = test->pread(tbuf, LEN, i);
             if (ret_v == -1 || ret_t == -1) {
@@ -255,54 +256,79 @@ TEST_F(TarTest, stream) {
     }
 }
 
-// TEST_F(TarTest, stream_tar_meta) {
-//     // set_log_output_level(0);
-//     std::vector<std::string> filelist {
-//         "https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz"
-//     };
-//     for (auto file : filelist){
-//         ASSERT_EQ(0, download(, ""));
+TEST_F(TarTest, gz_tarmeta_e2e) {
+    // set_log_output_level(0);
+    std::vector<std::string> filelist {
+        "https://dadi-shared.oss-cn-beijing.aliyuncs.com/cri-containerd-cni-1.5.2-linux-amd64.tar.gz",
+        "https://dadi-shared.oss-cn-beijing.aliyuncs.com/containerd-1.4.4-linux-amd64.tar.gz",
+        "https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz"
+    };
+    for (auto file : filelist){
+        ASSERT_EQ(0, download(file.c_str()));
+        auto fn = std::string(basename(file.c_str()));
+        auto gzip_file = fs->open(fn.c_str(), O_RDONLY, 0600);
+        auto gzfile = open_gzfile_adaptor((workdir + "/" + fn).c_str());
+        auto fn_idx = (workdir + "/" + fn + ".gz_idx");
+        ASSERT_EQ(create_gz_index(gzip_file, fn_idx.c_str()), 0);
+        auto gz_idx = fs->open((fn + ".gz_idx").c_str(), O_RDONLY, 0644);
+        gzip_file->lseek(0, SEEK_SET);
+        auto src_file = new_gzfile(gzip_file, gz_idx, true);
+        ASSERT_NE(nullptr, src_file);
+        auto verify_dev = createDevice((fn + ".verify").c_str(), src_file);
+        make_extfs(verify_dev);
+        auto verify_ext4fs = new_extfs(verify_dev, false);
+        auto verifyfs = new_subfs(verify_ext4fs, "/", true);
+        // gzfile->lseek(0, SEEK_SET);
+        auto turboOCI_verify = new UnTar(gzfile, verifyfs, 0, 4096, verify_dev, true);
+        ASSERT_EQ(0, turboOCI_verify->extract_all());
+        verify_ext4fs->sync();
 
+        // src_file->lseek(0, 0);
+        auto tar_idx = fs->open((fn + ".tar.meta").c_str(), O_TRUNC | O_CREAT | O_RDWR, 0644);
+        auto stream_src = fs->open(fn.c_str(), O_RDONLY, 0600);
+        auto streamfile = open_gzstream_file(stream_src, 0);
+        auto tar = new UnTar(streamfile, nullptr, 0, 4096, nullptr, true);
+        auto obj_count = tar->dump_tar_headers(tar_idx);
+        EXPECT_NE(-1, obj_count);
+        LOG_INFO("objects count: `", obj_count);
 
-//         auto src_file = fs->open("latest.tar", O_RDONLY, 0666);
-//         ASSERT_NE(nullptr, src_file);
-//         DEFER(delete src_file);
-//         auto verify_dev = createDevice("verify", src_file);
-//         make_extfs(verify_dev);
-//         auto verify_ext4fs = new_extfs(verify_dev, false);
-//         auto verifyfs = new_subfs(verify_ext4fs, "/", true);
-//         auto turboOCI_verify = new UnTar(src_file, verifyfs, 0, 4096, verify_dev, true);
-//         ASSERT_EQ(0, turboOCI_verify->extract_all());
-//         verify_ext4fs->sync();
-//         delete turboOCI_verify;
-//         delete verifyfs;
+        auto fn_test_idx = streamfile->save_index();
+        LOG_INFO("gzip index of [`]: `", fn, fn_test_idx);
+        auto test_gz_idx = open_localfile_adaptor(fn_test_idx.c_str(), O_RDONLY);
+        ASSERT_NE(test_gz_idx, nullptr);
+        auto test_gzfile = fs->open(fn.c_str(), O_RDONLY, 0600);
+        ASSERT_NE(test_gzfile, nullptr);
+        auto gz_target = new_gzfile(test_gzfile,test_gz_idx, true);
+        auto imgfile = createDevice((fn + ".mock").c_str(), gz_target);
 
-//         src_file->lseek(0, 0);
+        tar_idx->lseek(0,0);
 
-//         auto tar_idx = fs->open("latest.tar.meta", O_TRUNC | O_CREAT | O_RDWR, 0644);
-//         auto imgfile = createDevice("mock", src_file);
-//         DEFER(delete imgfile;);
-//         auto tar = new UnTar(src_file, nullptr, 0, 4096, nullptr, true);
-//         auto obj_count = tar->dump_tar_headers(tar_idx);
-//         EXPECT_NE(-1, obj_count);
-//         LOG_INFO("objects count: `", obj_count);
-//         tar_idx->lseek(0,0);
+        make_extfs(imgfile);
+        auto extfs = new_extfs(imgfile, false);
+        auto target = new_subfs(extfs, "/", true);
+        auto turboOCI_mock = new UnTar(tar_idx, target, TAR_IGNORE_CRC, 4096, imgfile, true, true);
+        auto ret = turboOCI_mock->extract_all();
+        extfs->sync();
 
-//         make_extfs(imgfile);
-//         auto extfs = new_extfs(imgfile, false);
-//         auto target = new_subfs(extfs, "/", true);
-//         auto turboOCI_mock = new UnTar(tar_idx, target, TAR_IGNORE_CRC, 4096, imgfile, true, true);
-//         auto ret = turboOCI_mock->extract_all();
-//         delete turboOCI_mock;
-//         delete target;
+        ASSERT_EQ(0, ret);
+        EXPECT_EQ(0, do_verify(verify_dev, imgfile));
 
-//         ASSERT_EQ(0, ret);
-//         EXPECT_EQ(0, do_verify(verify_dev, imgfile));
-//         delete tar_idx;
-//         delete tar;
-//     }
+        delete turboOCI_mock;
+        delete target;
+        delete src_file;
+        delete gzfile;
+        delete turboOCI_verify;
+        delete verifyfs;
+        delete tar_idx;
+        delete stream_src;
+        delete streamfile;
+        delete tar;
 
-// }
+        delete verify_dev;
+        delete imgfile;
+    }
+
+}
 
 TEST_F(TarTest, tar_header_check) {
     auto fn = "data";

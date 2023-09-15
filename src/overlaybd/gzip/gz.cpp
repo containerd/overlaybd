@@ -15,23 +15,15 @@
 */
 
 #include "gz.h"
-#include <asm-generic/errno-base.h>
-#include <bits/types/struct_timeval.h>
-#include <cstdio>
-#include <exception>
 #include <fcntl.h>
-#include <time.h>
-#include <sys/select.h>
 #include <zlib.h>
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
-
 #include <photon/fs/filesystem.h>
 #include <photon/fs/virtual-file.h>
 #include <photon/fs/subfs.h>
 #include <photon/fs/localfs.h>
 #include <photon/net/socket.h>
-#include <time.h>
 #include "../../tools/sha256file.h"
 #include "../gzindex/gzfile_index.h"
 class GzAdaptorFile : public photon::fs::VirtualReadOnlyFile {

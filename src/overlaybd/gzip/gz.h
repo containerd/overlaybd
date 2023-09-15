@@ -23,7 +23,7 @@
 
 class IGzFile :  public photon::fs::VirtualReadOnlyFile {
 public :
-    // return filename
+    // return full filename of gzip index
     virtual std::string save_index() = 0;
     virtual std::string sha256_checksum() = 0;
 };
