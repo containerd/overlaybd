@@ -75,12 +75,17 @@ int UnTar::set_file_perms(const char *filename) {
 
 ssize_t UnTar::dump_tar_headers(photon::fs::IFile *as) {
     ssize_t count = 0;
-    while (read_header(as) == 0) {
+    while (true) {
+        auto next = read_header(as);
+        if (next == -1) {
+            return -1;
+        }
+        count++;
         if (TH_ISREG(header)) {
             auto size = get_size();
             file->lseek(((size + T_BLOCKSIZE - 1) / T_BLOCKSIZE) * T_BLOCKSIZE, SEEK_CUR); // skip size
         }
-        count++;
+        if (next != 0) break;
     }
     return count;
 }

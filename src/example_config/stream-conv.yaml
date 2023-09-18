@@ -1,0 +1,19 @@
+# // {
+# //     "serverConfig": {
+# //         "uds":  "/var/run/stream_conv.sock",
+# //         "workdir": "/tmp/stream_conv"
+# //     },
+# //     "logConfig": {
+# //         "level": 0,
+# //         "mode": "stdout"
+# //     }
+# // }
+globalConfig:
+  servAddr: /var/run/stream_conv.sock
+  workDir: /tmp/stream_conv
+  logConfig:
+    level: 0
+    mode: stdout
+    rotateNum: 3
+    limitSizeMB: 10
+    path: /var/log/overlaybd/stream_convertor.log
