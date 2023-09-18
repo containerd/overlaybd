@@ -206,7 +206,7 @@ int download(const std::string &url, const std::string &out) {
     //     return 0;
     auto base = std::string(basename(url.c_str()));
     // download file
-    std::string cmd = "curl -s -o " + out + " " + url;
+    std::string cmd = "curl -sL -o " + out + " " + url;
     LOG_INFO(VALUE(cmd.c_str()));
     auto ret = system(cmd.c_str());
     if (ret != 0) {
@@ -296,15 +296,19 @@ TEST_F(GzIndexTest, stream) {
     auto lfs = photon::fs::new_localfs_adaptor(workdir.c_str());
     LOG_INFO("start streamFile test");
     std::vector<std::string> filelist = {
-       "https://dadi-shared.oss-cn-beijing.aliyuncs.com/cri-containerd-cni-1.5.2-linux-amd64.tar.gz",
-       "https://dadi-shared.oss-cn-beijing.aliyuncs.com/containerd-1.4.4-linux-amd64.tar.gz",
-       "https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.13.linux-amd64.tar.gz",
-        "https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz"
+    //    "https://dadi-shared.oss-cn-beijing.aliyuncs.com/cri-containerd-cni-1.5.2-linux-amd64.tar.gz",
+        "https://github.com/containerd/containerd/releases/download/v1.5.17/cri-containerd-cni-1.5.17-linux-amd64.tar.gz",
+        "https://github.com/containerd/containerd/releases/download/v1.4.4/containerd-1.4.4-linux-amd64.tar.gz",
+    //    "https://dadi-shared.oss-cn-beijing.aliyuncs.com/containerd-1.4.4-linux-amd64.tar.gz",
+    //    "https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.13.linux-amd64.tar.gz",
+        "https://go.dev/dl/go1.17.6.linux-amd64.tar.gz",
+        // "https://dadi-shared.oss-cn-beijing.aliyuncs.com/go1.17.6.linux-amd64.tar.gz"
     };
     std::vector<std::string> tar_sha256sum = {
-        "sha256:05e8b01c1ddb6ba4f8c84e7dbc76529bdc09861f9ce17c213a49e8c334f184ed",
+        "sha256:02adc5074f59777d2ca74c8a0291659f69291865184c987d9c10e58f58b162c2",
+        // "sha256:05e8b01c1ddb6ba4f8c84e7dbc76529bdc09861f9ce17c213a49e8c334f184ed",
         "sha256:0ccf983abf0b0fb64cc969079982bc34761ce22d7a3236a40d49d840d150e09a",
-        "sha256:1041ec4e2f40156e0731be175388be4c67aeceb44829f988df213e9fd5f26dc9",
+        // "sha256:1041ec4e2f40156e0731be175388be4c67aeceb44829f988df213e9fd5f26dc9",
         "sha256:562688d70dcd1596556e7c671c1266f6e9c22b4f4fb8344efa8bed88fc2bac7b"
     };
     int i = 0;

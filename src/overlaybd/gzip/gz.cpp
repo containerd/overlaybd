@@ -26,6 +26,7 @@
 #include <photon/net/socket.h>
 #include "../../tools/sha256file.h"
 #include "../gzindex/gzfile_index.h"
+#include "photon/common/alog.h"
 class GzAdaptorFile : public photon::fs::VirtualReadOnlyFile {
 public:
     GzAdaptorFile() {
@@ -133,6 +134,9 @@ public:
                     len = sizeof(buf);
                 }
                 auto readn = this->read(buf, len);
+                if (readn <= 0){
+                    LOG_ERRNO_RETURN(EIO, -1, "read buffer error");
+                }
                 offset -= readn;
             }
             return cur_offset;
@@ -166,9 +170,14 @@ public:
             if (strm.avail_in < 0) {
                 LOG_ERRNO_RETURN(0, -1, "read buffer from uds failed");
             }
-            size_t readn = strm.avail_in;
             if (strm.avail_in == 0)
                 break;
+            if (!check_type) {
+                if (!((uint8_t)in[0] == 0x1f && (uint8_t)in[1] == 0x8b)){
+                    LOG_ERRNO_RETURN(EIO, -1, "buffer is not gzip type");
+                }
+                check_type = true;
+            }
             LOG_DEBUG("recv: `", strm.avail_in);
             st_size += strm.avail_in;
             strm.next_in = in;
@@ -243,6 +252,7 @@ public:
     ssize_t st_size = 0;
     IFile *m_file = nullptr;
     photon::fs::IFileSystem *m_fs = nullptr;
+    bool check_type = false;
 
     const static int CHUNK = 32768;
     IStream *fstream;
