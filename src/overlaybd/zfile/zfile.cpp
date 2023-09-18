@@ -86,13 +86,16 @@ public:
 
         // offset 24, 28, 32
         uint32_t size = sizeof(HeaderTrailer);
-        uint32_t __padding = 0;
+        // uint32_t __padding = 0;
+        uint32_t digest = 0;
         uint64_t flags;
 
         static const uint32_t FLAG_SHIFT_HEADER = 0; // 1:header     0:trailer
         static const uint32_t FLAG_SHIFT_TYPE = 1;   // 1:data file, 0:index file
         static const uint32_t FLAG_SHIFT_SEALED = 2; // 1:YES,       0:NO
-        static const uint32_t FLAG_SHIFT_HEADER_OVERWRITE = 3;
+        static const uint32_t FLAG_SHIFT_HEADER_OVERWRITE = 3; // overwrite trailer info to header
+        static const uint32_t FLAG_SHIFT_CALC_DIGEST = 4; // caculate digest for zfile header/trailer and jumptable
+        static const uint32_t FLAG_SHIFT_IDX_COMP = 5; // compress zfile index(jumptable)
 
         uint32_t get_flag_bit(uint32_t shift) const {
             return flags & (1 << shift);
@@ -121,6 +124,17 @@ public:
         bool is_sealed() const {
             return get_flag_bit(FLAG_SHIFT_SEALED);
         }
+        bool is_digest_enabled() {
+            return get_flag_bit(FLAG_SHIFT_CALC_DIGEST);
+        }
+        bool is_valid() {
+            if (!is_digest_enabled()) return true;
+            auto saved_crc = this->digest;
+            this->digest = 0;
+            DEFER(this->digest = saved_crc;);
+            auto crc = crc32::crc32c(this, CompressionFile::HeaderTrailer::SPACE);
+            return crc == saved_crc;
+        }
         void set_header() {
             set_flag_bit(FLAG_SHIFT_HEADER);
         }
@@ -143,6 +157,14 @@ public:
             set_flag_bit(FLAG_SHIFT_HEADER_OVERWRITE);
         }
 
+        void set_digest_enable() {
+            set_flag_bit(FLAG_SHIFT_CALC_DIGEST);
+        }
+
+        void set_compress_index() {
+            set_flag_bit(FLAG_SHIFT_IDX_COMP);
+        }
+
         void set_compress_option(const CompressOptions &opt) {
             this->opt = opt;
         }
@@ -151,7 +173,8 @@ public:
         uint64_t index_offset; // in bytes
         uint64_t index_size;   // # of SegmentMappings
         uint64_t original_file_size;
-        uint64_t reserved_0;
+        uint32_t index_crc;
+        uint32_t reserved_0;
         // offset 72
         CompressOptions opt;
 
@@ -591,6 +614,7 @@ public:
             LOG_ERRNO_RETURN(0, -1, "failed to write index.");
         }
         auto pht = (CompressionFile::HeaderTrailer *)m_ht;
+        pht->index_crc = crc32::crc32c(&m_block_len[0], index_bytes);
         pht->index_offset = index_offset;
         pht->index_size = index_size;
         pht->original_file_size = raw_data_size;
@@ -681,7 +705,9 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
     if (!pht->verify_magic() || !pht->is_header()) {
         LOG_ERROR_RETURN(0, false, "header magic/type don't match");
     }
-
+    if (pht->is_valid() == false) {
+        LOG_ERROR_RETURN(0, false, "digest verification failed.");
+    }
     struct stat stat;
     ret = file->fstat(&stat);
     if (ret < 0) {
@@ -727,12 +753,20 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
     if (ret < (ssize_t)index_bytes) {
         LOG_ERRNO_RETURN(0, false, "failed to read index");
     }
+    if (pht->is_digest_enabled()) {
+        LOG_INFO("check jumptable CRC32 (` expected)", pht->index_crc);
+        auto crc = crc32::crc32c(ibuf.get(), index_bytes);
+        if (crc != pht->index_crc) {
+            LOG_ERRNO_RETURN(0, false, "checksum of jumptable is incorrect");
+        }
+    }
     ret = jump_table.build(ibuf.get(), pht->index_size,
                            CompressionFile::HeaderTrailer::SPACE + pht->opt.dict_size,
                            pht->opt.block_size, pht->opt.verify);
     if (ret != 0) {
         LOG_ERRNO_RETURN(0, false, "failed to build jump table");
     }
+
     if (pheader_trailer)
         *pheader_trailer = *pht;
     return true;
@@ -793,7 +827,10 @@ static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, boo
     if (offset != -1)
         pht->set_header_overwrite();
 
-    LOG_INFO("pht->opt.dict_size: `", pht->opt.dict_size);
+    pht->set_digest_enable(); // by default
+    pht->digest = 0;
+    pht->digest = crc32::crc32c(pht, CompressionFile::HeaderTrailer::SPACE);
+    LOG_INFO("save header/trailer with digest: `", pht->digest);
     if (offset == -1) {
         return (int)file->write(pht, CompressionFile::HeaderTrailer::SPACE);
     }
@@ -818,7 +855,6 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     char buf[CompressionFile::HeaderTrailer::SPACE] = {};
     auto pht = new (buf) CompressionFile::HeaderTrailer;
     pht->set_compress_option(opt);
-
     LOG_INFO("write header.");
     auto ret = write_header_trailer(as, true, false, true, pht);
     if (ret < 0) {
@@ -890,6 +926,7 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     if (as->write(&block_len[0], index_bytes) != index_bytes) {
         LOG_ERRNO_RETURN(0, -1, "failed to write index.");
     }
+    pht->index_crc = crc32::crc32c(&block_len[0], index_bytes);
     pht->index_offset = index_offset;
     pht->index_size = index_size;
     pht->original_file_size = raw_data_size;
@@ -967,6 +1004,10 @@ int is_zfile(IFile *file) {
     if (!pht->verify_magic() || !pht->is_header()) {
         LOG_DEBUG("file: ` is not a zfile object", file);
         return 0;
+    }
+    if (!pht->is_valid()) {
+        LOG_ERRNO_RETURN(0, -1,
+            "file: ` is a zfile object but verify digest failed.", file);
     }
     LOG_DEBUG("file: ` is a zfile object", file);
     return 1;
