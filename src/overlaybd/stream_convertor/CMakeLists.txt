@@ -1,14 +1,16 @@
 file(GLOB SOURCE_SERV "*.cpp")
 
-add_executable(stream_conv ${SOURCE_SERV})
-target_include_directories(stream_conv PUBLIC
+add_executable(overlaybd-streamConv ${SOURCE_SERV})
+target_include_directories(overlaybd-streamConv PUBLIC
     ${PHOTON_INCLUDE_DIR}
+    ${rapidjson_SOURCE_DIR}/include
 )
-target_link_libraries(stream_conv
-photon_static
-gzip_lib
-gzindex_lib
-tar_lib
+target_link_libraries(overlaybd-streamConv
+    photon_static
+    gzip_lib
+    gzindex_lib
+    tar_lib
+    yaml-cpp
 )
 
 # if(BUILD_TESTING)

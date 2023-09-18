@@ -42,6 +42,16 @@ set(ENABLE_MIMIC_VDSO off)
 
 find_package(photon REQUIRED)
 find_package(tcmu REQUIRED)
+find_package(yamlcpp)
+if (NOT yamlcpp_FOUND)
+  FetchContent_Declare(
+    yamlcpp
+    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+    GIT_TAG 0.8.0
+  )
+  FetchContent_MakeAvailable(yamlcpp)
+endif()
+
 
 if(BUILD_TESTING)
   enable_testing()

@@ -355,7 +355,6 @@ ssize_t GzFile::pread(void *buf, size_t count, off_t offset) {
     if (p == nullptr) {
         LOG_ERRNO_RETURN(0, -1, "Failed to seek_index(,`)", offset);
     }
-    //LOG_DEBUG("offset:`, index->de_pos:", offset, p->de_pos+0);
 
     return extract(p, offset, (unsigned char*)buf, count);
 }
