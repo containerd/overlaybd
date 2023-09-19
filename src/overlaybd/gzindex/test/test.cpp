@@ -19,7 +19,6 @@
 #include "../../gzip/gz.h"
 #include "../../cache/cache.h"
 #include <cstring>
-#include <gtest/gtest-death-test.h>
 #include <photon/photon.h>
 #include <photon/common/io-alloc.h>
 #include <photon/common/alog.h>

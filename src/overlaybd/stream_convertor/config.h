@@ -37,7 +37,11 @@ struct LogConfigPara : public App::ConfigGroup {
 
 struct GlobalConfigPara : public App::ConfigGroup  {
     APPCFG_CLASS;
-    APPCFG_PARA(servAddr, std::string, "/var/run/stream_conv.sock");
+    APPCFG_PARA(udsAddr, std::string, "");
+    APPCFG_PARA(httpAddr, std::string, "127.0.0.1");
+    APPCFG_PARA(httpPort, int, 9101);
+    APPCFG_PARA(reusePort, bool, true);
+
     APPCFG_PARA(workDir, std::string, "/tmp/stream_conv");
     //APPCFG_PARA(ServerConfig, ServerConfigPara);
     APPCFG_PARA(logConfig, LogConfigPara);

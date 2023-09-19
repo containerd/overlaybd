@@ -9,10 +9,14 @@
 # //     }
 # // }
 globalConfig:
-  servAddr: /var/run/stream_conv.sock
   workDir: /tmp/stream_conv
+  udsAddr: /var/run/stream_conv.sock
+  # httpAddr: 127.0.0.1
+  httpPort: 9101
+  reusePort: true
+
   logConfig:
-    level: 0
+    level: 1
     mode: stdout
     rotateNum: 3
     limitSizeMB: 10
