@@ -128,11 +128,15 @@ public:
             return get_flag_bit(FLAG_SHIFT_CALC_DIGEST);
         }
         bool is_valid() {
-            if (!is_digest_enabled()) return true;
+            if (!is_digest_enabled()) {
+                LOG_WARN("digest not found in current zfile.");
+                return true;
+            }
             auto saved_crc = this->digest;
             this->digest = 0;
             DEFER(this->digest = saved_crc;);
             auto crc = crc32::crc32c(this, CompressionFile::HeaderTrailer::SPACE);
+            LOG_INFO("zfile digest: ` (` expected)", HEX(crc).width(8), HEX(saved_crc).width(8));
             return crc == saved_crc;
         }
         void set_header() {
@@ -490,8 +494,8 @@ public:
                         int reload_res = block.reload();
                         LOG_ERROR(
                             "checksum failed {offset: `, length: `} (expected ` but got `), reload result: `",
-                            block.m_reader->m_buf_offset, block.compressed_size, block.crc32_code(),
-                            c, reload_res);
+                            block.m_reader->m_buf_offset, block.compressed_size, HEX(block.crc32_code()).width(8),
+                            HEX(c).width(8), reload_res);
                         if (reload_res < 0) {
                             LOG_ERROR_RETURN(ECHECKSUM, -1,
                                              "checksum verification and reload failed");
@@ -754,10 +758,12 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
         LOG_ERRNO_RETURN(0, false, "failed to read index");
     }
     if (pht->is_digest_enabled()) {
-        LOG_INFO("check jumptable CRC32 (` expected)", pht->index_crc);
+        LOG_INFO("check jumptable CRC32 (` expected)", HEX(pht->index_crc).width(8));
         auto crc = crc32::crc32c(ibuf.get(), index_bytes);
         if (crc != pht->index_crc) {
-            LOG_ERRNO_RETURN(0, false, "checksum of jumptable is incorrect");
+            LOG_ERRNO_RETURN(0, false, "checksum of jumptable is incorrect. {got: `, expected: `}",
+                 HEX(crc).width(8),  HEX(pht->index_crc).width(8)
+            );
         }
     }
     ret = jump_table.build(ibuf.get(), pht->index_size,
@@ -800,8 +806,8 @@ again:
     zfile->m_jump_table = std::move(jump_table);
     CompressArgs args(ht.opt);
     ht.opt.verify = ht.opt.verify && verify;
-    LOG_DEBUG("compress type: `, bs: `, verify_checksum: `", ht.opt.algo, ht.opt.block_size,
-              ht.opt.verify);
+    LOG_INFO("digest: `, compress type: `, bs: `, data_verify: `",
+        HEX(ht.digest).width(8), ht.opt.algo, ht.opt.block_size, ht.opt.verify);
 
     zfile->m_compressor.reset(create_compressor(&args));
     zfile->m_ownership = ownership;
@@ -830,7 +836,7 @@ static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, boo
     pht->set_digest_enable(); // by default
     pht->digest = 0;
     pht->digest = crc32::crc32c(pht, CompressionFile::HeaderTrailer::SPACE);
-    LOG_INFO("save header/trailer with digest: `", pht->digest);
+    LOG_INFO("save header/trailer with digest: `", HEX(pht->digest).width(8));
     if (offset == -1) {
         return (int)file->write(pht, CompressionFile::HeaderTrailer::SPACE);
     }
@@ -907,12 +913,12 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
             if (crc32_verify) {
                 auto crc32_code = crc32c(&compressed_data[j * buf_size], compressed_len[j]);
                 LOG_DEBUG("append ` bytes crc32_code: {offset: `, count: `, crc32: `}",
-                          sizeof(uint32_t), moffset, compressed_len[j], crc32_code);
+                          sizeof(uint32_t), moffset, compressed_len[j], HEX(crc32_code).width(8));
                 compressed_len[j] += sizeof(uint32_t);
                 ret = as->write(&crc32_code, sizeof(uint32_t));
                 if (ret < (ssize_t)sizeof(uint32_t)) {
                     LOG_ERRNO_RETURN(0, -1, "failed to write crc32code, offset: `, crc32: `",
-                                     moffset, crc32_code);
+                                     moffset, HEX(crc32_code).width(8));
                 }
             }
             block_len.push_back(compressed_len[j]);
@@ -927,6 +933,7 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
         LOG_ERRNO_RETURN(0, -1, "failed to write index.");
     }
     pht->index_crc = crc32::crc32c(&block_len[0], index_bytes);
+    LOG_INFO("index checksum: `", HEX(pht->index_crc).width(8));
     pht->index_offset = index_offset;
     pht->index_size = index_size;
     pht->original_file_size = raw_data_size;
@@ -957,7 +964,7 @@ int zfile_decompress(IFile *src, IFile *dst) {
     for (off_t offset = 0; offset < raw_data_size; offset += block_size) {
         auto len = (ssize_t)std::min(block_size, (size_t)raw_data_size - offset);
         auto readn = file->pread(raw_buf.get(), len, offset);
-        LOG_DEBUG("readn: `, crc32: `", readn, crc32c(raw_buf.get(), len));
+        LOG_DEBUG("readn: `, crc32: `", readn, HEX(crc32c(raw_buf.get(), len)).width(8));
         if (readn != len)
             return -1;
         if (dst->write(raw_buf.get(), readn) != readn) {
