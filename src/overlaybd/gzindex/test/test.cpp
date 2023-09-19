@@ -21,7 +21,6 @@
 #include "../../cache/cache.h"
 #include "../../cache/frontend/cached_file.h"
 #include <cstring>
-#include <gtest/gtest-death-test.h>
 #include <photon/photon.h>
 #include <photon/common/io-alloc.h>
 #include <photon/common/alog.h>
