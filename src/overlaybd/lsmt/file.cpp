@@ -1127,6 +1127,11 @@ public:
         CompactOptions opts(&m_files, mapping.get(), m_index->size(), m_vsize, &args);
         LayerInfo info;
         info.virtual_size = m_vsize;
+        info.uuid.clear();
+        if (UUID::String::is_valid((args.uuid).c_str())) {
+            LOG_INFO("set UUID: `", args.uuid.data);
+            info.uuid.parse(args.uuid);
+        }
         if (UUID::String::is_valid((args.parent_uuid).c_str())) {
             LOG_INFO("set parent UUID: `", args.parent_uuid.data);
             info.parent_uuid.parse(args.parent_uuid);

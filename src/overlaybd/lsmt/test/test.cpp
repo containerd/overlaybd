@@ -785,13 +785,19 @@ IFileRW *WarpFileTest::create_warpfile_rw(int io_engine) {
     return file;
 }
 
-IFileRO *WarpFileTest::create_commit_warpfile(IFileRW* warpfile) {
+IFileRO *WarpFileTest::create_commit_warpfile(IFileRW* warpfile, bool keepUUID) {
     LOG_INFO("commit warpfile as `", layer_name.back().c_str());
     auto fcommit = lfs->open(layer_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
     UUID uu;
     uu.parse(parent_uuid.c_str(), parent_uuid.size());
     CommitArgs c(fcommit);
     c.parent_uuid = uu;
+
+    // commit will clear layer's uuid if CommitArgs.uuid is not specify
+    if (keepUUID) {
+        warpfile->get_uuid(uu);
+        c.uuid = uu;
+    }
     ((IFileRW *)warpfile)->commit(c);
     delete warpfile;
     fcommit->close();
@@ -802,10 +808,10 @@ IFileRO *WarpFileTest::create_commit_warpfile(IFileRW* warpfile) {
     return ret;
 }
 
-IFileRO *WarpFileTest::create_commit_warpfile(int io_engine) {
+IFileRO *WarpFileTest::create_commit_warpfile(int io_engine, bool keepUUID) {
     auto warpfile = create_warpfile_rw(io_engine);
     randwrite_warpfile(warpfile, FLAGS_nwrites);
-    return create_commit_warpfile(warpfile);
+    return create_commit_warpfile(warpfile, keepUUID);
 }
 
 TEST_F(WarpFileTest, randwrite) {
@@ -918,6 +924,36 @@ TEST_F(WarpFileTest, stack_files) {
     verify_file(lower);
     delete file;
     fcheck = nullptr;
+}
+
+TEST_F(WarpFileTest, commit_without_uuid) {
+    CleanUp();
+    UUID uu;
+    auto frw = create_warpfile_rw(ut_io_engine);
+    frw->get_uuid(uu);
+    LOG_INFO("uuid before commit is `", uu);
+    EXPECT_FALSE(uu.is_null());
+
+    auto fcommit = create_commit_warpfile(frw);
+    fcommit->get_uuid(uu);
+    LOG_INFO("uuid after commit is `", uu);
+    EXPECT_TRUE(uu.is_null());
+}
+
+TEST_F(WarpFileTest, commit_with_uuid) {
+    CleanUp();
+    UUID uu;
+    auto frw = create_warpfile_rw(ut_io_engine);
+    frw->get_uuid(uu);
+    LOG_INFO("uuid before commit is `", uu);
+    EXPECT_FALSE(uu.is_null());
+
+    UUID uu_commit;
+    auto fcommit = create_commit_warpfile(frw, true);
+    fcommit->get_uuid(uu_commit);
+    LOG_INFO("uuid after commit is `", uu);
+    EXPECT_FALSE(uu_commit.is_null());
+    EXPECT_EQ(uu, uu_commit);
 }
 
 int main(int argc, char **argv) {
