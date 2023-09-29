@@ -21,9 +21,18 @@ if(${BUILD_CURL_FROM_SOURCE})
             OUTPUT ${curl_bundle_BINARY_DIR}/lib/libcurl.a
             WORKING_DIRECTORY ${curl_bundle_SOURCE_DIR}
             COMMAND
+                export CC=${CMAKE_C_COMPILER} &&
+                export CXX=${CMAKE_CXX_COMPILER} &&
+                export LD=${CMAKE_LINKER} &&
+                export CFLAGS=-fPIC &&
                 autoreconf -i && sh configure --with-openssl --without-libssh2
                 --enable-static --enable-shared=no --enable-optimize
                 --enable-symbol-hiding --disable-manual --without-libidn
+                --disable-ftp --disable-file --disable-ldap --disable-ldaps
+                --disable-rtsp --disable-dict --disable-telnet --disable-tftp
+                --disable-pop3 --disable-imap --disable-smb --disable-smtp
+                --disable-gopher --without-nghttp2 --enable-http
+                --with-pic=PIC
                 --prefix=${curl_bundle_BINARY_DIR} && make -j && make install)
         add_custom_target(libcurl_static_build
                           DEPENDS ${curl_bundle_BINARY_DIR}/lib/libcurl.a)
