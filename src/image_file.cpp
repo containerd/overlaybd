@@ -278,6 +278,10 @@ int ImageFile::open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer,
         }
     }
 
+    if (file == nullptr) {
+        return -1;
+    }
+
     if (m_prefetcher != nullptr) {
         file = m_prefetcher->new_prefetch_file(file, index);
     }
