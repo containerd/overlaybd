@@ -14,4 +14,11 @@ if(BUILD_TESTING)
 else()
   FetchContent_MakeAvailable(photon)
 endif()
+
+if (BUILD_CURL_FROM_SOURCE)
+  find_package(OpenSSL REQUIRED)
+  find_package(CURL REQUIRED)
+  add_dependencies(photon_obj CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
+endif()
+
 set(PHOTON_INCLUDE_DIR ${photon_SOURCE_DIR}/include/)

@@ -17,6 +17,7 @@ if(${BUILD_CURL_FROM_SOURCE})
         if (NOT curl_bundle_POPULATED)
             FetchContent_Populate(curl_bundle)
         endif()
+        find_package(OpenSSL)
         add_custom_command(
             OUTPUT ${curl_bundle_BINARY_DIR}/lib/libcurl.a
             WORKING_DIRECTORY ${curl_bundle_SOURCE_DIR}
@@ -25,22 +26,24 @@ if(${BUILD_CURL_FROM_SOURCE})
                 export CXX=${CMAKE_CXX_COMPILER} &&
                 export LD=${CMAKE_LINKER} &&
                 export CFLAGS=-fPIC &&
-                autoreconf -i && sh configure --with-openssl --without-libssh2
-                --enable-static --enable-shared=no --enable-optimize
-                --enable-symbol-hiding --disable-manual --without-libidn
+                autoreconf -i && sh configure --with-ssl="${OPENSSL_ROOT_DIR}"
+                --without-libssh2 --enable-static --enable-shared=no --enable-optimize
+                --disable-manual --without-libidn
                 --disable-ftp --disable-file --disable-ldap --disable-ldaps
                 --disable-rtsp --disable-dict --disable-telnet --disable-tftp
                 --disable-pop3 --disable-imap --disable-smb --disable-smtp
                 --disable-gopher --without-nghttp2 --enable-http
                 --with-pic=PIC
-                --prefix=${curl_bundle_BINARY_DIR} && make -j && make install)
+                --prefix="${curl_bundle_BINARY_DIR}" && make -j 8 && make install)
         add_custom_target(libcurl_static_build
                           DEPENDS ${curl_bundle_BINARY_DIR}/lib/libcurl.a)
+        add_dependencies(libcurl_static_build openssl102_static_build)
+        make_directory(${curl_bundle_BINARY_DIR}/include)
     endif()
 
     set(CURL_FOUND yes)
     set(CURL_LIBRARY ${curl_bundle_BINARY_DIR}/lib/libcurl.a)
-    set(CURL_THIRDPARTY_DEPS crypto ssl z)
+    set(CURL_THIRDPARTY_DEPS OpenSSL::SSL OpenSSL::Crypto z)
     set(CURL_LIBRARIES ${CURL_LIBRARY} ${CURL_THIRDPARTY_DEPS})
     set(CURL_INCLUDE_DIR ${curl_bundle_BINARY_DIR}/include)
     set(CURL_INCLUDE_DIRS ${CURL_INCLUDE_DIR})
