@@ -60,10 +60,12 @@ public:
     photon::fs::IFile *fdict = nullptr;
     std::unique_ptr<unsigned char[]> dict_buf = nullptr;
     CompressOptions opt;
+    bool overwrite_header;
+    int workers;
 
     CompressArgs(const CompressOptions &opt, photon::fs::IFile *dict = nullptr,
-                 unsigned char *dict_buf = nullptr)
-        : fdict(dict), dict_buf(dict_buf), opt(opt) {
+                 unsigned char *dict_buf = nullptr, bool overwrite_header = false, int workers = 1)
+        : fdict(dict), dict_buf(dict_buf), opt(opt), overwrite_header(overwrite_header), workers(workers) {
         if (fdict || dict_buf) {
             this->opt.use_dict = 1;
         }
