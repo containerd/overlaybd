@@ -277,6 +277,78 @@ TEST_F(ZFileTest, dsa) {
     ASSERT_EQ(ret, 0);
 }
 
+TEST_F(ZFileTest, verify_builder) {
+    auto fn_src = "verify.data";
+    auto fn_zfile = "verify.zfile";
+    auto fn_zfile_1 = "verify.zfile.1";
+    auto src = lfs->open(fn_src, O_CREAT | O_TRUNC | O_RDWR, 0644);
+    if (src == nullptr) {
+        LOG_ERROR("failed to open file: `(`)", errno, strerror(errno));
+        return;
+    }
+    randwrite(src, write_times);
+    struct stat _st;
+    if (src->fstat(&_st) != 0) {
+        LOG_ERROR("failed randwrite src file: `(`)", errno, strerror(errno));
+        return;
+    }
+
+    // zfile builder multi-processor
+    auto dst = lfs->open(fn_zfile, O_CREAT | O_TRUNC | O_RDWR, 0644);
+    if (!dst) {
+        LOG_ERROR("failed to open file: `(`)", errno, strerror(errno));
+    }
+    DEFER({delete dst;});
+    ZFile::CompressOptions opt;
+    opt.verify = 1;
+    opt.block_size = 4096;
+    ZFile::CompressArgs zfile_args(opt);
+    zfile_args.workers = 4;
+    auto zfile_builder = ZFile::new_zfile_builder(dst, &zfile_args, false);
+    src->lseek(0, 0);
+    char buf[16*1024];
+    while (true) {
+        auto sz = rand() % 8192 + 1;
+        auto rc = src->read(buf, sz);
+        if (rc <= 0) break;
+        zfile_builder->write(buf, rc);
+    }
+    zfile_builder->close();
+
+    // zfile builder
+    ZFile::CompressOptions opt_1;
+    opt_1.verify = 1;
+    opt_1.block_size = 4096;
+    ZFile::CompressArgs zfile_args_1(opt_1);
+    zfile_args_1.workers = 1;
+    auto dst_1 = lfs->open(fn_zfile_1, O_CREAT | O_TRUNC | O_RDWR, 0644);
+    if (!dst_1) {
+        LOG_ERROR("failed to open file: `(`)", errno, strerror(errno));
+    }
+    DEFER({delete dst_1;});
+    auto zfile_builder_1 = ZFile::new_zfile_builder(dst_1, &zfile_args_1, false);
+    src->lseek(0, 0);
+    while (true) {
+        auto sz = rand() % 8192 + 1;
+        auto rc = src->read(buf, sz);
+        if (rc <= 0) break;
+        zfile_builder_1->write(buf, rc);
+    }
+    zfile_builder_1->close();
+
+    EXPECT_EQ(dst->lseek(0, SEEK_CUR), dst_1->lseek(0, SEEK_CUR));
+    dst->lseek(0, 0);
+    dst_1->lseek(0, 0);
+    char buf_1[16*1024];
+    while (true) {
+        auto rc = dst->read(buf, 8192);
+        auto rc_1 = dst_1->read(buf_1, 8192);
+        EXPECT_EQ(rc, rc_1);
+        EXPECT_EQ(memcmp(buf, buf_1, rc), 0);
+        if (rc == 0) break;
+    }
+}
+
 int main(int argc, char **argv) {
     auto seed = 154702356;
     cerr << "seed = " << seed << endl;
