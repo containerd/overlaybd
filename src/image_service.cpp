@@ -346,8 +346,6 @@ int ImageService::init() {
         }
         if (global_conf.exporterConfig().enable()) {
             metrics.reset(new OverlayBDMetric());
-            metrics->interval(global_conf.exporterConfig().updateInterval());
-            metrics->start();
             global_fs.srcfs = new MetricFS(global_fs.underlay_registryfs, &metrics->download);
             exporter = new ExporterServer(global_conf, metrics.get());
             if (!exporter->ready)
@@ -408,6 +406,10 @@ int ImageService::init() {
         }
         if (global_fs.cached_fs == nullptr) {
             LOG_ERRNO_RETURN(0, -1, "failed to create cached_fs");
+        }
+
+        if (global_conf.exporterConfig().enable()) {
+            global_fs.cached_fs = new MetricFS(global_fs.cached_fs, &metrics->pread);
         }
 
         if (global_conf.gzipCacheConfig().enable()) {
