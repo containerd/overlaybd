@@ -53,6 +53,7 @@ int main(int argc, char **argv) {
     bool build_turboOCI = false;
     bool build_fastoci = false;
     bool mkfs = false;
+    bool raw = false;
     bool verbose = false;
 
     CLI::App app{"this is overlaybd-create"};
@@ -60,6 +61,7 @@ int main(int argc, char **argv) {
     app.add_flag("-s", sparse, "create sparse RW layer")->default_val(false);
     app.add_flag("--turboOCI", build_turboOCI, "commit using turboOCI format")->default_val(false);
     app.add_flag("--fastoci", build_fastoci, "commit using turboOCI format(depracated)")->default_val(false);
+    app.add_flag("--raw", raw, "create raw image")->default_val(false);
     app.add_flag("--mkfs", mkfs, "mkfs after create")->default_val(false);
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->required();
     app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->required();
@@ -80,7 +82,10 @@ int main(int argc, char **argv) {
     IFile* findex = open_file(index_file_path.c_str(), flag, mode);
     IFile* file = nullptr;
 
-    if (build_turboOCI) {
+    if (raw) {
+        file = fdata;
+        file->ftruncate(vsize);
+    } else if (build_turboOCI) {
         LSMT::WarpFileArgs args(findex, fdata, nullptr);
         args.virtual_size = vsize;
         file = LSMT::create_warpfile(args, false);
@@ -104,7 +109,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    delete file;
+    if (file && file != fdata)
+        delete file;
     delete fdata;
     delete findex;
     printf("overlaybd-create has created files SUCCESSFULLY\n");
