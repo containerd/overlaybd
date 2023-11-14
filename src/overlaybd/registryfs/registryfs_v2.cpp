@@ -152,8 +152,8 @@ public:
         op.retry = 0;
         op.timeout = tmo.timeout();
         m_client->call(&op);
-
-        if (op.status_code == 200 || op.status_code == 206) {
+        ret = op.status_code;
+        if (ret == 200 || ret == 206) {
             m_url_info.release(url);
             return ret;
         }
@@ -212,17 +212,18 @@ public:
         op.req.headers.value_append(*token);
         op.timeout = tmo.timeout();
         op.call();
-        if (op.status_code == 401 || op.status_code == 403) {
+        code = op.status_code;
+        if (code == 401 || code == 403) {
             LOG_WARN("Token invalid, try refresh password next time");
         }
-        if (300 <= op.status_code && op.status_code < 400) {
+        if (300 <= code && code < 400) {
             // pass auth, redirect to source
             auto location = op.resp.headers["Location"];
             if (!scope.empty())
                 m_scope_token.release(scope);
             return new UrlInfo{UrlMode::Redirect, location};
         }
-        if (op.status_code == 200) {
+        if (code == 200) {
             UrlInfo *info = new UrlInfo{UrlMode::Self, ""};
             if (token && !token->empty())
                 info->info = kBearerAuthPrefix + *token;
@@ -234,7 +235,7 @@ public:
         // unexpected situation
         if (!scope.empty())
             m_scope_token.release(scope, true);
-        LOG_ERROR_RETURN(0, nullptr, "Failed to get actual url, status_code=` ", op.status_code, VALUE(url));
+        LOG_ERROR_RETURN(0, nullptr, "Failed to get actual url, status_code=` ", code, VALUE(url));
     }
 
     virtual int setAccelerateAddress(const char* addr = "") override {
@@ -403,15 +404,15 @@ public:
         LOG_DEBUG("pulling blob from registry: ", VALUE(m_url), VALUE(offset), VALUE(count));
 
         HTTP_OP op;
-        auto ret = m_fs->get_data(m_url, offset, count, tmo.timeout(), op);
-        if (op.status_code != 200 && op.status_code != 206) {
+        auto code = m_fs->get_data(m_url, offset, count, tmo.timeout(), op);
+        if (code != 200 && code != 206) {
             ERRNO eno;
             if (tmo.expire() < photon::now) {
                 LOG_ERROR_RETURN(ETIMEDOUT, -1, "timed out in preadv ", VALUE(m_url), VALUE(offset));
             }
             if (retry--) {
-                LOG_WARN("failed to perform HTTP GET, going to retry ", VALUE(op.status_code), VALUE(offset),
-                         VALUE(count), VALUE(ret), eno);
+                LOG_WARN("failed to perform HTTP GET, going to retry ", VALUE(code), VALUE(offset),
+                         VALUE(count), eno);
                 photon::thread_usleep(1000);
                 goto again;
             } else {
@@ -427,18 +428,19 @@ public:
         int retry = 3;
     again:
         HTTP_OP op;
-        auto ret = m_fs->get_data(m_url, 0, 1, tmo.timeout(), op);
-        if (op.status_code != 200 && op.status_code != 206) {
+        auto code = m_fs->get_data(m_url, 0, 1, tmo.timeout(), op);
+        if (code != 200 && code != 206) {
             if (tmo.expire() < photon::now)
                 LOG_ERROR_RETURN(ETIMEDOUT, -1, "get meta timedout");
-
-            if (op.status_code == 401 || op.status_code == 403) {
-                if (retry--)
-                    goto again;
-                LOG_ERROR_RETURN(EPERM, -1, "Authorization failed");
-            }
             if (retry--)
-                goto again;
+                    goto again;
+            if (code == 401 || code == 403) {
+                LOG_ERROR_RETURN(EPERM, -1, "Authorization failed");
+            } else if (code == 404) {
+                LOG_ERROR_RETURN(ENOENT, -1, "No such file or directory");
+            } else if (code == 429) {
+                LOG_ERROR_RETURN(EBUSY, -1, "Too many request");
+            }
             LOG_ERROR_RETURN(ENOENT, -1, "failed to get meta from server");
         }
         return op.resp.resource_size();
