@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
     app.add_flag("--mkfs", mkfs, "mkfs after create")->default_val(false);
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->required();
     app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->required();
-    app.add_option("vsize", vsize, "virtual size(GB)")->type_name("INT")->check(CLI::PositiveNumber)->required();
+    app.add_option("vsize", vsize, "virtual size(GB)")->type_name("INT")->check(CLI::NonNegativeNumber)->required();
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     CLI11_PARSE(app, argc, argv);
 
