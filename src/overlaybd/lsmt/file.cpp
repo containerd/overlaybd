@@ -603,6 +603,8 @@ public:
             LOG_ERROR_RETURN(ENOSYS, nullptr, "no underlying files found!");
         return file->filesystem();
     }
+
+    UNIMPLEMENTED(int update_vsize(size_t vsize) override);
     UNIMPLEMENTED(int close_seal(IFileRO **reopen_as = nullptr) override);
 
     // It can commit a RO file after close_seal()
@@ -834,6 +836,31 @@ public:
         return 0;
     }
 
+    int update_header_vsize(IFile *file, size_t vsize) {
+        ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K)
+        if (file->pread(buf, HeaderTrailer::SPACE, 0) != HeaderTrailer::SPACE) {
+            LOG_ERROR_RETURN(0, -1, "read layer header failed.");
+        }
+        HeaderTrailer *ht = (HeaderTrailer *)buf;
+        ht->virtual_size = vsize;
+        if (file->pwrite(buf, HeaderTrailer::SPACE, 0) != HeaderTrailer::SPACE) {
+            LOG_ERROR_RETURN(0, -1, "write layer header failed.");
+        }
+        return 0;
+    }
+
+    virtual int update_vsize(size_t vsize) override {
+        LOG_INFO("update vsize for LSMTFile ", VALUE(vsize));
+        m_vsize = vsize;
+        if (update_header_vsize(m_files[m_rw_tag], vsize) < 0) {
+            LOG_ERROR_RETURN(0, -1, "failed to update data vsize");
+        }
+        if (update_header_vsize(m_findex, vsize) < 0) {
+            LOG_ERROR_RETURN(0, -1, "failed to update index vsize");
+        }
+        return 0;
+    }
+
     virtual int commit(const CommitArgs &args) const override {
         if (m_files.size() > 1) {
             LOG_ERROR_RETURN(ENOTSUP, -1, "not supported: commit stacked files");
@@ -1009,6 +1036,16 @@ public:
             LOG_ERRNO_RETURN(0, -1, "seek EOF failed, expected errno ENXIO(-6)");
         }
         LOG_INFO("segment size: `", mappings.size());
+        return 0;
+    }
+
+    virtual int update_vsize(size_t vsize) override {
+        LOG_INFO("update vsize for LSMTSparseFile ", VALUE(vsize));
+        m_vsize = vsize;
+        if (update_header_vsize(m_files[m_rw_tag], vsize) < 0) {
+            LOG_ERROR_RETURN(0, -1, "failed to update data vsize");
+        }
+        m_files[m_rw_tag]->ftruncate(vsize + HeaderTrailer::SPACE);
         return 0;
     }
 };
@@ -1690,6 +1727,7 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
         LOG_ERROR_RETURN(EINVAL, nullptr, "invalid upper layer");
     if (!l)
         return upper_layer;
+
     auto type = u->ioctl(IFileRO::GetType);
     LSMTFile *rst = nullptr;
     IComboIndex *idx = nullptr;
@@ -1702,16 +1740,13 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
         }
         if (!pht->is_sparse_rw()) {
             rst = new LSMTFile;
-            if (u->m_vsize == 0) {
-                u->m_vsize = l->m_vsize;
-                LOG_INFO("update upper vsize as lower vsize, vsize:`", u->m_vsize);
-            }
         } else {
             rst = new LSMTSparseFile;
-            if (u->m_vsize == 0) {
-                u->m_vsize = l->m_vsize;
-                u->m_files[0]->ftruncate(u->m_vsize + HeaderTrailer::SPACE);
-                LOG_INFO("update upper vsize as lower vsize and truncate upper sparse file, vsize:`", u->m_vsize);
+        }
+        // TODO: also for LSMTWarpFile
+        if (u->m_vsize == 0) {
+            if (u->update_vsize(l->m_vsize) < 0) {
+                LOG_ERRNO_RETURN(0, nullptr, "failed to update vsize");
             }
         }
     } else {
