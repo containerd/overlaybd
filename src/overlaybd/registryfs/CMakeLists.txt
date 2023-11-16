@@ -1,6 +1,6 @@
 file(GLOB SOURCE_REGISTRYFS "*.cpp")
 
-find_package(CURL REQUIRED)
+find_package(curl REQUIRED)
 
 add_library(registryfs_lib STATIC ${SOURCE_REGISTRYFS})
 target_include_directories(registryfs_lib PUBLIC

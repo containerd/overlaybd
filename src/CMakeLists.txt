@@ -1,5 +1,5 @@
-find_package(CURL REQUIRED)
-find_package(OpenSSL REQUIRED)
+find_package(curl REQUIRED)
+find_package(openssl REQUIRED)
 find_package(aio REQUIRED)
 find_package(rapidjson REQUIRED)
 

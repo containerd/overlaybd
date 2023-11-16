@@ -16,8 +16,8 @@ else()
 endif()
 
 if (BUILD_CURL_FROM_SOURCE)
-  find_package(OpenSSL REQUIRED)
-  find_package(CURL REQUIRED)
+  find_package(openssl REQUIRED)
+  find_package(curl REQUIRED)
   add_dependencies(photon_obj CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
 endif()
 
