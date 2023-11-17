@@ -311,8 +311,8 @@ public:
             auto readn = m_zfile->m_file->pread(m_buf, read_size, begin_offset);
             if (readn != (ssize_t)read_size) {
                 m_eno = (errno ? errno : EIO);
-                LOG_ERRNO_RETURN(0, -1, "read compressed blocks failed. (offset: `, len: `)",
-                                 begin_offset, read_size);
+                LOG_ERRNO_RETURN(0, -1, "read compressed blocks failed. (offset: `, len: `, ret: `)",
+                                 begin_offset, read_size, readn);
             }
             return 0;
         }
@@ -466,29 +466,29 @@ public:
             LOG_ERROR_RETURN(ENOMEM, -1, "block_size: ` > MAX_READ_SIZE (`)", m_ht.opt.block_size,
                              MAX_READ_SIZE);
         }
-        if (offset + count > m_ht.original_file_size) {
-            LOG_WARN("the read range exceeds raw_file_size.(`>`)", count + offset,
+        ssize_t cnt = count;
+        if (offset + cnt > (ssize_t)m_ht.original_file_size) {
+            LOG_WARN("the read range exceeds raw_file_size.(`>`)", cnt + offset,
                      m_ht.original_file_size);
-            count = m_ht.original_file_size - offset;
+            cnt = m_ht.original_file_size - offset;
         }
-        if (count <= 0)
+        if (cnt <= 0) {
+            LOG_WARN("the read offset exceeds raw_file_size.(`>`)", offset,
+                     m_ht.original_file_size);
             return 0;
-        if (offset + count > m_ht.original_file_size) {
-            LOG_ERRNO_RETURN(ERANGE, -1, "pread range exceed (` > `)", offset + count,
-                             m_ht.original_file_size);
         }
         ssize_t readn = 0; // final will equal to count
         unsigned char raw[MAX_READ_SIZE];
-        BlockReader br(this, offset, count);
+        BlockReader br(this, offset, cnt);
         for (auto &block : br) {
             if (buf == nullptr) {
                 // used for prefetch; no copy, no decompress;
                 readn += block.cp_len;
                 continue;
             }
+            int retry = 3;
+        again:
             if (m_ht.opt.verify) {
-                int retry = 2;
-            again:
                 auto c = crc32c((void *)block.buffer(), block.compressed_size);
                 if (c != block.crc32_code()) {
                     if ((valid == FLAG_VALID_TRUE) && (retry--)) {
@@ -515,17 +515,29 @@ public:
                 readn += block.cp_len;
                 continue;
             }
+            int dret = -1;
             if (block.cp_len == m_ht.opt.block_size) {
-                auto dret = m_compressor->decompress(block.buffer(), block.compressed_size,
-                                                     (unsigned char *)buf, m_ht.opt.block_size);
-                if (dret == -1)
-                    return -1;
+                dret = m_compressor->decompress(block.buffer(), block.compressed_size,
+                                                (unsigned char *)buf, m_ht.opt.block_size);
             } else {
-                auto dret = m_compressor->decompress(block.buffer(), block.compressed_size, raw,
-                                                     m_ht.opt.block_size);
-                if (dret == -1)
-                    return -1;
-                memcpy(buf, raw + block.cp_begin, block.cp_len);
+                dret = m_compressor->decompress(block.buffer(), block.compressed_size, raw,
+                                                m_ht.opt.block_size);
+                if (dret != -1)
+                    memcpy(buf, raw + block.cp_begin, block.cp_len);
+            }
+            if (dret == -1) {
+                if (retry--) {
+                    int reload_res = block.reload();
+                    LOG_ERROR("decompression failed {offset: `, length: `}, reload result: `",
+                        block.m_reader->m_buf_offset, block.compressed_size, reload_res);
+                    if (reload_res < 0) {
+                        LOG_ERRNO_RETURN(0, -1, "decompression and reload failed");
+                    }
+                    goto again;
+                }
+                LOG_ERRNO_RETURN(0, -1,
+                                 "decompression failed after retries, {offset: `, length: `}",
+                                 block.m_reader->m_buf_offset, block.compressed_size);
             }
             readn += block.cp_len;
             buf = (unsigned char *)buf + block.cp_len;
