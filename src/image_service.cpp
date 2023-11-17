@@ -74,7 +74,7 @@ int parse_blob_url(const std::string &url, struct ImageRef &ref) {
                 prev = idx + 1;
             }
             ref.seg = std::vector<std::string>{words[0]};
-            for (int i = 2; i + 1 < words.size(); i++) {
+            for (size_t i = 2; i + 1 < words.size(); i++) {
                 ref.seg.push_back(words[i]);
             }
         }

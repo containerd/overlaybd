@@ -341,7 +341,7 @@ LSMT::IFileRO *ImageFile::open_lowers(std::vector<ImageConfigNS::LayerConfig> &l
         photon::thread_join(ths[i]);
     }
 
-    for (int i = 0; i < files.size(); i++) {
+    for (size_t i = 0; i < files.size(); i++) {
         if (files[i] == NULL) {
             LOG_ERROR("layer index ` open failed, exit.", i);
             if (m_exception == "")
@@ -367,7 +367,7 @@ ERROR_EXIT:
     if (m_exception == "") {
         m_exception = "failed to create overlaybd device";
     }
-    for (int i = 0; i < lowers.size(); i++) {
+    for (size_t i = 0; i < lowers.size(); i++) {
         if (files[i] != NULL)
             delete files[i];
     }

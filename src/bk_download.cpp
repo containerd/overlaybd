@@ -195,7 +195,7 @@ bool BkDownload::download_blob() {
     DEFER(free(buff));
 
     LOG_INFO("download blob start. (`)", url);
-    while (offset < file_size) {
+    while (offset < (ssize_t)file_size) {
         if (running != 1) {
             LOG_INFO("image file exit when background downloading");
             return false;
@@ -203,7 +203,7 @@ bool BkDownload::download_blob() {
         if (!force_download) {
             // check aleady downloaded.
             auto hole_pos = dst->lseek(offset, SEEK_HOLE);
-            if (hole_pos >= offset + bs) {
+            if (hole_pos >= offset + (ssize_t)bs) {
                 // alread downloaded
                 offset += bs;
                 continue;

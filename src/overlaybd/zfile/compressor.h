@@ -20,7 +20,6 @@
 #include <cstdlib>
 #include <cstdint>
 #include <memory>
-#include "lz4/lz4.h"
 
 namespace photon {
     namespace fs {
