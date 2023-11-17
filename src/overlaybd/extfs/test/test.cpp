@@ -57,7 +57,7 @@ int write_file(photon::fs::IFile *file) {
     while (aa.size() < FILE_SIZE)
         aa.append(bb);
     auto ret = file->pwrite(aa.data(), aa.size(), 0);
-    if (ret != aa.size()) {
+    if (ret != (ssize_t)aa.size()) {
         LOG_ERRNO_RETURN(0, -1, "failed write file ", VALUE(aa.size()), VALUE(ret))
     }
     LOG_DEBUG("write ` byte", ret);
