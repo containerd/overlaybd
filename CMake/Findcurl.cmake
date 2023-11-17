@@ -17,7 +17,7 @@ if(${BUILD_CURL_FROM_SOURCE})
         if (NOT curl_bundle_POPULATED)
             FetchContent_Populate(curl_bundle)
         endif()
-        find_package(OpenSSL)
+        find_package(openssl)
         add_custom_command(
             OUTPUT ${curl_bundle_BINARY_DIR}/lib/libcurl.a
             WORKING_DIRECTORY ${curl_bundle_SOURCE_DIR}
@@ -26,6 +26,7 @@ if(${BUILD_CURL_FROM_SOURCE})
                 export CXX=${CMAKE_CXX_COMPILER} &&
                 export LD=${CMAKE_LINKER} &&
                 export CFLAGS=-fPIC &&
+                export LIBS=-ldl &&
                 autoreconf -i && sh configure --with-ssl="${OPENSSL_ROOT_DIR}"
                 --without-libssh2 --enable-static --enable-shared=no --enable-optimize
                 --disable-manual --without-libidn
