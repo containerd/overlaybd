@@ -1,3 +1,4 @@
+
 /*
    Copyright The Overlaybd Authors
 
@@ -13,15 +14,14 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
-
 #pragma once
+#include <stddef.h>
 #include <assert.h>
 #include <inttypes.h>
-#include <limits>
-#include <stddef.h>
 #include <type_traits>
-#include <utility>
 #include <vector>
+#include <utility>
+#include <limits>
 
 namespace FileSystem {
 // This is a generic LRU container, highly optimized for both speed and memory.

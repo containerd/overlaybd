@@ -18,12 +18,15 @@
 #include "sys/statvfs.h"
 #include <sys/stat.h>
 #include <sys/uio.h>
-#include <photon/common/alog-audit.h>
 #include <photon/common/alog.h>
-#include <photon/common/iovector.h>
+#include <photon/common/alog-audit.h>
 #include <photon/fs/fiemap.h>
 #include <photon/fs/filesystem.h>
+#include <photon/common/iovector.h>
 #include "cache_pool.h"
+
+using namespace FileSystem;
+using namespace photon::fs;
 
 namespace Cache {
 
@@ -31,7 +34,7 @@ const uint64_t kDiskBlockSize = 512; // stat(2)
 constexpr int kFieExtentSize = 1000;
 const int kBlockSize = 4 * 1024;
 
-FileCacheStore::FileCacheStore(FileSystem::ICachePool *cachePool, photon::fs::IFile *localFile,
+FileCacheStore::FileCacheStore(FileSystem::ICachePool *cachePool, IFile *localFile,
                                size_t refillUnit, FileIterator iterator)
     : cachePool_(static_cast<FileCachePool *>(cachePool)), localFile_(localFile),
       refillUnit_(refillUnit), iterator_(iterator) {
@@ -42,12 +45,14 @@ FileCacheStore::~FileCacheStore() {
     cachePool_->removeOpenFile(iterator_);
 }
 
-ssize_t FileCacheStore::preadv(const struct iovec *iov, int iovcnt, off_t offset) {
+ssize_t FileCacheStore::do_preadv2(const struct iovec *iov, int iovcnt, off_t offset, int flags) {
+    // TODO(suoshi.yf): maybe a new interface for updating lru is better for avoiding
+    // multiple cacheStore preadvs but cacheFile preadv only once
     ssize_t ret;
     cachePool_->updateLru(iterator_);
     auto lruEntry = static_cast<FileCachePool::LruEntry *>(iterator_->second.get());
     photon::scoped_rwlock rl(lruEntry->rw_lock_, photon::RLOCK);
-    SCOPE_AUDIT_THRESHOLD(10UL * 1000, "file:read", AU_FILEOP("", offset, ret));
+    SCOPE_AUDIT_THRESHOLD(1UL * 1000, "file:read", AU_FILEOP("", offset, ret));
     ret = localFile_->preadv(iov, iovcnt, offset);
     return ret;
 }
@@ -61,7 +66,7 @@ ssize_t FileCacheStore::do_pwritev(const struct iovec *iov, int iovcnt, off_t of
     return ret;
 }
 
-ssize_t FileCacheStore::pwritev(const struct iovec *iov, int iovcnt, off_t offset) {
+ssize_t FileCacheStore::do_pwritev2(const struct iovec *iov, int iovcnt, off_t offset, int flags) {
     if (cacheIsFull()) {
         errno = ENOSPC;
         return -1;
@@ -89,7 +94,7 @@ std::pair<off_t, size_t> FileCacheStore::queryRefillRange(off_t offset, size_t s
     off_t alignLeft = align_down(offset, kBlockSize);
     off_t alignRight = align_up(offset + size, kBlockSize);
     ReadRequest request{alignLeft, static_cast<size_t>(alignRight - alignLeft)};
-    struct photon::fs::fiemap_t<kFieExtentSize> fie(request.offset, request.size);
+    struct fiemap_t<kFieExtentSize> fie(request.offset, request.size);
     fie.fm_mapped_extents = 0;
 
     if (request.size > 0) { //  fiemap cannot handle size zero.
@@ -112,7 +117,7 @@ std::pair<off_t, size_t> FileCacheStore::queryRefillRange(off_t offset, size_t s
     uint64_t holeStart = request.offset;
     uint64_t holeEnd = request.offset + request.size;
 
-    for (auto i = fie.fm_mapped_extents - 1; i < fie.fm_mapped_extents; i--) {
+    for (ssize_t i = (ssize_t)(fie.fm_mapped_extents) - 1; i >= 0; i--) {
         auto &extent = fie.fm_extents[i];
         if ((extent.fe_flags == FIEMAP_EXTENT_UNKNOWN) ||
             (extent.fe_flags == FIEMAP_EXTENT_UNWRITTEN))
@@ -146,7 +151,12 @@ std::pair<off_t, size_t> FileCacheStore::queryRefillRange(off_t offset, size_t s
     return std::make_pair(left, right - left);
 }
 
-int FileCacheStore::stat(FileSystem::CacheStat *stat) {
+int FileCacheStore::set_quota(size_t quota) {
+    errno = ENOSYS;
+    return -1;
+}
+
+int FileCacheStore::stat(CacheStat *stat) {
     errno = ENOSYS;
     return -1;
 }
@@ -161,7 +171,6 @@ int FileCacheStore::evict(off_t offset, size_t count) {
 #ifndef FALLOC_FL_PUNCH_HOLE
 #define FALLOC_FL_PUNCH_HOLE 0x02 /* de-allocates range */
 #endif
-        ScopedRangeLock lock(rangeLock_, offset, count);
         int mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE;
         return localFile_->fallocate(mode, offset, count);
     }
@@ -173,10 +182,6 @@ int FileCacheStore::fstat(struct stat *buf) {
 
 bool FileCacheStore::cacheIsFull() {
     return cachePool_->isFull();
-}
-
-int FileCacheStore::ftruncate(off_t length) {
-    return localFile_->ftruncate(length);
 }
 
 } //  namespace Cache

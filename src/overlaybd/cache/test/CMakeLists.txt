@@ -12,4 +12,3 @@ add_test(
   NAME cache_test
   COMMAND ${EXECUTABLE_OUTPUT_PATH}/cache_test
 )
-

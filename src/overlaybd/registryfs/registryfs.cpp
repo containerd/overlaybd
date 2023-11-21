@@ -250,7 +250,7 @@ public:
         // unexpected situation
         if (!scope.empty())
             m_scope_token.release(scope, true);
-        LOG_ERROR_RETURN(0, nullptr, "Failed to get actual url ", VALUE(url), VALUE(ret));
+        LOG_ERROR_RETURN(0, nullptr, "Failed to get actual url ", VALUE(code), VALUE(url), VALUE(ret));
     }
 
     virtual int setAccelerateAddress(const char* addr = "") override {
@@ -380,7 +380,8 @@ public:
     size_t m_filesize;
 
     RegistryFileImpl(const char *filename, const char *url, RegistryFSImpl *fs, uint64_t timeout)
-        : m_filename(filename), m_url(url), m_fs(fs), m_timeout(timeout) {
+        : m_filename(filename), m_fs(fs), m_timeout(timeout) {
+        m_url = url[0] == '/' ? url + 1 : url;
         m_filesize = 0;
     }
 

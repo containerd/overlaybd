@@ -378,7 +378,9 @@ public:
     size_t m_filesize = 0;
 
     RegistryFileImpl_v2(const char *url, RegistryFSImpl_v2 *fs, uint64_t timeout)
-        : m_url(url), m_fs(fs), m_timeout(timeout) {}
+        : m_fs(fs), m_timeout(timeout) {
+        m_url = url[0] == '/' ? url + 1 : url;
+    }
 
     virtual IFileSystem *filesystem() override {
         return m_fs;
@@ -467,7 +469,7 @@ inline IFile *RegistryFSImpl_v2::open(const char *pathname, int) {
     int ret = file->fstat(&buf);
     if (ret < 0) {
         delete file;
-        LOG_ERROR_RETURN(0, nullptr, "failed to open and stat registry file `, ret `", pathname, ret);
+        LOG_ERRNO_RETURN(0, nullptr, "failed to open and stat registry file `, ret `", pathname, ret);
     }
     return file;
 }
