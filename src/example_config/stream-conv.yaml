@@ -1,13 +1,3 @@
-# // {
-# //     "serverConfig": {
-# //         "uds":  "/var/run/stream_conv.sock",
-# //         "workdir": "/tmp/stream_conv"
-# //     },
-# //     "logConfig": {
-# //         "level": 0,
-# //         "mode": "stdout"
-# //     }
-# // }
 globalConfig:
   workDir: /tmp/stream_conv
   udsAddr: /var/run/stream_conv.sock

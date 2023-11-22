@@ -27,6 +27,7 @@
 #include "../../tools/sha256file.h"
 #include "../gzindex/gzfile_index.h"
 #include "photon/common/alog.h"
+#include "photon/fs/localfs.h"
 class GzAdaptorFile : public photon::fs::VirtualReadOnlyFile {
 public:
     GzAdaptorFile() {
@@ -69,7 +70,7 @@ class GzStreamFile :  public IGzFile {
 public:
     GzStreamFile(IStream *sock, ssize_t st_size, bool index_save,
          const char* uid, const char *_workdir)
-        : fstream(sock), st_size(st_size), workdir(_workdir){
+        : st_size(st_size), fstream(sock), workdir(_workdir){
 
         if (uid == nullptr) {
             timeval now;
@@ -93,17 +94,16 @@ public:
         ttin = ttout = strm.avail_out = 0;
         init_index_header(this, m_idx_header, GZ_CHUNK_SIZE, GZ_DICT_COMPERSS_ALGO,
                           GZ_COMPRESS_LEVEL);
-        lfs = photon::fs::new_localfs_adaptor(workdir.c_str());
         m_indexes.clear();
-
+        m_lfs = photon::fs::new_localfs_adaptor(workdir.c_str());
         LOG_INFO("create buffer file(`) and indexfile(`)", fn_buff, fn_idx);
         if (index_save) {
-            m_idx_file = lfs->open(fn_idx.c_str(), O_TRUNC | O_CREAT | O_RDWR, 0644);
+            m_idx_file = m_lfs->open(fn_idx.c_str(), O_TRUNC | O_CREAT | O_RDWR, 0644);
             m_idx_filter = new_index_filter(&m_idx_header, &m_indexes, m_idx_file);
             fstream = new_sha256_file((IFile*)fstream, false);
         }
 
-        buffer_file = lfs->open(fn_buff.c_str(), O_TRUNC | O_CREAT | O_RDWR, 0644);
+        buffer_file = photon::fs::open_localfile_adaptor(fn_buff.c_str(), O_TRUNC | O_CREAT | O_RDWR, 0644);
         LOG_INFO("create a GzStreamFile. workdir: `", workdir);
     };
 
@@ -111,12 +111,13 @@ public:
         (void)inflateEnd(&strm);
         delete m_idx_file;
         delete buffer_file;
-        delete m_idx_filter;
+        delete_index_filter(m_idx_filter);
         delete fstream;
         for (auto it:m_indexes) {
             delete it;
         }
-        lfs->unlink(fn_buff.c_str());
+        m_lfs->unlink(fn_buff.c_str());
+        delete m_lfs;
     }
 
     UNIMPLEMENTED_POINTER(photon::fs::IFileSystem* filesystem() override);
@@ -246,7 +247,7 @@ public:
         }
         auto dst_file = this->sha256_checksum() + ".gz_idx";
         LOG_INFO("save index as: `", dst_file);
-        lfs->rename(fn_idx.c_str(), dst_file.c_str());
+        m_lfs->rename(fn_idx.c_str(), dst_file.c_str());
         return std::string(workdir) + "/" + dst_file;
     }
     ssize_t st_size = 0;
@@ -264,7 +265,7 @@ public:
     off_t bf_start = 0, bf_len = 0;
 
     off_t cur_offset = 0;
-    photon::fs::IFileSystem *lfs = nullptr;
+    photon::fs::IFileSystem *m_lfs = nullptr;
     IFile *buffer_file = nullptr;
     IFile *m_idx_file = nullptr;
     // const char *FN_BUFF_PREFIX = "/tmp/decompbuffer";

@@ -578,14 +578,9 @@ TEST_F(GzCacheTest, cache_store) {
     fread(cbuf1, 1, vsize, fp1);
     fread(cbuf2, 1, vsize, fp2);
     // refill_size is 1MB
-<<<<<<< HEAD
     for (size_t i = 0; i < vsize; i++) {
         if (check_in_interval(i, 0, 1 << 20) ||
             check_in_interval(i, vsize - (1 << 20), vsize) ||
-=======
-    for (int i = 0; i < vsize; i++) {
-        if (check_in_interval(i, 0, 1 << 20) || check_in_interval(i, vsize - (1 << 20), vsize) ||
->>>>>>> [feat] new features for gzip/tar module:
             check_in_interval(i, 5 << 20, 6 << 20)) {
             EXPECT_EQ(cbuf1[i], cbuf2[i]);
         } else {
