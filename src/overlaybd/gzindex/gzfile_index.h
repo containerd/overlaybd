@@ -85,8 +85,9 @@ struct IndexEntry {
 
 typedef std::vector<struct IndexEntry *> INDEX;
 
-struct IndexFilterRecorder;
+class IndexFilterRecorder;
 IndexFilterRecorder *new_index_filter(IndexFileHeader *h, INDEX *index, photon::fs::IFile *save_as);
+void delete_index_filter(IndexFilterRecorder *&);
 
 int init_index_header(photon::fs::IFile* src, IndexFileHeader &h,  off_t span, int dict_compress_algo, int dict_compress_level);
 

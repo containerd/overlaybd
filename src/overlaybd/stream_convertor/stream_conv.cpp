@@ -68,11 +68,12 @@ public:
     int gen_meta(http::Request &req, http::Response &resp, std::string_view){
 
         Task t;
+        auto uuid = req.headers.get_value("UUID").to_string();
         resp.set_result(200);
         if (!valid_request(req, resp)) {
             return 0;
         }
-        string msg = "{\"code\": 0, \"message\": \"\"}\n";
+        string msg = string("{\"code\": 0, \"message\":") + uuid + "\"\"}\n";
         if (do_task(&req, t) != 0){
             msg = "failed";
         }
@@ -183,6 +184,7 @@ public:
     }
 
     int stop() {
+        delete m_fs;
         if (m_uds_serv) {
             m_uds_serv->terminate();
             delete m_uds_serv;

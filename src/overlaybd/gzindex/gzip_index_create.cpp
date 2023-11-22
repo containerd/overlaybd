@@ -197,6 +197,11 @@ IndexFilterRecorder* new_index_filter(IndexFileHeader *h, INDEX *index, photon::
     return new IndexFilterRecorder(h, index, save_as);
 }
 
+void delete_index_filter(IndexFilterRecorder *&idx_filter) {
+    delete idx_filter;
+    idx_filter = nullptr;
+}
+
 static int build_index(IndexFileHeader& h,photon::fs::IFile *gzfile, INDEX &index, photon::fs::IFile* index_file) {
     // IndexFilterRecorder filter(&h, &index, index_file);
     auto filter = new IndexFilterRecorder(&h, &index, index_file);
@@ -364,6 +369,11 @@ int create_gz_index(photon::fs::IFile* gzip_file, const char *index_file_path, o
         LOG_ERRNO_RETURN(0, -1, "init index header failed.");
     }
     INDEX index;
+    DEFER({
+        for (auto it : index) {
+            delete it;
+        }
+    });
     int ret = build_index(h, gzip_file, index, index_file);
     if (ret != 0) {
         LOG_ERRNO_RETURN(0, -1, "Faild to build_index");
