@@ -20,13 +20,6 @@
 #include <photon/common/range-lock.h>
 #include "cache_pool.h"
 
-namespace photon {
-    namespace fs {
-        class IFileSystem;
-        struct fiemap;
-    }
-} // namespace FileSystem
-
 namespace Cache {
 
 class FileCachePool;
@@ -34,17 +27,17 @@ class FileCachePool;
 class FileCacheStore : public FileSystem::ICacheStore {
 public:
     typedef FileCachePool::FileNameMap::iterator FileIterator;
-    FileCacheStore(FileSystem::ICachePool *cachePool, photon::fs::IFile *localFile, size_t refillUnit,
-                   FileIterator iterator);
+    FileCacheStore(FileSystem::ICachePool *cachePool, photon::fs::IFile *localFile,
+                   size_t refillUnit, FileIterator iterator);
     ~FileCacheStore();
 
-    ssize_t preadv(const struct iovec *iov, int iovcnt, off_t offset) override;
+    ssize_t do_preadv2(const struct iovec *iov, int iovcnt, off_t offset, int flags) override;
 
-    ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override;
+    ssize_t do_pwritev2(const struct iovec *iov, int iovcnt, off_t offset, int flags) override;
 
+    int set_quota(size_t quota) override;
     int stat(FileSystem::CacheStat *stat) override;
     int evict(off_t offset, size_t count = -1) override;
-    int ftruncate(off_t length) override;
 
     std::pair<off_t, size_t> queryRefillRange(off_t offset, size_t size) override;
 
@@ -65,10 +58,10 @@ protected:
     std::pair<off_t, size_t> getLastMergedExtents(struct fiemap *fie);
 
     std::pair<off_t, off_t> getHoleFromCacheHitResult(off_t offset, size_t alignSize,
-                                                      struct photon::fs::fiemap *fie);
+                                                      struct fiemap *fie);
 
-    FileCachePool *cachePool_; //  owned by extern class
-    photon::fs::IFile *localFile_;         //  owned by current class
+    FileCachePool *cachePool_;     //  owned by extern class
+    photon::fs::IFile *localFile_; //  owned by current class
     size_t refillUnit_;
     FileIterator iterator_;
     RangeLock rangeLock_;

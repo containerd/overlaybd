@@ -27,20 +27,14 @@
 #include "../policy/lru.h"
 #include "../pool_store.h"
 
-namespace photon {
-    namespace fs {
-        class IFileSystem;
-        class IFile;
-    };
-}; // photon
+#include <photon/fs/filesystem.h>
 
 namespace Cache {
-
 
 class FileCachePool : public FileSystem::ICachePool {
 public:
     FileCachePool(photon::fs::IFileSystem *mediaFs, uint64_t capacityInGB, uint64_t periodInUs,
-                  uint64_t diskAvailInBytes, uint64_t refillUnit, Fn_trans_func name_trans = nullptr);
+                  uint64_t diskAvailInBytes, uint64_t refillUnit);
     ~FileCachePool();
 
     static const uint64_t kDiskBlockSize = 512; // stat(2)
@@ -52,10 +46,13 @@ public:
     //  pathname must begin with '/'
     FileSystem::ICacheStore *do_open(std::string_view pathname, int flags, mode_t mode) override;
 
-    int stat(FileSystem::CacheStat *stat, std::string_view pathname = std::string_view(nullptr, 0)) override;
+    int set_quota(std::string_view pathname, size_t quota) override;
+    int stat(FileSystem::CacheStat *stat,
+             std::string_view pathname = std::string_view(nullptr, 0)) override;
 
     int evict(std::string_view filename) override;
     int evict(size_t size = 0) override;
+    int rename(std::string_view oldname, std::string_view newname) override;
 
     struct LruEntry {
         LruEntry(uint32_t lruIt, int openCnt, uint64_t fileSize)
@@ -111,7 +108,6 @@ protected:
     LRUContainer lru_;
     // filename -> lruEntry
     FileNameMap fileIndex_;
-    Fn_trans_func file_name_trans = &same_name_trans;
 };
 
 } //  namespace Cache

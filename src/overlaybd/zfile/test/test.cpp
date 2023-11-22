@@ -30,7 +30,6 @@
 #include "../compressor.cpp"
 #include <memory>
 
-#include <optional>
 #include <string>
 #include <fstream>
 #include <cstdlib>

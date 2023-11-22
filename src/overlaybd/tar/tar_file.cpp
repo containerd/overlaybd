@@ -309,7 +309,7 @@ int is_tar_file(IFile *file) {
     TarHeader th_buf;
     auto ret = file->pread(&th_buf, T_BLOCKSIZE, 0);
     if (ret < 0) {
-        LOG_ERROR_RETURN(0, -1, "read tar file header failed");
+        LOG_ERRNO_RETURN(0, -1, "read tar file header failed");
     } else if (ret != T_BLOCKSIZE) {
         LOG_WARN("read tar file header error, expect `, ret `", T_BLOCKSIZE, ret);
         return 0;

@@ -20,23 +20,25 @@
 #include <sys/stat.h>
 #include <algorithm>
 #include <sys/statvfs.h>
-#include <photon/common/alog-stdstring.h>
-#include <photon/common/alog.h>
-#include <photon/common/enumerable.h>
-#include <photon/fs/path.h>
 #include "cache_store.h"
+#include <photon/common/alog.h>
+#include <photon/common/alog-stdstring.h>
+#include <photon/common/enumerable.h>
+#include <photon/common/utility.h>
+#include <photon/fs/path.h>
 
 namespace Cache {
 
 using namespace FileSystem;
+using namespace photon::fs;
 
 const uint64_t kGB = 1024 * 1024 * 1024;
 const uint64_t kMaxFreeSpace = 50 * kGB;
 const int64_t kEvictionMark = 5ll * kGB;
 
-FileCachePool::FileCachePool(photon::fs::IFileSystem *mediaFs, uint64_t capacityInGB, uint64_t periodInUs,
-                             uint64_t diskAvailInBytes, uint64_t refillUnit, Fn_trans_func name_trans)
-    : mediaFs_(mediaFs), capacityInGB_(capacityInGB), periodInUs_(periodInUs),
+FileCachePool::FileCachePool(IFileSystem *mediaFs, uint64_t capacityInGB, uint64_t periodInUs,
+                             uint64_t diskAvailInBytes, uint64_t refillUnit)
+    : ICachePool(0), mediaFs_(mediaFs), capacityInGB_(capacityInGB), periodInUs_(periodInUs),
       diskAvailInBytes_(diskAvailInBytes), refillUnit_(refillUnit), totalUsed_(0), timer_(nullptr),
       running_(false), exit_(false), isFull_(false) {
     int64_t capacityInBytes = capacityInGB_ * kGB;
@@ -44,9 +46,6 @@ FileCachePool::FileCachePool(photon::fs::IFileSystem *mediaFs, uint64_t capacity
     // keep this relation : waterMark < riskMark < capacity
     riskMark_ = std::max(capacityInBytes - kEvictionMark,
                          (static_cast<int64_t>(waterMark_) + capacityInBytes) >> 1);
-    if (name_trans != nullptr) {
-        file_name_trans = name_trans;
-    }
 }
 
 FileCachePool::~FileCachePool() {
@@ -57,26 +56,27 @@ FileCachePool::~FileCachePool() {
         }
         delete timer_;
     }
+    this->stores_clear();
     delete mediaFs_;
 }
 
 void FileCachePool::Init() {
     traverseDir("/");
-    timer_ = new photon::Timer(periodInUs_, {this, FileCachePool::timerHandler});
+    timer_ = new photon::Timer(periodInUs_, {this, FileCachePool::timerHandler}, true,
+                               8UL * 1024 * 1024);
 }
 
 ICacheStore *FileCachePool::do_open(std::string_view pathname, int flags, mode_t mode) {
-    auto filename = file_name_trans(pathname);
-    auto localFile = openMedia(filename, flags, mode);
+    auto localFile = openMedia(pathname, flags, mode);
     if (!localFile) {
         return nullptr;
     }
 
-    auto find = fileIndex_.find(filename);
+    auto find = fileIndex_.find(pathname);
     if (find == fileIndex_.end()) {
         auto lruIter = lru_.push_front(fileIndex_.end());
         std::unique_ptr<LruEntry> entry(new LruEntry{lruIter, 1, 0});
-        find = fileIndex_.emplace(filename, std::move(entry)).first;
+        find = fileIndex_.emplace(pathname, std::move(entry)).first;
         lru_.front() = find;
     } else {
         lru_.access(find->second->lruIter);
@@ -86,12 +86,12 @@ ICacheStore *FileCachePool::do_open(std::string_view pathname, int flags, mode_t
     return new FileCacheStore(this, localFile, refillUnit_, find);
 }
 
-photon::fs::IFile *FileCachePool::openMedia(std::string_view name, int flags, int mode) {
-    if (name.empty()) {
+IFile *FileCachePool::openMedia(std::string_view name, int flags, int mode) {
+    if (name.empty() || name[0] != '/') {
         LOG_ERROR_RETURN(EINVAL, nullptr, "pathname is invalid, path : `", name);
     }
 
-    auto base_directory = photon::fs::Path(name.data()).dirname();
+    auto base_directory = Path(name.data()).dirname();
     auto ret = mkdir_recursive(base_directory, mediaFs_);
     if (ret) {
         LOG_ERRNO_RETURN(0, nullptr, "mkdir failed, path : `", name);
@@ -105,6 +105,11 @@ photon::fs::IFile *FileCachePool::openMedia(std::string_view name, int flags, in
     return localFile;
 }
 
+int FileCachePool::set_quota(std::string_view pathname, size_t quota) {
+    errno = ENOSYS;
+    return -1;
+}
+
 int FileCachePool::stat(CacheStat *stat, std::string_view pathname) {
     errno = ENOSYS;
     return -1;
@@ -116,6 +121,11 @@ int FileCachePool::evict(std::string_view filename) {
 }
 
 int FileCachePool::evict(size_t size) {
+    errno = ENOSYS;
+    return -1;
+}
+
+int FileCachePool::rename(std::string_view oldname, std::string_view newname) {
     errno = ENOSYS;
     return -1;
 }
@@ -215,7 +225,7 @@ void FileCachePool::eviction() {
             if (0 == fileIter->second->openCount) {
                 afterFtrucate(fileIter);
             }
-            photon::thread_usleep(kDeleteDelayInUs);
+            photon::thread_yield();
             continue;
         }
 
@@ -224,16 +234,21 @@ void FileCachePool::eviction() {
             err = mediaFs_->truncate(fileName.data(), 0);
         }
 
-        if (err && errno != ENOENT) {
-            LOG_ERROR("truncate(0) failed, name : `, ret : `, error code : `", fileName, err,
-                      ERRNO());
-            continue;
-        } else {
-            fileSize = lruEntry->size;
-            afterFtrucate(fileIter);
-            actualEvict -= fileSize;
+        if (err) {
+            ERRNO e;
+            LOG_ERROR("truncate(0) failed, name : `, ret : `, error code : `", fileName, err, e);
+            // truncate to 0 failed means unable to free the file, it should not consider as a part
+            // of cache. Deal as it already release.
+            // The only exception is errno EINTR, means truncate interrupted by signal, should try
+            // again
+            if (e.no == EINTR) {
+                photon::thread_yield();
+                continue;
+            }
         }
-        photon::thread_usleep(kDeleteDelayInUs);
+        afterFtrucate(fileIter);
+        actualEvict -= fileSize;
+        photon::thread_yield();
     }
 }
 
@@ -251,19 +266,22 @@ bool FileCachePool::afterFtrucate(FileNameMap::iterator iter) {
     }
     if (0 == iter->second->openCount) {
         auto err = mediaFs_->unlink(iter->first.data());
-        if (0 != err) {
-            LOG_ERROR("unlink failed, name : `, ret : `, error code : `", iter->first, err,
-                      ERRNO());
-        } else {
-            lru_.remove(iter->second->lruIter);
-            fileIndex_.erase(iter);
+        ERRNO e;
+        LOG_ERROR("unlink failed, name : `, ret : `, error code : `", iter->first, err, e);
+        // unlik failed may caused by multiple reasons
+        // only EBUSY should may be able to trying to unlink again
+        // other reason should never try to clean it.
+        if (err && (e.no == EBUSY)) {
+            return false;
         }
+        lru_.remove(iter->second->lruIter);
+        fileIndex_.erase(iter);
     }
     return true;
 }
 
 int FileCachePool::traverseDir(const std::string &root) {
-    for (auto file : enumerable(photon::fs::Walker(mediaFs_, root))) {
+    for (auto file : enumerable(Walker(mediaFs_, root))) {
         insertFile(file);
     }
     return 0;

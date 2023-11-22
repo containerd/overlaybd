@@ -128,57 +128,59 @@ IFile *ImageFile::__open_ro_target_remote(const std::string &dir, const std::str
     return remote_file;
 }
 
+void get_error_msg(int eno, std::string &err_msg) {
+    if (eno == EPERM || eno == EACCES) {
+        err_msg = "Authentication failed";
+    } else if (eno == ENOTCONN) {
+        err_msg = "Connection failed";
+    } else if (eno == ETIMEDOUT) {
+        err_msg = "Get meta timedout";
+    } else if (eno == ENOENT) {
+        err_msg = "No such file or directory";
+    } else if (eno == EBUSY) {
+        err_msg = "Too many requests";
+    } else if (eno == EIO) {
+        err_msg = "Unexpected response";
+    } else {
+        err_msg = std::string(strerror(eno));
+    }
+}
+
 IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &digest,
                                    const uint64_t size, int layer_index) {
-    std::string url;
-
     if (conf.repoBlobUrl() == "") {
         set_failed("empty repoBlobUrl");
         LOG_ERROR_RETURN(0, nullptr, "empty repoBlobUrl for remote layer");
     }
-    url = conf.repoBlobUrl();
-
-    if (url[url.length() - 1] != '/')
-        url += "/";
-    url += digest;
+    estring url = estring().appends("/", conf.repoBlobUrl(),
+                                    (conf.repoBlobUrl().back() != '/') ? "/" : "",
+                                    digest);
 
     LOG_INFO("open file from remotefs: `, size: `", url, size);
     IFile *remote_file = image_service.global_fs.remote_fs->open(url.c_str(), O_RDONLY);
     if (!remote_file) {
-        std::string err_msg = "failed to open remote file " + url + ": ";
-        if (errno == EPERM || errno == EACCES) {
-            err_msg += "Authentication failed";
-        } else if (errno == ENOTCONN) {
-            err_msg += "Connection failed";
-        } else if (errno == ETIMEDOUT) {
-            err_msg += "Get meta timedout";
-        } else if (errno == ENOENT) {
-            err_msg += "No such file or directory";
-        } else if (errno == EBUSY) {
-            err_msg += "Too many requests";
-        } else if (errno == EIO) {
-            err_msg += "Unexpected response";
-        } else {
-            err_msg += std::string(strerror(errno));
-        }
-        set_failed(err_msg);
-        LOG_ERRNO_RETURN(0, nullptr, err_msg);
+        std::string err_msg;
+        get_error_msg(errno, err_msg);
+        set_failed("failed to open remote file ", url, ": ", err_msg);
+        LOG_ERRNO_RETURN(0, nullptr, "failed to open remote file `: `", url, err_msg);
     }
     remote_file->ioctl(SET_SIZE, size);
     remote_file->ioctl(SET_LOCAL_DIR, dir);
 
     IFile *tar_file = new_tar_file_adaptor(remote_file);
     if (!tar_file) {
-        set_failed("failed to open remote file as tar file " + url);
+        std::string err_msg;
+        get_error_msg(errno, err_msg);
+        set_failed("failed to open remote file as tar file ", url, ": ", err_msg);
         delete remote_file;
-        LOG_ERROR_RETURN(0, nullptr, "failed to open remote file as tar file `", url);
+        LOG_ERRNO_RETURN(0, nullptr, "failed to open remote file as tar file `: `", url, err_msg);
     }
 
     ISwitchFile *switch_file = new_switch_file(tar_file, false, url.c_str());
     if (!switch_file) {
-        set_failed("failed to open switch file " + url);
+        set_failed("failed to open switch file ", url);
         delete tar_file;
-        LOG_ERROR_RETURN(0, nullptr, "failed to open switch file `", url);
+        LOG_ERRNO_RETURN(0, nullptr, "failed to open switch file `", url);
     }
 
     if (conf.HasMember("download") && conf.download().enable() == 1) {
@@ -517,10 +519,11 @@ void ImageFile::set_auth_failed() {
     }
 }
 
-void ImageFile::set_failed(std::string reason) {
+template<typename...Ts>
+void ImageFile::set_failed(const Ts&...xs) {
     if (m_status == 0) // only set exit in image boot phase
     {
         m_status = -1;
-        m_exception = reason;
+        m_exception = estring().appends(xs...);
     }
 }
