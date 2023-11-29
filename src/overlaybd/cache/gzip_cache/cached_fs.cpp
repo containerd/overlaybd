@@ -16,6 +16,7 @@
 #include "cached_fs.h"
 #include "../full_file_cache/cache_pool.h"
 #include "../cache.h"
+#include <photon/common/estring.h>
 
 namespace Cache {
 
@@ -34,7 +35,11 @@ public:
         if (!file) {
             LOG_ERRNO_RETURN(0, nullptr, "Open source gzfile failed");
         }
-        auto cache_store = pool_->open(file_name, O_RDWR | O_CREAT, 0644);
+        estring fn = file_name;
+        if (fn[0] != '/') {
+            fn = estring().appends("/", fn);
+        }
+        auto cache_store = pool_->open(fn, O_RDWR | O_CREAT, 0644);
         if (cache_store == nullptr) {
             delete file;
             LOG_ERRNO_RETURN(0, nullptr, "file cache pool open file failed, name : `", file_name);
