@@ -208,8 +208,10 @@ public:
         HTTP_OP op(m_client, Verb::GET, url);
         op.follow = 0;
         op.retry = 0;
-        op.req.headers.insert(kAuthHeaderKey, "Bearer ");
-        op.req.headers.value_append(*token);
+        if (token && !token->empty()) {
+            op.req.headers.insert(kAuthHeaderKey, "Bearer ");
+            op.req.headers.value_append(*token);
+        }
         op.timeout = tmo.timeout();
         op.call();
         code = op.status_code;
