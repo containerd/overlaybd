@@ -45,6 +45,13 @@ FileCacheStore::~FileCacheStore() {
     cachePool_->removeOpenFile(iterator_);
 }
 
+ICacheStore::try_preadv_result FileCacheStore::try_preadv2(const struct iovec *iov, int iovcnt,
+                                                           off_t offset, int flags) {
+    auto lruEntry = static_cast<FileCachePool::LruEntry *>(iterator_->second.get());
+    photon::scoped_rwlock rl(lruEntry->rw_lock_, photon::RLOCK);
+    return this->ICacheStore::try_preadv2(iov, iovcnt, offset, flags);
+}
+
 ssize_t FileCacheStore::do_preadv2(const struct iovec *iov, int iovcnt, off_t offset, int flags) {
     // TODO(suoshi.yf): maybe a new interface for updating lru is better for avoiding
     // multiple cacheStore preadvs but cacheFile preadv only once
@@ -60,6 +67,16 @@ ssize_t FileCacheStore::do_preadv2(const struct iovec *iov, int iovcnt, off_t of
 ssize_t FileCacheStore::do_pwritev(const struct iovec *iov, int iovcnt, off_t offset) {
     ssize_t ret;
     iovector_view view((iovec *)iov, iovcnt);
+    auto lruEntry = static_cast<FileCachePool::LruEntry *>(iterator_->second.get());
+    photon::scoped_rwlock rl(lruEntry->rw_lock_, photon::RLOCK);
+    if (!lruEntry->truncate_done) {
+        // May repeated ftruncate() here, but it doesn't matter
+        ret = localFile_->ftruncate(actual_size_);
+        if (ret) {
+            LOG_ERRNO_RETURN(0, -1, "failed to truncate media file: ", VALUE(ret));
+        }
+        lruEntry->truncate_done = true;
+    }
     ScopedRangeLock lock(rangeLock_, offset, view.sum());
     SCOPE_AUDIT_THRESHOLD(10UL * 1000, "file:write", AU_FILEOP("", offset, ret));
     ret = localFile_->pwritev(iov, iovcnt, offset);

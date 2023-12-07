@@ -232,6 +232,7 @@ void FileCachePool::eviction() {
         {
             photon::scoped_rwlock rl(lruEntry->rw_lock_, photon::WLOCK);
             err = mediaFs_->truncate(fileName.data(), 0);
+            lruEntry->truncate_done = false;
         }
 
         if (err) {
