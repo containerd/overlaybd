@@ -74,10 +74,12 @@ public:
         return this->ioctl(Index_Group_Commit, buffer_size);
     }
 
+    // update vsize for current rw layer
+    virtual int update_vsize(size_t vsize) = 0;
+
     // commit the written content as a new file, without garbages
     // return 0 for success, -1 otherwise
     virtual int commit(const CommitArgs &args) const = 0;
-    // virtual int commit(IFile* as) const = 0;
 
     // close and seal current file, optionally returning a new
     // read-only file, with ownership of underlaying file transferred

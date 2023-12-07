@@ -603,6 +603,8 @@ public:
             LOG_ERROR_RETURN(ENOSYS, nullptr, "no underlying files found!");
         return file->filesystem();
     }
+
+    UNIMPLEMENTED(int update_vsize(size_t vsize) override);
     UNIMPLEMENTED(int close_seal(IFileRO **reopen_as = nullptr) override);
 
     // It can commit a RO file after close_seal()
@@ -834,6 +836,31 @@ public:
         return 0;
     }
 
+    int update_header_vsize(IFile *file, size_t vsize) {
+        ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K)
+        if (file->pread(buf, HeaderTrailer::SPACE, 0) != HeaderTrailer::SPACE) {
+            LOG_ERROR_RETURN(0, -1, "read layer header failed.");
+        }
+        HeaderTrailer *ht = (HeaderTrailer *)buf;
+        ht->virtual_size = vsize;
+        if (file->pwrite(buf, HeaderTrailer::SPACE, 0) != HeaderTrailer::SPACE) {
+            LOG_ERROR_RETURN(0, -1, "write layer header failed.");
+        }
+        return 0;
+    }
+
+    virtual int update_vsize(size_t vsize) override {
+        LOG_INFO("update vsize for LSMTFile ", VALUE(vsize));
+        m_vsize = vsize;
+        if (update_header_vsize(m_files[m_rw_tag], vsize) < 0) {
+            LOG_ERROR_RETURN(0, -1, "failed to update data vsize");
+        }
+        if (update_header_vsize(m_findex, vsize) < 0) {
+            LOG_ERROR_RETURN(0, -1, "failed to update index vsize");
+        }
+        return 0;
+    }
+
     virtual int commit(const CommitArgs &args) const override {
         if (m_files.size() > 1) {
             LOG_ERROR_RETURN(ENOTSUP, -1, "not supported: commit stacked files");
@@ -1011,6 +1038,16 @@ public:
         LOG_INFO("segment size: `", mappings.size());
         return 0;
     }
+
+    virtual int update_vsize(size_t vsize) override {
+        LOG_INFO("update vsize for LSMTSparseFile ", VALUE(vsize));
+        m_vsize = vsize;
+        if (update_header_vsize(m_files[m_rw_tag], vsize) < 0) {
+            LOG_ERROR_RETURN(0, -1, "failed to update data vsize");
+        }
+        m_files[m_rw_tag]->ftruncate(vsize + HeaderTrailer::SPACE);
+        return 0;
+    }
 };
 
 class LSMTWarpFile : public LSMTFile {
@@ -1127,6 +1164,11 @@ public:
         CompactOptions opts(&m_files, mapping.get(), m_index->size(), m_vsize, &args);
         LayerInfo info;
         info.virtual_size = m_vsize;
+        info.uuid.clear();
+        if (UUID::String::is_valid((args.uuid).c_str())) {
+            LOG_INFO("set UUID: `", args.uuid.data);
+            info.uuid.parse(args.uuid);
+        }
         if (UUID::String::is_valid((args.parent_uuid).c_str())) {
             LOG_INFO("set parent UUID: `", args.parent_uuid.data);
             info.parent_uuid.parse(args.parent_uuid);
@@ -1528,7 +1570,7 @@ void *do_parallel_load_index(void *param) {
             return nullptr;
         }
         auto file = job->get_file();
-        LOG_INFO("check file if normalfile or LSMTFile");
+        LOG_INFO("check `-th file is normal file or LSMT file", job->i);
         IMemoryIndex *pi = nullptr;
         LSMT::SegmentMapping *p = nullptr;
         auto type = file->ioctl(IFileRO::GetType);
@@ -1560,12 +1602,12 @@ void *do_parallel_load_index(void *param) {
             LOG_ERROR_RETURN(0, nullptr, "failed to create memory index!");
         }
         job->set_index(pi);
+        LOG_INFO("load index from `-th file done", job->i);
     }
     return NULL;
 }
 
-static IMemoryIndex *load_merge_index(vector<IFile *> &files, vector<UUID> &uuid,
-                                      HeaderTrailer &ht) {
+static IMemoryIndex *load_merge_index(vector<IFile *> &files, vector<UUID> &uuid, uint64_t &vsize) {
     photon::join_handle *ths[PARALLEL_LOAD_INDEX];
     auto n = min(PARALLEL_LOAD_INDEX, (int)files.size());
     LOG_DEBUG("create ` photon threads to merge index", n);
@@ -1584,7 +1626,13 @@ static IMemoryIndex *load_merge_index(vector<IFile *> &files, vector<UUID> &uuid
         uuid[i].parse(job->ht.uuid);
     }
     assert(tm.jobs.back().i == files.size() - 1);
-    ht = tm.jobs.back().ht;
+    for (auto it = tm.jobs.rbegin(); it != tm.jobs.rend(); ++it) {
+        if ((*it).ht.virtual_size > 0) {
+            vsize = (*it).ht.virtual_size;
+            break;
+        }
+    }
+
     std::reverse(files.begin(), files.end());
     std::reverse(tm.indexes.begin(), tm.indexes.end());
     std::reverse(uuid.begin(), uuid.end());
@@ -1592,7 +1640,6 @@ static IMemoryIndex *load_merge_index(vector<IFile *> &files, vector<UUID> &uuid
     if (!pmi)
         LOG_ERROR_RETURN(0, nullptr, "failed to merge indexes");
     return pmi;
-    // all indexes will be deleted automatically by ptr_vector
 }
 
 IFileRO *open_files_ro(IFile **files, size_t n, bool ownership) {
@@ -1602,10 +1649,10 @@ IFileRO *open_files_ro(IFile **files, size_t n, bool ownership) {
     if (!files || n == 0)
         return nullptr;
 
-    HeaderTrailer ht;
+    uint64_t vsize;
     vector<IFile *> m_files(files, files + n);
     vector<UUID> m_uuid(n);
-    auto pmi = load_merge_index(m_files, m_uuid, ht);
+    auto pmi = load_merge_index(m_files, m_uuid, vsize);
     if (!pmi)
         return nullptr;
 
@@ -1613,7 +1660,7 @@ IFileRO *open_files_ro(IFile **files, size_t n, bool ownership) {
     rst->m_index = pmi;
     rst->m_files = move(m_files);
     rst->m_uuid = move(m_uuid);
-    rst->m_vsize = ht.virtual_size;
+    rst->m_vsize = vsize;
     rst->m_file_ownership = ownership;
 
     LOG_DEBUG("open ` layers", n);
@@ -1624,9 +1671,9 @@ IFileRO *open_files_ro(IFile **files, size_t n, bool ownership) {
 }
 
 int merge_files_ro(vector<IFile *> files, const CommitArgs &args) {
-    HeaderTrailer ht;
+    uint64_t vsize;
     vector<UUID> files_uuid(files.size());
-    auto pmi = unique_ptr<IMemoryIndex>(load_merge_index(files, files_uuid, ht));
+    auto pmi = unique_ptr<IMemoryIndex>(load_merge_index(files, files_uuid, vsize));
     if (!pmi)
         return -1;
 
@@ -1635,7 +1682,7 @@ int merge_files_ro(vector<IFile *> files, const CommitArgs &args) {
     unique_ptr<char[]> DISCARD_BLOCK(new char[ALIGNMENT]);
 
     atomic_uint64_t _no_use_var(0);
-    CompactOptions opts(&files, ri.get(), pmi->size(), ht.virtual_size, &args);
+    CompactOptions opts(&files, ri.get(), pmi->size(), vsize, &args);
     int ret = compact(opts, _no_use_var);
     return ret;
 }
@@ -1676,10 +1723,11 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
                      bool check_order) {
     auto u = (LSMTFile *)upper_layer;
     auto l = (LSMTReadOnlyFile *)lower_layers;
-    if (!u /*|| u->m_files.size() != 1*/)
+    if (!u)
         LOG_ERROR_RETURN(EINVAL, nullptr, "invalid upper layer");
     if (!l)
         return upper_layer;
+
     auto type = u->ioctl(IFileRO::GetType);
     LSMTFile *rst = nullptr;
     IComboIndex *idx = nullptr;
@@ -1695,30 +1743,16 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
         } else {
             rst = new LSMTSparseFile;
         }
+        // TODO: also for LSMTWarpFile
+        if (u->m_vsize == 0) {
+            if (u->update_vsize(l->m_vsize) < 0) {
+                LOG_ERRNO_RETURN(0, nullptr, "failed to update vsize");
+            }
+        }
     } else {
         rst = new LSMTWarpFile;
         delta++;
     }
-        // rst->m_index = idx;
-        // rst->m_findex = u->m_findex;
-        // rst->m_vsize = u->m_vsize;
-        // rst->m_file_ownership = ownership;
-        // rst->m_files.reserve(2 + l->m_files.size());
-        // rst->m_uuid.reserve(1 + l->m_uuid.size());
-        // for (auto &x : l->m_files)
-        //     rst->m_files.push_back(x);
-        // for (auto &x : l->m_uuid)
-        //     rst->m_uuid.push_back(x);
-        // rst->m_files.push_back(u->m_files[1]);
-        // rst->m_uuid.push_back(u->m_uuid[0]);
-        // u->m_index = l->m_index = nullptr;
-        // rst->m_rw_tag = rst->m_files.size() - 2;
-        // l->m_file_ownership = u->m_file_ownership = false;
-        // if (ownership) {
-        //     delete u;
-        //     delete l;
-        // }
-        // return rst;
     idx = create_combo_index((IMemoryIndex0 *)u->m_index, l->m_index, l->m_files.size(), true);
     rst->m_index = idx;
     rst->m_findex = u->m_findex;
@@ -1735,8 +1769,6 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
         if (verify_order(rst->m_files, rst->m_uuid, 1) == false)
             return nullptr;
         LOG_INFO("check layer's parent uuid success.");
-    } else {
-        LOG_WARN("STACK FILES WITHOUT CHECK ORDER!!!");
     }
     rst->m_files.push_back(u->m_files[0]);
     if (type == (uint8_t)LSMTFileType::WarpFile) {

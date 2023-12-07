@@ -1,7 +1,7 @@
 include_directories($ENV{GFLAGS}/include)
 link_directories($ENV{GFLAGS}/lib)
 
-find_package(CURL REQUIRED)
+find_package(curl REQUIRED)
 
 add_executable(ocf_perf_test ocf_perf_test.cpp)
 target_include_directories(
@@ -19,4 +19,3 @@ add_test(
         NAME ocf_perf_test
         COMMAND ${EXECUTABLE_OUTPUT_PATH}/ocf_perf_test --ut_pass=true
 )
-

@@ -15,95 +15,99 @@
 */
 #include "cache.h"
 #include <photon/common/alog.h>
+#include <photon/common/alog-stdstring.h>
 #include <photon/common/io-alloc.h>
 #include <photon/common/iovector.h>
+#include <photon/common/expirecontainer.h>
+#include <photon/thread/thread-pool.h>
 
-#include "frontend/cached_file.h"
-#include "pool_store.h"
 #include "full_file_cache/cache_pool.h"
 
 namespace FileSystem {
 using namespace photon::fs;
-
-ICacheStore::try_preadv_result ICacheStore::try_preadv(const struct iovec *iov, int iovcnt,
-                                                       off_t offset) {
-    try_preadv_result rst;
-    iovector_view view((iovec *)iov, iovcnt);
-    rst.iov_sum = view.sum();
-    auto q = queryRefillRange(offset, rst.iov_sum);
-    if (q.second == 0) { // no need to refill
-        rst.refill_size = 0;
-        rst.size = this->preadv(iov, iovcnt, offset);
-    } else {
-        rst.refill_size = q.second;
-        rst.refill_offset = q.first;
-    }
-    return rst;
-}
-ICacheStore::try_preadv_result ICacheStore::try_preadv_mutable(struct iovec *iov, int iovcnt,
-                                                               off_t offset) {
-    return try_preadv(iov, iovcnt, offset);
-}
-ssize_t ICacheStore::preadv(const struct iovec *iov, int iovcnt, off_t offset) {
-    SmartCloneIOV<32> ciov(iov, iovcnt);
-    return preadv_mutable(ciov.iov, iovcnt, offset);
-}
-ssize_t ICacheStore::preadv_mutable(struct iovec *iov, int iovcnt, off_t offset) {
-    return preadv(iov, iovcnt, offset);
-}
-ssize_t ICacheStore::pwritev(const struct iovec *iov, int iovcnt, off_t offset) {
-    SmartCloneIOV<32> ciov(iov, iovcnt);
-    return pwritev_mutable(ciov.iov, iovcnt, offset);
-}
-ssize_t ICacheStore::pwritev_mutable(struct iovec *iov, int iovcnt, off_t offset) {
-    return pwritev(iov, iovcnt, offset);
-}
-
 ICachedFileSystem *new_full_file_cached_fs(IFileSystem *srcFs, IFileSystem *mediaFs,
                                            uint64_t refillUnit, uint64_t capacityInGB,
                                            uint64_t periodInUs, uint64_t diskAvailInBytes,
-                                           IOAlloc *allocator, Fn_trans_func name_trans) {
-    if (refillUnit % 4096 != 0) {
-        LOG_ERROR_RETURN(EINVAL, nullptr, "refill Unit need to be aligned to 4KB")
+                                           IOAlloc *allocator, int quotaDirLevel,
+                                           CacheFnTransFunc fn_trans_func) {
+    if (refillUnit % 4096 != 0 || !is_power_of_2(refillUnit)) {
+        LOG_ERROR_RETURN(EINVAL, nullptr, "refill Unit need to be aligned to 4KB and power of 2")
     }
     if (!allocator) {
         allocator = new IOAlloc;
     }
     Cache::FileCachePool *pool = nullptr;
     pool =
-        new ::Cache::FileCachePool(mediaFs, capacityInGB, periodInUs, diskAvailInBytes, refillUnit, name_trans);
+        new ::Cache::FileCachePool(mediaFs, capacityInGB, periodInUs, diskAvailInBytes, refillUnit);
     pool->Init();
-    return new_cached_fs(srcFs, pool, 4096, refillUnit, allocator);
+    return new_cached_fs(srcFs, pool, 4096, allocator, fn_trans_func);
+}
+
+using OC = ObjectCache<std::string, ICacheStore *>;
+ICachePool::ICachePool(uint32_t pool_size, uint32_t max_refilling, uint32_t refilling_threshold)
+    : m_stores(new OC(10UL * 1000 * 1000)), m_max_refilling(max_refilling),
+      m_refilling_threshold(refilling_threshold) {
+    if (pool_size != 0) {
+        m_thread_pool = photon::new_thread_pool(pool_size, 128 * 1024UL);
+        m_vcpu = photon::get_vcpu();
+    };
+}
+
+#define cast(x) static_cast<OC *>(x)
+ICachePool::~ICachePool() {
+    stores_clear();
+    delete cast(m_stores);
+}
+
+void ICachePool::stores_clear() {
+    if (m_thread_pool) {
+        auto pool = static_cast<photon::ThreadPoolBase *>(m_thread_pool);
+        m_thread_pool = nullptr;
+        photon::delete_thread_pool(pool);
+    }
+    cast(m_stores)->clear();
 }
 
 ICacheStore *ICachePool::open(std::string_view filename, int flags, mode_t mode) {
-    ICacheStore *cache_store = nullptr;
-    auto it = m_stores.find(filename);
-    if (it != m_stores.end())
-        cache_store = it->second;
-    if (cache_store == nullptr) {
-        cache_store = this->do_open(filename, flags, mode);
+    char store_name[4096];
+    std::string x(filename);
+    auto len = this->fn_trans_func(filename, store_name, sizeof(store_name));
+    std::string_view store_sv = len ? std::string_view(store_name, len) : filename;
+    auto ctor = [&]() -> ICacheStore * {
+        auto cache_store = this->do_open(store_sv, flags, mode);
         if (nullptr == cache_store) {
             LOG_ERRNO_RETURN(0, nullptr, "fileCachePool_ open file failed, name : `",
                              filename.data());
         }
-        m_stores.emplace(filename, cache_store);
-        auto it = m_stores.find(filename);
-        std::string_view map_key = it->first;
-        cache_store->set_pathname(map_key);
+        auto it = cast(m_stores)->find(store_sv);
+        std::string_view map_key = (*it)->key();
+        cache_store->set_store_key(map_key);
+        cache_store->set_src_name(filename);
         cache_store->set_pool(this);
+        struct stat st;
+        SET_STRUCT_STAT(&st);
+        st.st_size = -1;
+        if (cache_store->fstat(&st) == 0) {
+            cache_store->set_cached_size(st.st_size);
+            cache_store->set_actual_size(st.st_size);
+        }
+        cache_store->set_open_flags(flags);
+        return cache_store;
+    };
+    auto store = cast(m_stores)->acquire(store_sv, ctor);
+    if (store) {
+        auto cnt = store->ref_.fetch_add(1, std::memory_order_relaxed);
+        if (cnt)
+            cast(m_stores)->release(store_sv);
     }
-    cache_store->add_ref();
-    return cache_store;
+    return store;
+}
+
+void ICachePool::set_trans_func(CacheFnTransFunc fn_trans_func) {
+    this->fn_trans_func = fn_trans_func;
 }
 
 int ICachePool::store_release(ICacheStore *store) {
-    auto iter = m_stores.find(store->get_pathname());
-    if (iter == m_stores.end()) {
-        LOG_ERROR_RETURN(0, -1, "try to erase an unexist store from map m_stores , name : `",
-                         store->get_pathname().data());
-    }
-    m_stores.erase(iter);
-    return 0;
+    return cast(m_stores)->release(store->get_store_key());
 }
 } // namespace FileSystem

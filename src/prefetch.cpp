@@ -273,7 +273,7 @@ private:
         // Reload content
         uint32_t checksum = 0;
         TraceFormat fmt = {};
-        for (int i = 0; i < hdr.data_size / sizeof(TraceFormat); ++i) {
+        for (size_t i = 0; i < hdr.data_size / sizeof(TraceFormat); ++i) {
             n_read = m_trace_file->read(&fmt, sizeof(TraceFormat));
             if (n_read != sizeof(TraceFormat)) {
                 LOG_ERRNO_RETURN(0, -1, "Prefetch: reload content failed");

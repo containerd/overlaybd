@@ -4,7 +4,7 @@ set(FETCHCONTENT_QUIET false)
 FetchContent_Declare(
   photon
   GIT_REPOSITORY https://github.com/alibaba/PhotonLibOS.git
-  GIT_TAG v0.6.6
+  GIT_TAG v0.6.13
 )
 
 if(BUILD_TESTING)
@@ -14,4 +14,11 @@ if(BUILD_TESTING)
 else()
   FetchContent_MakeAvailable(photon)
 endif()
+
+if (BUILD_CURL_FROM_SOURCE)
+  find_package(openssl REQUIRED)
+  find_package(curl REQUIRED)
+  add_dependencies(photon_obj CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
+endif()
+
 set(PHOTON_INCLUDE_DIR ${photon_SOURCE_DIR}/include/)

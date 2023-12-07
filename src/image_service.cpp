@@ -74,7 +74,7 @@ int parse_blob_url(const std::string &url, struct ImageRef &ref) {
                 prev = idx + 1;
             }
             ref.seg = std::vector<std::string>{words[0]};
-            for (int i = 2; i + 1 < words.size(); i++) {
+            for (size_t i = 2; i + 1 < words.size(); i++) {
                 ref.seg.push_back(words[i]);
             }
         }
@@ -274,8 +274,16 @@ void ImageService::set_result_file(std::string &filename, std::string &data) {
               data.c_str());
 }
 
-static std::string cache_fn_trans_sha256(std::string_view path) {
-    return std::string(photon::fs::Path(path).basename());
+size_t cache_fn_trans_sha256(void *, std::string_view origin, char *name, size_t namesize) {
+    auto target = photon::fs::Path(origin).basename();
+    if (target.size()+2 > namesize) {
+        // return 0, no name trans, use origin name for cache
+        LOG_ERROR_RETURN(ERANGE, 0, "name out of range");
+    }
+    name[0] = '/';
+    strncpy(name + 1, target.data(), target.size());
+    name[target.size()+1] = 0;
+    return target.size()+1;
 }
 
 bool check_accelerate_url(std::string_view a_url) {
@@ -346,8 +354,6 @@ int ImageService::init() {
         }
         if (global_conf.exporterConfig().enable()) {
             metrics.reset(new OverlayBDMetric());
-            metrics->interval(global_conf.exporterConfig().updateInterval());
-            metrics->start();
             global_fs.srcfs = new MetricFS(global_fs.underlay_registryfs, &metrics->download);
             exporter = new ExporterServer(global_conf, metrics.get());
             if (!exporter->ready)
@@ -371,7 +377,7 @@ int ImageService::init() {
             // file cache will delete its src_fs automatically when destructed
             global_fs.cached_fs = FileSystem::new_full_file_cached_fs(
                 global_fs.srcfs, registry_cache_fs, refill_size, cache_size_GB, 10000000,
-                (uint64_t)1048576 * 4096, global_fs.io_alloc, cache_fn_trans_sha256);
+                (uint64_t)1048576 * 1024, global_fs.io_alloc, 0, {nullptr, &cache_fn_trans_sha256});
 
         } else if (cache_type == "ocf") {
             auto namespace_dir = std::string(cache_dir + "/namespace");
@@ -408,6 +414,10 @@ int ImageService::init() {
         }
         if (global_fs.cached_fs == nullptr) {
             LOG_ERRNO_RETURN(0, -1, "failed to create cached_fs");
+        }
+
+        if (global_conf.exporterConfig().enable()) {
+            global_fs.cached_fs = new MetricFS(global_fs.cached_fs, &metrics->pread);
         }
 
         if (global_conf.gzipCacheConfig().enable()) {

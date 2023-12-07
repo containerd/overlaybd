@@ -16,11 +16,8 @@
 
 #include "../gzfile.h"
 #include "../../gzip/gz.h"
-#include "../../cache/pool_store.h"
-#include "../../cache/full_file_cache/cache_pool.h"
+#include "../../cache/gzip_cache/cached_fs.h"
 #include "../../cache/cache.h"
-#include "../../cache/frontend/cached_file.h"
-#include <cstring>
 #include <photon/photon.h>
 #include <photon/common/io-alloc.h>
 #include <photon/common/alog.h>
@@ -36,6 +33,7 @@
 #include <unistd.h>
 #include <zlib.h>
 #include <vector>
+#include <cstring>
 #include "../../../tools/sha256file.h"
 
 struct PreadTestCase {
@@ -148,7 +146,7 @@ private:
         if (gzdata == nullptr) {
             LOG_ERRNO_RETURN(0, -1, "failed to create `", fn_gzdata);
         }
-        if (gzdata->pwrite(gzbuf, gzlen, 0) != gzlen) {
+        if (gzdata->pwrite(gzbuf, gzlen, 0) != (ssize_t)gzlen) {
             LOG_ERRNO_RETURN(0, -1, "failed to pwrite `", fn_gzdata);
         }
         return 0;
@@ -194,9 +192,9 @@ photon::fs::IFile *GzIndexTest::defile = nullptr;
 photon::fs::IFile *GzIndexTest::gzfile = nullptr;
 photon::fs::IFile *GzIndexTest::gzdata = nullptr;
 photon::fs::IFile *GzIndexTest::gzindex = nullptr;
-const char *GzIndexTest::fn_defile = "fdata";
-const char *GzIndexTest::fn_gzdata = "fdata.gz";
-const char *GzIndexTest::fn_gzindex = "findex";
+const char *GzIndexTest::fn_defile = "/fdata";
+const char *GzIndexTest::fn_gzdata = "/fdata.gz";
+const char *GzIndexTest::fn_gzindex = "/findex";
 
 char uds_path[] = "/tmp/gzstream_test/stream_conv.sock";
 
@@ -393,12 +391,11 @@ protected:
         system(cmd.c_str());
         cmd = std::string("mkdir -p /tmp/gzip_src");
         system(cmd.c_str());
-        cmd = std::string("mkdir -p /tmp/gzip_cache");
+        cmd = std::string("mkdir -p /tmp/gzip_cache_compress");
+        system(cmd.c_str());
+        cmd = std::string("mkdir -p /tmp/gzip_cache_decompress");
         system(cmd.c_str());
         lfs = photon::fs::new_localfs_adaptor("/tmp/gzip_src");
-        cfs = photon::fs::new_localfs_adaptor("/tmp/gzip_cache");
-        pool = new Cache::FileCachePool(cfs, 4, 10000000, (uint64_t)1048576 * 4096, 1024 * 1024);
-
         if (buildDataFile() != 0) {
             LOG_ERROR("failed to build ` and `", fn_defile, fn_gzdata);
             exit(-1);
@@ -407,29 +404,27 @@ protected:
             LOG_ERROR("failed to build gz index: `", fn_gzindex);
             exit(-1);
         }
-        lfs = FileSystem::new_full_file_cached_fs(lfs, cfs, 1024 * 1024, 1, 10000000,
-                                                  (uint64_t)1048576 * 4096, nullptr, nullptr);
-        gzdata = lfs->open(fn_gzdata, O_CREAT | O_TRUNC | O_RDWR, 0644);
+
+        auto mediafs = photon::fs::new_localfs_adaptor("/tmp/gzip_cache_compress");
+        lfs = FileSystem::new_full_file_cached_fs(
+                lfs, mediafs, 1024 * 1024, 1, 10000000,
+                (uint64_t)1048576 * 4096, nullptr, 0, nullptr);
+        delete gzdata;
+        gzdata = lfs->open(fn_gzdata, O_RDONLY, 0644);
         if (gzdata == nullptr) {
             LOG_ERROR("gzdata create failed");
             exit(-1);
         }
         gzfile = new_gzfile(gzdata, gzindex);
-        struct stat st = {};
-        if (gzfile) {
-            auto ok = gzfile->fstat(&st);
-            if (ok == -1) {
-                exit(-1);
-            }
-        }
-        auto store = pool->open(fn_defile, O_RDWR | O_CREAT, 0644);
-        if (store == nullptr) {
-            delete gzfile;
+        if (gzfile == nullptr) {
+            LOG_ERROR("gzfile create failed");
             exit(-1);
         }
-        auto io_alloc = new IOAlloc;
-        gzfile = new Cache::CachedFile(gzfile, store, st.st_size, 4 * 1024, 4, io_alloc, nullptr);
 
+
+        mediafs = photon::fs::new_localfs_adaptor("/tmp/gzip_cache_decompress");
+        cfs = Cache::new_gzip_cached_fs(mediafs, 1024 * 1024, 4, 10000000, (uint64_t)1048576 * 4096, nullptr);
+        gzfile = cfs->open_cached_gzip_file(gzfile, fn_defile);
         if (gzfile == nullptr) {
             LOG_ERROR("failed create new cached gzip file");
             exit(-1);
@@ -442,16 +437,12 @@ protected:
         delete defile;
         delete gzfile;
 
-        if (lfs->access(fn_defile, 0) == 0) {
-            lfs->unlink(fn_defile);
-        }
-        if (lfs->access(fn_gzdata, 0) == 0) {
-            lfs->unlink(fn_gzdata);
-        }
-        if (lfs->access(fn_gzindex, 0) == 0) {
-            lfs->unlink(fn_gzindex);
-        }
+        lfs->unlink(fn_defile);
+        lfs->unlink(fn_gzdata);
+        lfs->unlink(fn_gzindex);
+
         delete lfs;
+        delete cfs;
     }
 
     void test_pread(PreadTestCase t) {
@@ -479,8 +470,7 @@ protected:
 
 private:
     static photon::fs::IFileSystem *lfs;
-    static photon::fs::IFileSystem *cfs;
-    static FileSystem::ICachePool *pool;
+    static Cache::GzipCachedFs *cfs;
     static photon::fs::IFile *gzdata;
     static photon::fs::IFile *gzindex;
 
@@ -514,7 +504,7 @@ private:
         if (gzdata == nullptr) {
             LOG_ERRNO_RETURN(0, -1, "failed to create `", fn_gzdata);
         }
-        if (gzdata->pwrite(gzbuf, gzlen, 0) != gzlen) {
+        if (gzdata->pwrite(gzbuf, gzlen, 0) != (ssize_t)gzlen) {
             LOG_ERRNO_RETURN(0, -1, "failed to pwrite `", fn_gzdata);
         }
         return 0;
@@ -556,15 +546,14 @@ private:
 };
 
 photon::fs::IFileSystem *GzCacheTest::lfs = nullptr;
-photon::fs::IFileSystem *GzCacheTest::cfs = nullptr;
-FileSystem::ICachePool *GzCacheTest::pool = nullptr;
+Cache::GzipCachedFs *GzCacheTest::cfs = nullptr;
 photon::fs::IFile *GzCacheTest::defile = nullptr;
 photon::fs::IFile *GzCacheTest::gzfile = nullptr;
 photon::fs::IFile *GzCacheTest::gzdata = nullptr;
 photon::fs::IFile *GzCacheTest::gzindex = nullptr;
-const char *GzCacheTest::fn_defile = "fdata";
-const char *GzCacheTest::fn_gzdata = "fdata.gz";
-const char *GzCacheTest::fn_gzindex = "findex";
+const char *GzCacheTest::fn_defile = "/fdata";
+const char *GzCacheTest::fn_gzdata = "/fdata.gz";
+const char *GzCacheTest::fn_gzindex = "/findex";
 
 bool check_in_interval(int val, int l, int r) {
     return l <= val && val < r;
@@ -583,14 +572,15 @@ TEST_F(GzCacheTest, cache_store) {
     DEFER(delete[] cbuf1);
     DEFER(delete[] cbuf2);
     auto fp1 = fopen("/tmp/gzip_src/fdata", "r");
-    auto fp2 = fopen("/tmp/gzip_cache/fdata", "r");
+    auto fp2 = fopen("/tmp/gzip_cache_decompress/fdata", "r");
     DEFER(fclose(fp1));
     DEFER(fclose(fp2));
     fread(cbuf1, 1, vsize, fp1);
     fread(cbuf2, 1, vsize, fp2);
     // refill_size is 1MB
-    for (int i = 0; i < vsize; i++) {
-        if (check_in_interval(i, 0, 1 << 20) || check_in_interval(i, vsize - (1 << 20), vsize) ||
+    for (size_t i = 0; i < vsize; i++) {
+        if (check_in_interval(i, 0, 1 << 20) ||
+            check_in_interval(i, vsize - (1 << 20), vsize) ||
             check_in_interval(i, 5 << 20, 6 << 20)) {
             EXPECT_EQ(cbuf1[i], cbuf2[i]);
         } else {

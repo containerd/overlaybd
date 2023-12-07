@@ -77,6 +77,14 @@ make -j
 sudo make install
 ```
 
+Considering some libcurl and libopenssl has API changes, if want to build a make-sured compatible version libcurl and openssl, and link to executable as static library.
+
+Noticed that building libcurl and openssl depends on `autoconf` `automake` and `libtool`.
+
+```bash
+cmake -D BUILD_CURL_FROM_SOURCE=1 ..
+```
+
 If you want to use the [original libext2fs](https://github.com/tytso/e2fsprogs) instead of our [customized libext2fs](https://github.com/data-accelerator/e2fsprogs).
 
 ```bash
@@ -191,7 +199,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | enableAudit         | Enable audit or not.                                                                                  |
 | enableThread        | Enable overlaybd device run in seprate thread or not. Note `cacheType` should be `ocf`. `false` is default. |
 | auditPath           | The path for audit file, `/var/log/overlaybd-audit.log` is the default value.                         |
-| registryFsVersion   | registry client version, 'v1' libcurl based, 'v2' is photon http based. 'v1' is the default value.    |
+| registryFsVersion   | registry client version, 'v1' libcurl based, 'v2' is photon http based. 'v2' is the default value.    |
 | prefetchConfig.concurrency    | Prefetch concurrency for reloading trace, `16` is default                                   |
 
 > NOTE: `download` is the config for background downloading. After an overlaybd device is lauched, a background task will be running to fetch the whole blobs into local directories. After downloading, I/O requests are directed to local files. Unlike other options, download config is reloaded when a device launching.

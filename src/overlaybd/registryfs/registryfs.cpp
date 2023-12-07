@@ -250,7 +250,7 @@ public:
         // unexpected situation
         if (!scope.empty())
             m_scope_token.release(scope, true);
-        LOG_ERROR_RETURN(0, nullptr, "Failed to get actual url ", VALUE(url), VALUE(ret));
+        LOG_ERROR_RETURN(0, nullptr, "Failed to get actual url ", VALUE(code), VALUE(url), VALUE(ret));
     }
 
     virtual int setAccelerateAddress(const char* addr = "") override {
@@ -380,7 +380,8 @@ public:
     size_t m_filesize;
 
     RegistryFileImpl(const char *filename, const char *url, RegistryFSImpl *fs, uint64_t timeout)
-        : m_filename(filename), m_url(url), m_fs(fs), m_timeout(timeout) {
+        : m_filename(filename), m_fs(fs), m_timeout(timeout) {
+        m_url = url[0] == '/' ? url + 1 : url;
         m_filesize = 0;
     }
 
@@ -425,7 +426,7 @@ public:
                 LOG_WARN("failed to perform HTTP GET, going to retry ", VALUE(code), VALUE(offset),
                          VALUE(count), VALUE(ret_len), eno);
 
-                photon::thread_usleep(1000);
+                photon::thread_usleep(10000);
                 goto again;
             } else {
                 LOG_ERROR_RETURN(ENOENT, -1, "failed to perform HTTP GET ", VALUE(m_url),

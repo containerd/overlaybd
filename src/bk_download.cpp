@@ -92,8 +92,7 @@ bool BkDownload::download_done() {
 
     int ret = lfs->rename(old_name.c_str(), new_name.c_str());
     if (ret != 0) {
-        LOG_ERROR("rename(`,`), `:`", old_name, new_name, errno, strerror(errno));
-        return false;
+        LOG_ERRNO_RETURN(0, false, "rename(`,`) failed", old_name, new_name);
     }
     LOG_INFO("download verify done. rename(`,`) success", old_name, new_name);
     return true;
@@ -160,7 +159,7 @@ bool BkDownload::download_blob() {
     DEFER(free(buff));
 
     LOG_INFO("download blob start. (`)", url);
-    while (offset < file_size) {
+    while (offset < (ssize_t)file_size) {
         if (running != 1) {
             LOG_INFO("image file exit when background downloading");
             return false;
@@ -168,7 +167,7 @@ bool BkDownload::download_blob() {
         if (!force_download) {
             // check aleady downloaded.
             auto hole_pos = dst->lseek(offset, SEEK_HOLE);
-            if (hole_pos >= offset + bs) {
+            if (hole_pos >= offset + (ssize_t)bs) {
                 // alread downloaded
                 offset += bs;
                 continue;

@@ -57,7 +57,7 @@ int write_file(photon::fs::IFile *file) {
     while (aa.size() < FILE_SIZE)
         aa.append(bb);
     auto ret = file->pwrite(aa.data(), aa.size(), 0);
-    if (ret != aa.size()) {
+    if (ret != (ssize_t)aa.size()) {
         LOG_ERRNO_RETURN(0, -1, "failed write file ", VALUE(aa.size()), VALUE(ret))
     }
     LOG_DEBUG("write ` byte", ret);
@@ -269,18 +269,21 @@ int remove_all(photon::fs::IFileSystem *fs, const std::string &path) {
 
 photon::fs::IFileSystem *init_extfs() {
     std::string rootfs = "/tmp/rootfs.img";
-    // mkfs
-    std::string cmd = "mkfs.ext4 -F -b 4096 " + rootfs + " 100M";
-    auto ret = system(cmd.c_str());
-    if (ret != 0) {
-        LOG_ERRNO_RETURN(0, nullptr, "failed mkfs");
-    }
-
     // new extfs
-    auto image_file = photon::fs::open_localfile_adaptor(rootfs.c_str(), O_RDWR, 0644, 0);
+    auto image_file = photon::fs::open_localfile_adaptor(rootfs.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644, 0);
     if (!image_file) {
         LOG_ERRNO_RETURN(0, nullptr, "failed to open `", rootfs);
     }
+    if (image_file->ftruncate(100 << 20) < 0) {
+        delete image_file;
+        LOG_ERRNO_RETURN(0, nullptr, "failed to truncate image to 100M");
+    }
+
+    if (make_extfs(image_file) < 0) {
+        delete image_file;
+        LOG_ERRNO_RETURN(0, nullptr, "failed to mkfs");
+    }
+
     photon::fs::IFileSystem *extfs = new_extfs(image_file);
     if (!extfs) {
         delete image_file;

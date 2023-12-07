@@ -116,7 +116,7 @@ private:
     ImageService &image_service;
 
     int init_image_file();
-    void set_failed(std::string reason);
+    template<typename...Ts> void set_failed(const Ts&...xs);
     LSMT::IFileRO *open_lowers(std::vector<ImageConfigNS::LayerConfig> &, bool &);
     LSMT::IFileRW *open_upper(ImageConfigNS::UpperConfig &);
     IFile *__open_ro_file(const std::string &);

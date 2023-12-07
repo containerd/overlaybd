@@ -408,6 +408,7 @@ public:
         data_name.clear();
         idx_name.clear();
         layer_name.clear();
+        parent_uuid = "";
     }
 };
 
@@ -571,6 +572,6 @@ class WarpFileTest : public FileTest3 {
 public:
     void randwrite_warpfile(IFile *file, size_t nwrites);
     IFileRW *create_warpfile_rw(int io_engine = 0);
-    IFileRO *create_commit_warpfile(int io_engine = 0);
-    IFileRO *create_commit_warpfile(IFileRW* warpfile);
+    IFileRO *create_commit_warpfile(int io_engine = 0, bool keepUUID = false);
+    IFileRO *create_commit_warpfile(IFileRW* warpfile, bool keepUUID = false);
 };

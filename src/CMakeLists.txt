@@ -1,5 +1,5 @@
-find_package(CURL REQUIRED)
-find_package(OpenSSL REQUIRED)
+find_package(curl REQUIRED)
+find_package(openssl REQUIRED)
 find_package(aio REQUIRED)
 find_package(rapidjson REQUIRED)
 
@@ -10,7 +10,6 @@ add_subdirectory(overlaybd)
 add_library(overlaybd_image_lib
   image_file.cpp
   image_service.cpp
-  sure_file.cpp
   switch_file.cpp
   bk_download.cpp
   prefetch.cpp

@@ -14,32 +14,59 @@
    limitations under the License.
 */
 #pragma once
-#include <inttypes.h>
+#include <cinttypes>
 #include <sys/uio.h>
 #include <stdlib.h>
+#include <fcntl.h>
 #include <photon/fs/filesystem.h>
 #include "pool_store.h"
 
+#define O_WRITE_THROUGH 0x01000000 // write backing store and cache
+#define O_WRITE_AROUND 0x02000000  // write backing store only, default
+#define O_WRITE_BACK 0x04000000    // write cache and async flush to backing store, not support yet
+#define O_CACHE_ONLY 0x08000000    // write cache only
+#define O_DIRECT_LOCAL 0x20000000  // read local
+#define O_MMAP_READ 0x00800000     // mmap like read
+
+#define RW_V2_HIGH_PRIORITY 0x00000001 // preadv2/pwritev2 high priority cache data
+#define RW_V2_PROMOTE 0x00000002       // preadv2 promote flag
+#define RW_V2_CACHE_ONLY 0x00000004    // preadv2 cache only flag
+#define RW_V2_TO_BUFFER_WITHOUT_SYNC                                                               \
+    0x00000010                       // pwritev2 to buffered accessor file's buffer without sync
+#define RW_V2_MEMORY_ONLY 0x00000020 // pwritev2 memory cache only
+
+#define IS_STRUCT_STAT_SETTED(x) ((*(uint64_t *)x) == 0xF19A336DB7CA28E7ull)
+#define SET_STRUCT_STAT(x) ((*(uint64_t *)x) = 0xF19A336DB7CA28E7ull)
+
+const int IOCTL_GET_PAGE_SIZE = 161;
+
+namespace Cache {
+namespace Block {
+struct Options;
+}
+} // namespace Cache
 struct IOAlloc;
 namespace FileSystem {
 class ICachedFileSystem : public photon::fs::IFileSystem {
 public:
     // get the source file system
-    UNIMPLEMENTED_POINTER(photon::fs::IFileSystem *get_source());
+    UNIMPLEMENTED_POINTER(IFileSystem *get_source());
 
     // set the source file system
-    UNIMPLEMENTED(int set_source(photon::fs::IFileSystem *src));
+    UNIMPLEMENTED(int set_source(IFileSystem *src));
 
     UNIMPLEMENTED_POINTER(ICachePool *get_pool());
+
+    UNIMPLEMENTED(int set_pool(ICachePool *pool));
 };
 
 class ICachedFile : public photon::fs::IFile {
 public:
     // get the source file system
-    UNIMPLEMENTED_POINTER(photon::fs::IFile *get_source());
+    UNIMPLEMENTED_POINTER(IFile *get_source());
 
     // set the source file system, and enable `auto_refill`
-    UNIMPLEMENTED(int set_source(photon::fs::IFile *src));
+    UNIMPLEMENTED(int set_source(IFile *src));
 
     UNIMPLEMENTED_POINTER(ICacheStore *get_store());
 
@@ -55,15 +82,9 @@ public:
         return pwritev(iov, iovcnt, offset);
     }
 
-    // refilling a range without providing data, is treated as prefeching
+    // refilling a range without providing data, is treated as prefetching
     ssize_t refill(off_t offset, size_t count) {
-        return prefetch(offset, count);
-    }
-
-    // prefeching a range is implemented as reading the range without a buffer
-    ssize_t prefetch(off_t offset, size_t count) {
-        iovec iov{nullptr, count};
-        return preadv(&iov, 1, offset);
+        return fadvise(offset, count, POSIX_FADV_WILLNEED);
     }
 
     // query cached extents is implemented as fiemap()
@@ -82,38 +103,22 @@ public:
     }
 };
 
-class IMemCachedFile : public ICachedFile {
-public:
-    // Get the internal buffer for the specified LBA range (usually aligned),
-    // which will remain valid for user until released by unpin_buffer().
-    // Will allocate pages for missed ranges.
-    // Will refill / fetch / load data from source if `refill`.
-    // Concurrent R/W to a same range are guaranteed to work, but considered
-    // a race-condition and the result is undefiend.
-    // returns # of bytes actually got, or <0 for failures
-    virtual ssize_t pin_buffer(off_t offset, size_t count, bool refill, /*OUT*/ iovector *iov) = 0;
-
-    // Release buffers got from pin_buffer(),
-    // and the buffer is no longer valid for user.
-    // return 0 for success, < 0 for failures
-    virtual int unpin_buffer(off_t offset, const iovector *iov) = 0;
-};
-
 extern "C" {
 ICachedFileSystem *new_cached_fs(photon::fs::IFileSystem *src, ICachePool *pool, uint64_t pageSize,
-                                 uint64_t refillUnit, IOAlloc *allocator);
+                                 IOAlloc *allocator, CacheFnTransFunc fn_trans_func = nullptr);
 
-/** Full file cache will automatically delete its media_fs when destructed */
+ICachedFile *new_cached_file(ICacheStore *store, uint64_t pageSize, photon::fs::IFileSystem *fs);
+
 ICachedFileSystem *new_full_file_cached_fs(photon::fs::IFileSystem *srcFs,
-                                           photon::fs::IFileSystem *media_fs,
-                                           uint64_t refillUnit, uint64_t capacityInGB,
-                                           uint64_t periodInUs, uint64_t diskAvailInBytes,
-                                           IOAlloc *allocator,
-                                           Fn_trans_func name_trans = ICachePool::same_name_trans);
+                                           photon::fs::IFileSystem *media_fs, uint64_t refillUnit,
+                                           uint64_t capacityInGB, uint64_t periodInUs,
+                                           uint64_t diskAvailInBytes, IOAlloc *allocator,
+                                           int quotaDirLevel,
+                                           CacheFnTransFunc fn_trans_func = nullptr);
 
 /**
- * @param blk_size The proper size for cache metadata and IO efficiency.
- *        Large writes to cache media will be split into blk_size. Reads are not affected.
+ * @param blk_size The proper size for cache metadata and IO efficiency. Large writes to cache media
+ *                 will be split into blk_size. Reads and small writes are not affected.
  * @param prefetch_unit Controls the expand prefetch size from src file. 0 means to disable this
  * feature.
  */

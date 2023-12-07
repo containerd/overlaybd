@@ -140,7 +140,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(p2pConfig, P2PConfig);
     APPCFG_PARA(exporterConfig, ExporterConfig);
     APPCFG_PARA(auditPath, std::string, "/var/log/overlaybd-audit.log");
-    APPCFG_PARA(registryFsVersion, std::string, "v1");
+    APPCFG_PARA(registryFsVersion, std::string, "v2");
     APPCFG_PARA(cacheConfig, CacheConfig);
     APPCFG_PARA(gzipCacheConfig, GzipCacheConfig);
     APPCFG_PARA(logConfig, LogConfig);

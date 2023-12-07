@@ -64,7 +64,7 @@ public:
         resp.keep_alive(true);
         photon::thread_sleep(1);
         auto ret_w = resp.write((void*)msg.c_str(), msg.size());
-        if (ret_w != msg.size()) {
+        if (ret_w != (ssize_t)msg.size()) {
             LOG_ERRNO_RETURN(0, -1,
                     "send body failed, target: `, `", req.target(), VALUE(ret_w));
         } else {

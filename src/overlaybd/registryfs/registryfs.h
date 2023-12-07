@@ -35,5 +35,10 @@ photon::fs::IFileSystem *new_registryfs_v1(PasswordCB callback,
 photon::fs::IFileSystem *new_registryfs_v2(PasswordCB callback,
                                            const char *caFile = nullptr,
                                            uint64_t timeout = -1);
-}
 
+photon::fs::IFile* new_registry_uploader(photon::fs::IFile *lfile,
+                                         std::string &upload_url,
+                                         std::string &username, std::string &password,
+                                         uint64_t timeout,
+                                         ssize_t upload_bs = -1);
+}
