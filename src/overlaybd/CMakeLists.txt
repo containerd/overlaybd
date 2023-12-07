@@ -6,9 +6,7 @@ add_subdirectory(tar)
 add_subdirectory(extfs)
 add_subdirectory(gzip)
 add_subdirectory(gzindex)
-
 add_subdirectory(stream_convertor)
-
 
 add_library(overlaybd_lib INTERFACE)
 target_include_directories(overlaybd_lib INTERFACE

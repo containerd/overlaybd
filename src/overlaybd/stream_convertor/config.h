@@ -30,11 +30,6 @@ struct LogConfigPara : public App::ConfigGroup {
     APPCFG_PARA(mode, std::string, "stdout");
 };
 
-// struct ServerConfigPara : public App::ConfigGroup  {
-//     APPCFG_CLASS
-
-// };
-
 struct GlobalConfigPara : public App::ConfigGroup  {
     APPCFG_CLASS;
     APPCFG_PARA(udsAddr, std::string, "");
