@@ -56,13 +56,14 @@ public:
 
     struct LruEntry {
         LruEntry(uint32_t lruIt, int openCnt, uint64_t fileSize)
-            : lruIter(lruIt), openCount(openCnt), size(fileSize) {
+            : lruIter(lruIt), openCount(openCnt), size(fileSize), truncate_done(false) {
         }
         ~LruEntry() = default;
         uint32_t lruIter;
         int openCount;
         uint64_t size;
         photon::rwlock rw_lock_;
+        bool truncate_done;
     };
 
     // Normally, fileIndex(std::map) always keep growing, so its iterators always

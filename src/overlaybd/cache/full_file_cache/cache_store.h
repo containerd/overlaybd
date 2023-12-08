@@ -31,6 +31,8 @@ public:
                    size_t refillUnit, FileIterator iterator);
     ~FileCacheStore();
 
+    try_preadv_result try_preadv2(const struct iovec *iov, int iovcnt, off_t offset, int flags) override;
+
     ssize_t do_preadv2(const struct iovec *iov, int iovcnt, off_t offset, int flags) override;
 
     ssize_t do_pwritev2(const struct iovec *iov, int iovcnt, off_t offset, int flags) override;
