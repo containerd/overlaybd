@@ -1,0 +1,13 @@
+globalConfig:
+  workDir: /tmp/stream_conv
+  udsAddr: /var/run/stream_conv.sock
+  # httpAddr: 127.0.0.1
+  httpPort: 9101
+  reusePort: true
+
+  logConfig:
+    level: 1
+    mode: stdout
+    rotateNum: 3
+    limitSizeMB: 10
+    path: /var/log/overlaybd/stream_convertor.log

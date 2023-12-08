@@ -39,6 +39,7 @@
 #include "../image_file.h"
 #include "CLI11.hpp"
 #include "comm_func.h"
+#include "sha256file.h"
 
 using namespace std;
 using namespace photon::fs;
@@ -87,7 +88,7 @@ int main(int argc, char **argv) {
     DEFER({ delete target; });
 
     photon::fs::IFile* src_file = nullptr;
-    SHA256CheckedFile* checksum_file = nullptr;
+    SHA256File* checksum_file = nullptr;
 
     auto tarf = open_file(input_path.c_str(), O_RDONLY, 0666);
     DEFER(delete tarf);
@@ -104,7 +105,7 @@ int main(int argc, char **argv) {
     }
 
     if (!sha256_checksum.empty()) {
-        src_file = checksum_file = new SHA256CheckedFile(src_file);
+        src_file = checksum_file = new_sha256_file(src_file, true);
     }
 
     photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();

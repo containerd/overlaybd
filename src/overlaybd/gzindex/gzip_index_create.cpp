@@ -13,13 +13,14 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
 #include <sys/fcntl.h>
+
 #include "gzfile_index.h"
+
 #include "photon/common/alog.h"
 #include "photon/common/alog-stdstring.h"
 #include "photon/fs/localfs.h"
@@ -179,9 +180,30 @@ static int dict_compress(const IndexFileHeader& h,
     return -1;
 }
 
-static int build_index(IndexFileHeader& h,photon::fs::IFile *gzfile, INDEX &index, photon::fs::IFile* index_file) {
-    IndexFilterRecorder filter(&h, &index, index_file);
+int create_index_entry(z_stream strm, IndexFilterRecorder *filter, off_t en_pos, off_t de_pos, unsigned char *window){
+    LOG_DEBUG("`",VALUE(strm.data_type));
+    if ((strm.data_type & EACH_DEFLATE_BLOCK_BIT) && !(strm.data_type & LAST_DEFLATE_BLOCK_BIT)) {
+        if (filter->record(strm.data_type & 7, en_pos, de_pos, strm.avail_out, window) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
 
+IndexFilterRecorder* new_index_filter(IndexFileHeader *h, INDEX *index, photon::fs::IFile *save_as)
+{
+    return new IndexFilterRecorder(h, index, save_as);
+}
+
+void delete_index_filter(IndexFilterRecorder *&idx_filter) {
+    delete idx_filter;
+    idx_filter = nullptr;
+}
+
+static int build_index(IndexFileHeader& h,photon::fs::IFile *gzfile, INDEX &index, photon::fs::IFile* index_file) {
+    // IndexFilterRecorder filter(&h, &index, index_file);
+    auto filter = new IndexFilterRecorder(&h, &index, index_file);
+    DEFER(delete filter);
     int32_t inbuf_size = WINSIZE;
     unsigned char *inbuf = new unsigned char[inbuf_size];
     DEFER(delete []inbuf);
@@ -216,7 +238,6 @@ static int build_index(IndexFileHeader& h,photon::fs::IFile *gzfile, INDEX &inde
                 strm.avail_out = WINSIZE;
                 strm.next_out = window;
             }
-
             ttin += strm.avail_in;
             ttout += strm.avail_out;
             ret = inflate(&strm, Z_BLOCK);
@@ -231,12 +252,10 @@ static int build_index(IndexFileHeader& h,photon::fs::IFile *gzfile, INDEX &inde
                 LOG_ERRNO_RETURN(0, -1, "Fail to inflate. ret:`", ret);
             }
             //TODO Here generate crc32 for uncompressed data block
-
-            if ((strm.data_type & EACH_DEFLATE_BLOCK_BIT) && !(strm.data_type & LAST_DEFLATE_BLOCK_BIT)) {
-                if (filter.record(strm.data_type & 7, ttin, ttout, strm.avail_out, window) != 0) {
-                    LOG_ERRNO_RETURN(ret, -1, "Failed to add_index_entry");
-                }
+            if (create_index_entry(strm, filter, ttin, ttout, window) != 0){
+                LOG_ERRNO_RETURN(ret, -1, "Failed to add_index_entry");
             }
+
         } while (strm.avail_in != 0);
     } while (ret != Z_STREAM_END);
     return 0;
@@ -258,14 +277,19 @@ static int get_compressed_index(const IndexFileHeader& h, const INDEX& index, un
         out_len = index_len;
         return 0;
     }
-
+    LOG_INFO("index crc: `", crc32(0, buf, index_len));
     return zlib_compress(h.dict_compress_level, buf, index_len, out, out_len);
 }
 
-static int save_index_to_file(IndexFileHeader &h, INDEX& index, photon::fs::IFile *index_file) {
+int save_index_to_file(IndexFileHeader &h, INDEX& index, photon::fs::IFile *index_file, ssize_t gzip_file_size) {
     int indx_cmpr_buf_len = index.size() * sizeof(IndexEntry) * 2 + 4096;
     unsigned char *buf = new unsigned char[indx_cmpr_buf_len];
     DEFER(delete []buf);
+
+    if (gzip_file_size != -1) {
+        LOG_INFO("save gzip file size: `", gzip_file_size);
+        h.gzip_file_size = gzip_file_size;
+    }
 
     if (get_compressed_index(h, index, buf, indx_cmpr_buf_len) != 0) {
         LOG_ERROR_RETURN(0, -1, "Failed to get_compress_index");
@@ -293,6 +317,28 @@ static int save_index_to_file(IndexFileHeader &h, INDEX& index, photon::fs::IFil
     return 0;
 }
 
+int init_index_header(photon::fs::IFile* src, IndexFileHeader &h,  off_t span, int dict_compress_algo, int dict_compress_level) {
+
+    struct stat sbuf;
+    if (src->fstat(&sbuf) != 0) {
+        LOG_ERRNO_RETURN(0, -1, "Faild to gzip_file->fstat()");
+    }
+    memset(&h, 0, sizeof(h));
+    strncpy(h.magic, "ddgzidx", sizeof(h.magic));
+    h.major_version =1;
+    h.minor_version =0;
+    h.dict_compress_algo = dict_compress_algo;
+    h.dict_compress_level = dict_compress_level;
+    h.flag=0;
+    h.index_size = sizeof(struct IndexEntry);
+    h.span = span;
+    h.window= WINSIZE;
+    h.gzip_file_size= sbuf.st_size;
+    memset(h.reserve, 0, sizeof(h.reserve));
+    h.index_start = sizeof(h);
+    return 0;
+}
+
 //int create_gz_index(photon::fs::IFile* gzip_file, const char *index_file_path, off_t span, unsigned char dict_compress_algo) {
 //int create_gz_index(photon::fs::IFile* gzip_file, off_t span, const char *index_file_path) {
 int create_gz_index(photon::fs::IFile* gzip_file, const char *index_file_path, off_t span, int dict_compress_algo, int dict_compress_level) {
@@ -310,11 +356,6 @@ int create_gz_index(photon::fs::IFile* gzip_file, const char *index_file_path, o
         LOG_ERRNO_RETURN(0, -1, "Span is too small, must be greater than 100, span:`", span);
     }
 
-    struct stat sbuf;
-    if (gzip_file->fstat(&sbuf) != 0) {
-        LOG_ERRNO_RETURN(0, -1, "Faild to gzip_file->fstat()");
-    }
-
     photon::fs::IFile *index_file = photon::fs::open_localfile_adaptor(index_file_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (index_file == nullptr) {
         LOG_ERROR_RETURN(0, -1, "Failed to open(`)", index_file_path);
@@ -322,21 +363,15 @@ int create_gz_index(photon::fs::IFile* gzip_file, const char *index_file_path, o
     DEFER(index_file->close());
 
     IndexFileHeader h;
-    memset(&h, 0, sizeof(h));
-    strncpy(h.magic, "ddgzidx", sizeof(h.magic));
-    h.major_version =1;
-    h.minor_version =0;
-    h.dict_compress_algo = dict_compress_algo;
-    h.dict_compress_level = dict_compress_level;
-    h.flag=0;
-    h.index_size = sizeof(struct IndexEntry);
-    h.span = span;
-    h.window= WINSIZE;
-    h.gzip_file_size= sbuf.st_size;
-    memset(h.reserve, 0, sizeof(h.reserve));
-    h.index_start = sizeof(h);
-
+    if (init_index_header(gzip_file, h, span, dict_compress_algo,  dict_compress_level) != 0) {
+        LOG_ERRNO_RETURN(0, -1, "init index header failed.");
+    }
     INDEX index;
+    DEFER({
+        for (auto it : index) {
+            delete it;
+        }
+    });
     int ret = build_index(h, gzip_file, index, index_file);
     if (ret != 0) {
         LOG_ERRNO_RETURN(0, -1, "Faild to build_index");

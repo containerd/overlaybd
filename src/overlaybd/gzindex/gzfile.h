@@ -16,6 +16,9 @@
 
 #pragma once
 #include "photon/fs/filesystem.h"
+#include "gzfile_index.h"
+
+
 extern photon::fs::IFile* new_gzfile(photon::fs::IFile* gzip_file, photon::fs::IFile* index, bool ownership = false);
 
 //chunksize:
@@ -32,6 +35,7 @@ extern photon::fs::IFile* new_gzfile(photon::fs::IFile* gzip_file, photon::fs::I
 //0: no compression
 //1: best speed
 //9: best compression
-extern int create_gz_index(photon::fs::IFile* gzip_file, const char *index_file_path, off_t chunk_size=1048576, int dict_compress_algo=1, int dict_compress_level=6);
+extern int create_gz_index(photon::fs::IFile* gzip_file, const char *index_file_path,
+    off_t chunk_size=GZ_CHUNK_SIZE, int dict_compress_algo=GZ_DICT_COMPERSS_ALGO, int dict_compress_level=GZ_COMPRESS_LEVEL);
 
 bool is_gzfile(photon::fs::IFile* file);

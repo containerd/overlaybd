@@ -18,8 +18,16 @@
 #include <string>
 #include <iostream>
 #include <sstream>
+#include <sys/types.h>
 #include <vector>
+#include <zlib.h>
 #include "photon/common/checksum/crc32c.h"
+#include "photon/fs/filesystem.h"
+
+#define GZ_CHUNK_SIZE 1048576
+#define GZ_DICT_COMPERSS_ALGO 1
+#define GZ_COMPRESS_LEVEL 6
+
 #define WINSIZE 32768U
 #define DEFLATE_BLOCK_UNCOMPRESS_MAX_SIZE 65536U
 #define GZFILE_INDEX_MAGIC "ddgzidx"
@@ -76,3 +84,13 @@ struct IndexEntry {
 
 
 typedef std::vector<struct IndexEntry *> INDEX;
+
+class IndexFilterRecorder;
+IndexFilterRecorder *new_index_filter(IndexFileHeader *h, INDEX *index, photon::fs::IFile *save_as);
+void delete_index_filter(IndexFilterRecorder *&);
+
+int init_index_header(photon::fs::IFile* src, IndexFileHeader &h,  off_t span, int dict_compress_algo, int dict_compress_level);
+
+int create_index_entry(z_stream strm, IndexFilterRecorder *filter, off_t en_pos, off_t de_pos, unsigned char *window);
+
+int save_index_to_file(IndexFileHeader &h, INDEX& index, photon::fs::IFile *index_file, ssize_t gzip_file_size = -1);
