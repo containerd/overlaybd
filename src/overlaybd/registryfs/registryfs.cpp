@@ -14,6 +14,7 @@
    limitations under the License.
 */
 #include "registryfs.h"
+#include "../base64.h"
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -46,6 +47,7 @@ using namespace photon::fs;
 static const estring kDockerRegistryAuthChallengeKeyValuePrefix = "www-authenticate";
 static const estring kAuthHeaderKey = "Authorization";
 static const estring kBearerAuthPrefix = "Bearer ";
+static const estring kBasicAuthPrefix = "Basic ";
 static const estring kDockerRegistryBlobReaderFailPrefix = "DockerRegistryBolbReader Failure: ";
 static const uint64_t kMinimalTokenLife = 30L * 1000 * 1000; // token lives atleast 30s
 static const uint64_t kMinimalAUrlLife = 300L * 1000 * 1000; // actual_url lives atleast 300s
@@ -334,7 +336,10 @@ protected:
         DEFER({ release_cURL(req); });
         photon::net::StringWriter writer;
         if (!username.empty()) {
-            req->set_user_passwd(username.c_str(), password.c_str()).set_redirect(3);
+            // req->set_user_passwd(username.c_str(), password.c_str()).set_redirect(3);
+            std::string basic_auth = username + ":" + password;
+            std::string encoded = base64_encode((const BYTE*) basic_auth.c_str(), basic_auth.length());
+            req->append_header(kAuthHeaderKey, kBasicAuthPrefix + encoded);
         }
         auto ret = req->GET(auth_url, &writer, tmo.timeout_us());
 
