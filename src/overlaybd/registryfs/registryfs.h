@@ -30,15 +30,21 @@ using PasswordCB = Delegate<std::pair<std::string, std::string>, const char *>;
 extern "C" {
 photon::fs::IFileSystem *new_registryfs_v1(PasswordCB callback,
                                            const char *caFile = nullptr,
-                                           uint64_t timeout = -1);
+                                           uint64_t timeout = -1,
+                                           const char *cert_file = nullptr,
+                                           const char *key_file = nullptr);
 
 photon::fs::IFileSystem *new_registryfs_v2(PasswordCB callback,
                                            const char *caFile = nullptr,
-                                           uint64_t timeout = -1);
+                                           uint64_t timeout = -1,
+                                           const char *cert_file = nullptr,
+                                           const char *key_file = nullptr);
 
 photon::fs::IFile* new_registry_uploader(photon::fs::IFile *lfile,
                                          std::string &upload_url,
                                          std::string &username, std::string &password,
                                          uint64_t timeout,
-                                         ssize_t upload_bs = -1);
+                                         ssize_t upload_bs = -1,
+                                         const char *cert_file = nullptr,
+                                         const char *key_file = nullptr);
 }
