@@ -1,6 +1,5 @@
 #include <fcntl.h>
 #include <string>
-#include <string_view>
 #include <sys/stat.h>
 #include <sys/fcntl.h>
 #include <malloc.h>
@@ -11,6 +10,7 @@
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
 #include <photon/common/alog-audit.h>
+#include <photon/common/string_view.h>
 #include <photon/photon.h>
 #include <photon/io/signal.h>
 #include <chrono>
