@@ -47,7 +47,7 @@ It is better to run `overlaybd-tcmu` as a service so that it can be restarted af
 
 To build overlaybd from source code, the following dependencies are required:
 
-* CMake >= 3.15
+* CMake >= 3.14
 
 * gcc/g++ >= 7
 
