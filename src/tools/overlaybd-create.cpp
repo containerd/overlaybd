@@ -24,9 +24,9 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include "../overlaybd/lsmt/file.h"
-#include "../overlaybd/extfs/extfs.h"
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
+#include <photon/fs/extfs/extfs.h>
 #include <photon/common/uuid.h>
 #include <photon/photon.h>
 #include "CLI11.hpp"

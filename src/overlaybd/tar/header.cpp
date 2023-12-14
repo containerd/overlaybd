@@ -13,9 +13,10 @@
 #include <photon/fs/path.h>
 #include <photon/common/string_view.h>
 #include <photon/fs/filesystem.h>
-#include <photon/common/alog.h>
+#include <photon/common/alog-stdstring.h>
 #include <photon/common/enumerable.h>
 #include <photon/fs/path.h>
+#include <photon/common/estring.h>
 
 /*
  * In place, rewrite name to compress multiple /, eliminate ., and process ..
@@ -313,7 +314,7 @@ int PaxHeader::read_pax(size_t size) {
             return -1;
         std::string key = record.substr(0, pos);
         std::string value = record.substr(pos + 1);
-        LOG_DEBUG(VALUE(key.c_str()), VALUE(value.c_str()));
+        LOG_DEBUG(VALUE(key), VALUE(value));
         records[key] = value;
         start += len;
     }
@@ -324,13 +325,19 @@ int PaxHeader::read_pax(size_t size) {
 int PaxHeader::parse_pax_records() {
     // TODO: support more pax type
     for (auto rec : records) {
-        LOG_DEBUG("`->`", rec.first.c_str(), rec.second.c_str());
+        LOG_DEBUG("`->`", rec.first, rec.second);
         if (rec.first == PAX_SIZE) {
             size = std::stol(rec.second);
         } else if (rec.first == PAX_PATH) {
             path = strdup(rec.second.data());
         } else if (rec.first == PAX_LINKPATH) {
             linkpath = strdup(rec.second.data());
+        } else if (estring_view(rec.first).starts_with(PAX_SCHILY_XATTR_PREFIX)) {
+            LOG_DEBUG("found pax record with 'SCHILY.xattr.' prefix: `", rec.first);
+        } else if (estring_view(rec.first).starts_with(PAX_GNU_SPARSE_PREFIX)) {
+            LOG_WARN("found and ignored pax record with 'GNU.sparse.' prefix: `", rec.first);
+        } else {
+            LOG_WARN("found and ignored unknown pax record: `", rec.first);
         }
     }
     return 0;
