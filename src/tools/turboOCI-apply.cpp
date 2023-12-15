@@ -18,11 +18,11 @@
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/virtual-file.h>
+#include <photon/fs/extfs/extfs.h>
 #include <photon/photon.h>
 #include "../overlaybd/lsmt/file.h"
 #include "../overlaybd/zfile/zfile.h"
 #include "../overlaybd/tar/libtar.h"
-#include "../overlaybd/extfs/extfs.h"
 #include "../overlaybd/gzindex/gzfile.h"
 #include "../overlaybd/gzip/gz.h"
 #include <errno.h>

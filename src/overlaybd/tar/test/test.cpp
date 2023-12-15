@@ -19,11 +19,11 @@
 #include <photon/photon.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/subfs.h>
+#include <photon/fs/extfs/extfs.h>
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
 #include <vector>
 #include "../../gzindex/gzfile.h"
-#include "../../extfs/extfs.h"
 #include "../../lsmt/file.h"
 #include "../libtar.h"
 #include "../tar_file.cpp"

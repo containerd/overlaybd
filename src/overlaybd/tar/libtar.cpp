@@ -26,9 +26,10 @@
 #include <set>
 #include <string>
 #include <photon/fs/path.h>
+#include <photon/common/alog-stdstring.h>
 #include <photon/common/string_view.h>
+#include <photon/common/estring.h>
 #include <photon/fs/filesystem.h>
-#include <photon/common/alog.h>
 #include <photon/fs/fiemap.h>
 #include "../lsmt/file.h"
 #include "../lsmt/index.h"
@@ -45,6 +46,33 @@ int UnTar::set_file_perms(const char *filename) {
     if (geteuid() == 0) {
         if (fs->lchown(filename, uid, gid) == -1) {
             LOG_ERRNO_RETURN(0, -1, "lchown failed, filename `, uid `, gid `", filename, uid, gid);
+        }
+    }
+
+    /* change xattrs */
+    if (xattr_fs && pax && !pax->records.empty()) {
+        std::string prefix(PAX_SCHILY_XATTR_PREFIX);
+        for (auto &rec : pax->records) {
+            if (estring_view(rec.first).starts_with(prefix)) {
+                auto name = rec.first.substr(prefix.size());
+                auto value = rec.second;
+                LOG_DEBUG(VALUE(name), VALUE(value), VALUE(value.size()));
+                if (xattr_fs->lsetxattr(filename, name.c_str(), value.c_str(), value.size(), 0) == -1) {
+                    ERRNO eno;
+                    if (eno.no == EPERM && estring_view(name).starts_with("user.")) {
+                        // In the user.* namespace, only regular files and directories can have extended attributes.
+                        // See https://man7.org/linux/man-pages/man7/xattr.7.html for details.
+                        if (!TH_ISREG(header) && !TH_ISDIR(header)) {
+                            LOG_WARN("ignored xattr '`' in archive ", name, VALUE(eno));
+                            continue;
+                        }
+                    } else if (eno.no == ENOTSUP) {
+                        LOG_WARN("ignored xattr '`' in archive ", name, VALUE(eno));
+                        continue;
+                    }
+                    LOG_ERRNO_RETURN(eno.no, -1, "lsetxattr failed, filename `, name `, value `", filename, name, value);
+                }
+            }
         }
     }
 

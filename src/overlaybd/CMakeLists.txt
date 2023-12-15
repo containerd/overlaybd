@@ -3,7 +3,6 @@ add_subdirectory(lsmt)
 add_subdirectory(zfile)
 add_subdirectory(cache)
 add_subdirectory(tar)
-add_subdirectory(extfs)
 add_subdirectory(gzip)
 add_subdirectory(gzindex)
 add_subdirectory(stream_convertor)
@@ -19,7 +18,6 @@ target_link_libraries(overlaybd_lib INTERFACE
     zfile_lib
     cache_lib
     tar_lib
-    extfs_lib
     gzip_lib
     gzindex_lib
 )

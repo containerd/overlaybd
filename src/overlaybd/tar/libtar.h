@@ -24,6 +24,7 @@
 #include <string.h>
 #include <photon/fs/filesystem.h>
 #include <photon/fs/fiemap.h>
+#include <photon/common/alog.h>
 #include <photon/common/string_view.h>
 #include <set>
 #include <vector>
@@ -106,6 +107,8 @@ public:
 #define PAX_PATH          "path"
 #define PAX_LINKPATH      "linkpath"
 #define PAX_SIZE          "size"
+#define PAX_SCHILY_XATTR_PREFIX  "SCHILY.xattr."
+// not supported
 #define PAX_UID           "uid"
 #define PAX_GID           "gid"
 #define PAX_UNAME         "uname"
@@ -113,6 +116,7 @@ public:
 #define PAX_MTIME         "mtime"
 #define PAX_ATIME         "atime"
 #define PAX_CTIME         "ctime"
+#define PAX_GNU_SPARSE_PREFIX    "GNU.sparse."
 class PaxHeader {
 public:
     char *path = nullptr;
@@ -170,11 +174,11 @@ protected:
     int options;
     uint64_t fs_blocksize;
     uint64_t fs_blockmask;
+    PaxHeader *pax = nullptr;
 
 private:
     char *th_pathname = nullptr;
     char *th_linkname = nullptr;
-    PaxHeader *pax = nullptr;
 
     int read_header_internal(photon::fs::IFile *dump = nullptr);
     int read_sepcial_file(char *&buf, photon::fs::IFile *dump = nullptr);
@@ -183,10 +187,15 @@ private:
 class UnTar : public TarCore {
 public:
     UnTar(photon::fs::IFile *src_file, photon::fs::IFileSystem *target_fs, int options,
-        uint64_t fs_blocksize = FS_BLOCKSIZE, photon::fs::IFile *bf = nullptr,
-        bool meta_only = false, bool from_tar_idx = false)
-        : TarCore(src_file, options, fs_blocksize), fs(target_fs),
-            fs_base_file(bf), meta_only(meta_only), from_tar_idx(from_tar_idx){}
+          uint64_t fs_blocksize = FS_BLOCKSIZE, photon::fs::IFile *bf = nullptr,
+          bool meta_only = false, bool from_tar_idx = false)
+          : TarCore(src_file, options, fs_blocksize), fs(target_fs),
+            fs_base_file(bf), meta_only(meta_only), from_tar_idx(from_tar_idx) {
+            xattr_fs = dynamic_cast<photon::fs::IFileSystemXAttr *>(target_fs);
+            if (!xattr_fs) {
+                LOG_WARN("xattr is not supported by target fs");
+            }
+        }
 
     int extract_all();
     // return number of objects in this tarfile
@@ -194,6 +203,7 @@ public:
 
 private:
     photon::fs::IFileSystem *fs = nullptr; // target
+    photon::fs::IFileSystemXAttr *xattr_fs = nullptr;
     photon::fs::IFile *fs_base_file = nullptr;
     bool meta_only = false;
     bool from_tar_idx = false;
