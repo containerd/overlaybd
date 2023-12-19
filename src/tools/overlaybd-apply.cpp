@@ -44,6 +44,40 @@
 using namespace std;
 using namespace photon::fs;
 
+class FIFOFile : public VirtualReadOnlyFile {
+public:
+    IFile *m_fifo;
+
+    FIFOFile(IFile *fifo): m_fifo(fifo) { }
+    ~FIFOFile() { delete m_fifo; }
+
+    ssize_t read(void *buf, size_t count) override {
+        size_t left = count;
+        char *pos = (char *) buf;
+        LOG_DEBUG(VALUE(count));
+        while (left > 0) {
+            ssize_t readn = m_fifo->read(pos, left);
+            if (readn < 0 || readn > (ssize_t) left) {
+                LOG_ERRNO_RETURN(0, -1, "failed to read fifo", VALUE(left), VALUE(readn));
+            }
+            left -= (size_t) readn;
+            pos += readn;
+            LOG_DEBUG("fifo read", VALUE(readn));
+        }
+        LOG_DEBUG(VALUE(left));
+        return count - left;
+    }
+
+    int fstat(struct stat *buf) override {
+        return m_fifo->fstat(buf);
+    }
+
+    UNIMPLEMENTED_POINTER(IFileSystem *filesystem() override);
+    UNIMPLEMENTED(off_t lseek(off_t offset, int whence) override);
+    UNIMPLEMENTED(ssize_t readv(const struct iovec *iov, int iovcnt) override);
+    UNIMPLEMENTED(ssize_t preadv(const struct iovec *iov, int iovcnt, off_t offset) override);
+};
+
 int main(int argc, char **argv) {
     std::string image_config_path, input_path, gz_index_path, config_path, sha256_checksum;
     string tarheader;
@@ -93,7 +127,14 @@ int main(int argc, char **argv) {
     auto tarf = open_file(input_path.c_str(), O_RDONLY, 0666);
     DEFER(delete tarf);
 
-    if (is_gzfile(tarf)) {
+    struct stat st;
+    auto ret = tarf->fstat(&st);
+    if (ret) {
+        LOG_ERRNO_RETURN(0, -1, "failed to stat `", input_path, VALUE(ret));
+    }
+    if (S_ISFIFO(st.st_mode)) {
+        src_file = new FIFOFile(tarf);
+    } else if (is_gzfile(tarf)) {
         if (gz_index_path != "") {
             auto res = create_gz_index(tarf, gz_index_path.c_str(), 1024*1024);
             LOG_INFO("create_gz_index ", VALUE(res));
