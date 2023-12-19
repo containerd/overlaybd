@@ -199,15 +199,15 @@ private:
         th_buf = (TarHeader *)(buf + 2 * T_BLOCKSIZE);
         th_buf->typeflag = REGTYPE;                                     // type
         struct passwd *pw;
-        pw = getpwuid(s.st_uid);
+        pw = getpwuid(0);
         if (pw != NULL)
             strlcpy(th_buf->uname, pw->pw_name, sizeof(th_buf->uname)); // uname
-        int_to_oct(s.st_uid, th_buf->uid, 8);                           // uid
+        int_to_oct(0, th_buf->uid, 8);                                  // uid
         struct group *gr;
-        gr = getgrgid(s.st_gid);
+        gr = getgrgid(0);
         if (gr != NULL)
             strlcpy(th_buf->gname, gr->gr_name, sizeof(th_buf->gname)); // gname
-        int_to_oct(s.st_gid, th_buf->gid, 8);                           // gid
+        int_to_oct(0, th_buf->gid, 8);                                  // gid
         int_to_oct(s.st_mode, th_buf->mode, 8);                         // mode
 #ifndef NO_TIMESTAMP
         int_to_oct_nonull(s.st_mtime, th_buf->mtime, 12);               // mtime

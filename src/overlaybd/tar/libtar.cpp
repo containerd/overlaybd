@@ -43,7 +43,7 @@ int UnTar::set_file_perms(const char *filename) {
     tv[0].tv_usec = tv[1].tv_usec = 0;
 
     /* change owner/group */
-    if (geteuid() == 0) {
+    if (!BIT_ISSET(options, TAR_CHECK_EUID) || geteuid() == 0) {
         if (fs->lchown(filename, uid, gid) == -1) {
             LOG_ERRNO_RETURN(0, -1, "lchown failed, filename `, uid `, gid `", filename, uid, gid);
         }
@@ -174,7 +174,7 @@ int UnTar::extract_file() {
     // check file exist
     struct stat s;
     if (fs->lstat(npath.c_str(), &s) == 0 || errno != ENOENT) {
-        if (options & TAR_NOOVERWRITE) {
+        if (BIT_ISSET(options, TAR_NOOVERWRITE)) {
             errno = EEXIST;
             return -1;
         } else {
@@ -202,7 +202,7 @@ int UnTar::extract_file() {
     else if (TH_ISSYM(header))
         i = extract_symlink(filename);
     else if (TH_ISCHR(header) || TH_ISBLK(header)) {
-        if (geteuid() == 0) {
+        if (!BIT_ISSET(options, TAR_CHECK_EUID) || geteuid() == 0) {
             i = extract_block_char_fifo(filename);
         } else {
             LOG_WARN("file ` ignored: skip for user namespace", filename);
@@ -332,7 +332,7 @@ int UnTar::extract_symlink(const char *filename) {
 int UnTar::extract_dir(const char *filename) {
     mode_t mode = header.get_mode();
 
-    LOG_DEBUG("  ==> extracting: ` (mode `, directory)", filename, mode);
+    LOG_DEBUG("  ==> extracting: ` (mode `, directory)", filename, OCT(mode));
     if (fs->mkdir(filename, mode) < 0) {
         if (errno == EEXIST) {
             return 1;
