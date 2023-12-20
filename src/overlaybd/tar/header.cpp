@@ -139,7 +139,6 @@ size_t TarCore::get_size() {
     }
 }
 
-#define BIT_ISSET(bitmask, bit) ((bitmask) & (bit))
 static const char ZERO_BLOCK[T_BLOCKSIZE] = {0};
 
 int TarCore::read_header_internal(photon::fs::IFile *dump) {

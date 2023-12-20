@@ -233,6 +233,9 @@ private:
 #define TAR_CHECK_MAGIC   16  /* check magic in file header */
 #define TAR_CHECK_VERSION 32  /* check version in file header */
 #define TAR_IGNORE_CRC    64  /* ignore CRC in file header */
+#define TAR_CHECK_EUID   128  /* check effective uid of calling process */
+
+#define BIT_ISSET(bitmask, bit) ((bitmask) & (bit))
 
 /* this is obsolete - it's here for backwards-compatibility only */
 #define TAR_IGNORE_MAGIC   0

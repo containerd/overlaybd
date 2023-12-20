@@ -169,7 +169,7 @@ TEST_F(TarTest, untar) {
     auto target = photon::fs::new_subfs(fs, "rootfs", false);
     ASSERT_NE(nullptr, target);
     DEFER(delete target);
-    auto tar = new UnTar(tarf, target, 0);
+    auto tar = new UnTar(tarf, target, TAR_CHECK_EUID);
     auto ret = tar->extract_all();
     EXPECT_EQ(0, ret);
     delete tar;
