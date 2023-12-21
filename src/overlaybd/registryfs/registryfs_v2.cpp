@@ -34,13 +34,16 @@
 #include <photon/common/alog.h>
 #include <photon/fs/filesystem.h>
 #include <photon/fs/virtual-file.h>
+#include <photon/fs/localfs.h>
 #include <photon/net/http/client.h>
 #include <photon/net/utils.h>
+#include <photon/net/security-context/tls-stream.h>
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 #include <openssl/sha.h>
 #include <thread>
+#include <fcntl.h>
 
 using namespace photon::fs;
 using namespace photon::net::http;
@@ -69,6 +72,8 @@ static std::unordered_map<estring_view, estring_view> str_to_kvmap(estring &src)
     }
     return ret;
 }
+
+photon::net::TLSContext *new_tls_context_from_file(const char *cert_file, const char *key_file);
 
 enum class UrlMode {
     Redirect,
@@ -110,15 +115,19 @@ public:
         return open(pathname, flags); // ignore mode
     }
 
-    RegistryFSImpl_v2(PasswordCB callback, const char *caFile, uint64_t timeout)
-        : m_callback(callback), m_caFile(caFile), m_timeout(timeout),
+    RegistryFSImpl_v2(PasswordCB callback, const char *caFile, uint64_t timeout,
+                      photon::net::TLSContext *ctx)
+        : m_callback(callback), m_caFile(caFile), m_timeout(timeout), m_tls_ctx(ctx),
           m_meta_size(kMinimalMetaLife), m_scope_token(kMinimalTokenLife),
           m_url_info(kMinimalAUrlLife) {
-        m_client = new_http_client();
+
+        m_client = nullptr;
+        this->refresh_client();
     }
 
     ~RegistryFSImpl_v2() {
-        delete m_client;
+        if (m_client) delete m_client;
+        if (m_tls_ctx) delete m_tls_ctx;
     }
 
     long get_data(const estring &url, off_t offset, size_t count, uint64_t timeout, HTTP_OP &op) {
@@ -250,8 +259,10 @@ public:
     }
 
     void refresh_client() {
-        delete m_client;
-        m_client = new_http_client();
+        if (m_client) {
+            delete m_client;
+        }
+        m_client = new_http_client(nullptr, m_tls_ctx);
     }
 
     int refresh_token(const estring &url, estring &token) {
@@ -273,7 +284,8 @@ protected:
     estring m_accelerate;
     estring m_caFile;
     uint64_t m_timeout;
-    photon::net::http::Client* m_client;
+    photon::net::TLSContext *m_tls_ctx;
+    photon::net::http::Client *m_client;
     ObjectCache<estring, size_t *> m_meta_size;
     ObjectCache<estring, estring *> m_scope_token;
     ObjectCache<estring, UrlInfo *> m_url_info;
@@ -476,10 +488,15 @@ inline IFile *RegistryFSImpl_v2::open(const char *pathname, int) {
     return file;
 }
 
-IFileSystem *new_registryfs_v2(PasswordCB callback, const char *caFile, uint64_t timeout) {
+IFileSystem *new_registryfs_v2(PasswordCB callback, const char *caFile, uint64_t timeout,
+                               const char *cert_file, const char *key_file) {
     if (!callback)
         LOG_ERROR_RETURN(EINVAL, nullptr, "password callback not set");
-    return new RegistryFSImpl_v2(callback, caFile ? caFile : "", timeout);
+    auto ctx = new_tls_context_from_file(cert_file, key_file);
+    if (!ctx) {
+        LOG_ERRNO_RETURN(0, nullptr, "failed to new tls context");
+    }
+    return new RegistryFSImpl_v2(callback, caFile ? caFile : "", timeout, ctx);
 }
 
 class RegistryUploader : public VirtualFile {
@@ -501,9 +518,10 @@ public:
     estring m_token;
 
     RegistryUploader(IFile *lfile, std::string &upload_url, std::string &username,
-                     std::string &password, uint64_t timeout = -1, ssize_t upload_bs = -1)
+                     std::string &password, uint64_t timeout, ssize_t upload_bs,
+                     photon::net::TLSContext *ctx)
         : m_local_file(lfile), m_origin_upload_url(upload_url), m_username(username), m_password(password),
-          m_timeout(timeout) {
+          m_timeout(timeout), m_tls_ctx(ctx) {
         if (upload_bs != -1)
             m_upload_chunk_size = upload_bs;
         SHA256_Init(&m_sha256_ctx);
@@ -674,7 +692,8 @@ public:
     int upload_thread() {
         photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_NONE);
         DEFER(photon::fini());
-        m_upload_fs = new RegistryFSImpl_v2({this, &RegistryUploader::load_auth}, "", m_timeout);
+        m_upload_fs = new RegistryFSImpl_v2({this, &RegistryUploader::load_auth},
+                                            "", m_timeout, m_tls_ctx);
         DEFER({ delete m_upload_fs; });
         m_http_client_ts = photon::now;
         ::posix_memalign(&m_upload_buf, 4096, 1024 * 1024);
@@ -768,14 +787,65 @@ public:
         }
         LOG_ERROR_RETURN(0, -1, "failed to get upload url, code=`", op.status_code);
     }
+
+protected:
+    photon::net::TLSContext *m_tls_ctx;
 };
 
 IFile *new_registry_uploader(IFile *lfile, std::string &upload_url, std::string &username,
-                             std::string &password, uint64_t timeout, ssize_t upload_bs) {
-    auto ret = new RegistryUploader(lfile, upload_url, username, password, timeout, upload_bs);
+                             std::string &password, uint64_t timeout, ssize_t upload_bs,
+                             const char *cert_file, const char *key_file) {
+    auto ctx = new_tls_context_from_file(cert_file, key_file);
+    if (!ctx) {
+        LOG_ERRNO_RETURN(0, nullptr, "failed to new tls context");
+    }
+    auto ret = new RegistryUploader(lfile, upload_url, username, password,
+                                    timeout, upload_bs, ctx);
     if (ret->init() < 0) {
         delete ret;
         return nullptr;
     }
     return ret;
+}
+
+photon::net::TLSContext *new_tls_context_from_file(const char *cert_file, const char *key_file) {
+    if (!cert_file || !key_file)
+        return photon::net::new_tls_context(nullptr, nullptr, nullptr);
+
+    if (strcmp(cert_file, "") == 0 || strcmp(key_file, "") == 0) {
+        return photon::net::new_tls_context(nullptr, nullptr, nullptr);
+    }
+
+    auto read_file = [](const char *fn, estring &target) -> int {
+        if (::access(fn, F_OK) != 0) {
+            LOG_ERRNO_RETURN(0, -1, "file ` not found", fn);
+        }
+        photon::fs::IFile *file = open_localfile_adaptor(fn, O_RDONLY, 0444);
+        if (file == nullptr) {
+            LOG_ERRNO_RETURN(0, -1, "failed to open file `", fn);
+        }
+        struct stat st;
+        int ret = file->fstat(&st);
+        if (ret) {
+            LOG_ERRNO_RETURN(0, ret, "failed to stat file `", fn);
+        }
+        char buf[4096];
+        ret = file->pread(buf, st.st_size, 0);
+        if (ret != st.st_size) {
+            LOG_ERRNO_RETURN(0, -1, "failed to read file `", fn);
+        }
+        target = estring(buf);
+        return 0;
+    };
+
+    estring cert_str;
+    estring key_str;
+
+    if (read_file(cert_file, cert_str)) {
+        LOG_ERRNO_RETURN(0, nullptr, "failed to read SSL/TLS client cert file `", cert_file);
+    }
+    if (read_file(key_file, key_str)) {
+        LOG_ERRNO_RETURN(0, nullptr, "failed to read SSL/TLS client key file `", key_file);
+    }
+    return photon::net::new_tls_context(cert_str.c_str(), key_str.c_str(), nullptr);
 }

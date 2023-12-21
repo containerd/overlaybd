@@ -21,6 +21,8 @@
 #include "../overlaybd/lsmt/file.h"
 #include "../overlaybd/zfile/zfile.h"
 #include "../overlaybd/tar/tar_file.h"
+#include "../overlaybd/registryfs/registryfs.h"
+#include "../image_service.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -59,6 +61,8 @@ int main(int argc, char **argv) {
     bool tar = false, rm_old = false, seal = false, commit_sealed = false;
     bool verbose = false;
     int compress_threads = 1;
+    std::string upload_url, cred_file_path;
+    ssize_t upload_bs = 262144;
 
     CLI::App app{"this is overlaybd-commit"};
     app.add_option("-m", commit_msg, "add some custom message if needed");
@@ -80,6 +84,10 @@ int main(int argc, char **argv) {
     app.add_flag("--commit_sealed", commit_sealed, "commit sealed, index_file is output")->default_val(false);
     app.add_option("--compress_threads", compress_threads, "compress threads")->default_val(1);
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
+    app.add_option("--upload", upload_url, "registry upload url");
+    app.add_option("--upload_bs", upload_bs, "block size for upload, in KB");
+    app.add_option("--cred_file_path", cred_file_path, "cred file path for registryfs")->type_name("FILEPATH")->check(CLI::ExistingFile);
+
     CLI11_PARSE(app, argc, argv);
     build_turboOCI = build_turboOCI || build_fastoci;
     set_log_output_level(verbose ? 0 : 1);
@@ -117,8 +125,11 @@ int main(int argc, char **argv) {
     }
     IFile *fout = nullptr;
     IFile *out = nullptr;
+
     IFile *zfile_builder = nullptr;
+    IFile *upload_builder = nullptr;
     ZFile::CompressOptions opt;
+    ZFile::CompressArgs *zfile_args = nullptr;
     opt.verify = 1;
     if (compress_zfile) {
         if (algorithm == "") {
@@ -146,9 +157,29 @@ int main(int argc, char **argv) {
         }
         fout = open_file(fs, commit_file_path.c_str(), O_RDWR | O_EXCL | O_CREAT,
                     S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-        ZFile::CompressArgs zfile_args(opt);
-        zfile_args.workers = compress_threads;
-        zfile_builder = ZFile::new_zfile_builder(fout, &zfile_args, false);
+        out = fout;
+
+        zfile_args = new ZFile::CompressArgs(opt);
+        zfile_args->workers = compress_threads;
+        zfile_args->overwrite_header = true;
+
+        if (!upload_url.empty()) {
+            zfile_args->overwrite_header = false;
+            LOG_INFO("upload to `", upload_url);
+            std::string username, password;
+            if (load_cred_from_file(cred_file_path, upload_url, username, password) <  0) {
+                fprintf(stderr, "failed to read upload cred file\n");
+                exit(-1);
+            }
+            upload_builder = new_registry_uploader(out, upload_url, username, password, 2UL*60*1000*1000, upload_bs*1024);
+            if (upload_builder == nullptr) {
+                fprintf(stderr, "failed to init upload\n");
+                exit(-1);
+            }
+            out = upload_builder;
+        }
+
+        zfile_builder = ZFile::new_zfile_builder(out, zfile_args, false);
         out = zfile_builder;
     } else {
         if (algorithm != "" || block_size != 0) {
@@ -179,6 +210,16 @@ int main(int argc, char **argv) {
     }
     out->close();
     delete zfile_builder;
+    if (zfile_args) {
+        delete zfile_args;
+    }
+
+    if (upload_builder != nullptr && upload_builder->fsync() < 0) {
+        fprintf(stderr, "failed to commit or upload");
+        return -1;
+    }
+
+    delete upload_builder;
     delete fout;
     delete fin;
     printf("overlaybd-commit has committed files SUCCESSFULLY\n");

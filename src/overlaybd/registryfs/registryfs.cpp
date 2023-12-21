@@ -14,6 +14,7 @@
    limitations under the License.
 */
 #include "registryfs.h"
+#include "../base64.h"
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -46,6 +47,7 @@ using namespace photon::fs;
 static const estring kDockerRegistryAuthChallengeKeyValuePrefix = "www-authenticate";
 static const estring kAuthHeaderKey = "Authorization";
 static const estring kBearerAuthPrefix = "Bearer ";
+static const estring kBasicAuthPrefix = "Basic ";
 static const estring kDockerRegistryBlobReaderFailPrefix = "DockerRegistryBolbReader Failure: ";
 static const uint64_t kMinimalTokenLife = 30L * 1000 * 1000; // token lives atleast 30s
 static const uint64_t kMinimalAUrlLife = 300L * 1000 * 1000; // actual_url lives atleast 300s
@@ -102,8 +104,10 @@ public:
         return open(pathname, flags); // ignore mode
     }
 
-    RegistryFSImpl(PasswordCB callback, const char *caFile, uint64_t timeout)
+    RegistryFSImpl(PasswordCB callback, const char *caFile, uint64_t timeout,
+                   const char *cert_file, const char *key_file)
         : m_callback(callback), m_caFile(caFile), m_timeout(timeout),
+          m_cert_file(cert_file), m_key_file(key_file),
           m_meta_size(kMinimalMetaLife), m_scope_token(kMinimalTokenLife),
           m_url_info(kMinimalAUrlLife) {
     }
@@ -134,9 +138,6 @@ public:
 
         {
             auto curl = get_cURL();
-            if (photon::net::http::what_protocol(actual_url) == 2) {
-                curl->reset().clear_header().setopt(CURLOPT_SSL_VERIFYPEER, 0L);
-            }
             DEFER({ release_cURL(curl); });
             curl->set_redirect(10);
             // set token if needed
@@ -265,6 +266,8 @@ protected:
     estring m_accelerate;
     estring m_caFile;
     uint64_t m_timeout;
+    estring m_cert_file;
+    estring m_key_file;
     ObjectCache<estring, size_t *> m_meta_size;
     ObjectCache<estring, estring *> m_scope_token;
     ObjectCache<estring, UrlInfo *> m_url_info;
@@ -275,7 +278,14 @@ protected:
         auto curl = m_curl_pool.get();
         mutex.unlock();
         curl->reset_error();
-        curl->reset().clear_header().set_cafile(m_caFile.c_str());
+        curl->reset().clear_header().set_cafile(m_caFile.c_str())
+              .setopt(CURLOPT_SSL_VERIFYPEER, 0L).setopt(CURLOPT_SSL_VERIFYHOST, 0L);
+        if (m_cert_file != "" && m_key_file != "" &&
+            !::access(m_cert_file.c_str(), 0) && !::access(m_key_file.c_str(), 0)) {
+            LOG_DEBUG("curl with ` and `", m_cert_file.c_str(), m_key_file.c_str());
+            curl->setopt(CURLOPT_SSLCERT, m_cert_file.c_str());
+            curl->setopt(CURLOPT_SSLKEY, m_key_file.c_str());
+        }
         return curl;
     };
 
@@ -334,7 +344,9 @@ protected:
         DEFER({ release_cURL(req); });
         photon::net::StringWriter writer;
         if (!username.empty()) {
-            req->set_user_passwd(username.c_str(), password.c_str()).set_redirect(3);
+            std::string basic_auth = username + ":" + password;
+            std::string encoded = base64_encode((const BYTE*) basic_auth.c_str(), basic_auth.length());
+            req->append_header(kAuthHeaderKey, kBasicAuthPrefix + encoded);
         }
         auto ret = req->GET(auth_url, &writer, tmo.timeout_us());
 
@@ -515,9 +527,10 @@ inline IFile *RegistryFSImpl::open(const char *pathname, int) {
     return file;
 }
 
-IFileSystem *new_registryfs_v1(PasswordCB callback, const char *caFile,
-                                                     uint64_t timeout) {
+IFileSystem *new_registryfs_v1(PasswordCB callback, const char *caFile, uint64_t timeout,
+                               const char *cert_file, const char *key_file) {
     if (!callback)
         LOG_ERROR_RETURN(EINVAL, nullptr, "password callback not set");
-    return new RegistryFSImpl(callback, caFile ? caFile : "", timeout);
+    return new RegistryFSImpl(callback, caFile ? caFile : "", timeout,
+                              cert_file ? cert_file : "", key_file ? key_file : "");
 }

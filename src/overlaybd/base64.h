@@ -1,3 +1,5 @@
+#pragma once
+
 #ifndef _BASE64_H_
 #define _BASE64_H_
 
@@ -13,7 +15,7 @@ static inline bool is_base64(BYTE c) {
     return (isalnum(c) || (c == '+') || (c == '/'));
 }
 
-std::string base64_encode(BYTE const *buf, unsigned int bufLen) {
+static inline std::string base64_encode(BYTE const *buf, unsigned int bufLen) {
     std::string ret;
     int i = 0;
     int j = 0;
@@ -53,7 +55,7 @@ std::string base64_encode(BYTE const *buf, unsigned int bufLen) {
     return ret;
 }
 
-std::string base64_decode(std::string const &encoded_string) {
+static inline std::string base64_decode(std::string const &encoded_string) {
     int in_len = encoded_string.size();
     int i = 0;
     int j = 0;

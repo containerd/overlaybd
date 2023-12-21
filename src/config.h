@@ -123,6 +123,13 @@ struct PrefetchConfig : public ConfigUtils::Config {
     APPCFG_PARA(concurrency, int, 16);
 };
 
+struct CertConfig : public ConfigUtils::Config {
+    APPCFG_CLASS
+
+    APPCFG_PARA(certFile, std::string, "");
+    APPCFG_PARA(keyFile, std::string, "");
+};
+
 struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_CLASS
 
@@ -145,6 +152,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(gzipCacheConfig, GzipCacheConfig);
     APPCFG_PARA(logConfig, LogConfig);
     APPCFG_PARA(prefetchConfig, PrefetchConfig);
+    APPCFG_PARA(certConfig, CertConfig);
 };
 
 struct AuthConfig : public ConfigUtils::Config {

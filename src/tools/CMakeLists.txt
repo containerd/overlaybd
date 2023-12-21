@@ -1,6 +1,6 @@
 add_executable(overlaybd-commit overlaybd-commit.cpp)
 target_include_directories(overlaybd-commit PUBLIC ${PHOTON_INCLUDE_DIR})
-target_link_libraries(overlaybd-commit photon_static overlaybd_lib)
+target_link_libraries(overlaybd-commit photon_static overlaybd_image_lib)
 
 add_executable(overlaybd-create overlaybd-create.cpp)
 target_include_directories(overlaybd-create PUBLIC ${PHOTON_INCLUDE_DIR})

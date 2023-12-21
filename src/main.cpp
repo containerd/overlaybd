@@ -32,6 +32,7 @@
 #include <fcntl.h>
 #include <scsi/scsi.h>
 #include <sys/resource.h>
+#include <sys/prctl.h>
 
 class TCMUDevLoop;
 
@@ -401,6 +402,7 @@ void sigint_handler(int signal = SIGINT) {
 
 int main(int argc, char **argv) {
     mallopt(M_TRIM_THRESHOLD, 128 * 1024);
+    prctl(PR_SET_THP_DISABLE, 1);
 
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     photon::block_all_signal();
