@@ -372,6 +372,52 @@ TEST_F(TarTest, tar_header_check) {
     EXPECT_EQ(FILE_SIZE, ret);
 }
 
+TEST(CleanNameTest, clean_name) {
+    char name[256] = {0};
+    char *cname;
+    // 1. Reduce multiple slashes to a single slash.
+    strcpy(name, "/tar_test///busybox");
+    cname = clean_name(name);
+    EXPECT_EQ(0, strcmp(cname, "/tar_test/busybox"));
+    // 2. Eliminate . path name elements (the current directory).
+    strcpy(name, "/tar_test/./busybox");
+    cname = clean_name(name);
+    EXPECT_EQ(0, strcmp(cname, "/tar_test/busybox"));
+    // 3. Eliminate .. path name elements (the parent directory) and the non-. non-.., element that precedes them.
+    strcpy(name, "/tar_test/bin/../busybox");
+    cname = clean_name(name);
+    EXPECT_EQ(0, strcmp(cname, "/tar_test/busybox"));
+    strcpy(name, "/tar_test/bin/./../busybox");
+    cname = clean_name(name);
+    EXPECT_EQ(0, strcmp(cname, "/tar_test/busybox"));
+    strcpy(name, "/tar_test/test/bin/./../../busybox");
+    cname = clean_name(name);
+    EXPECT_EQ(0, strcmp(cname, "/tar_test/busybox"));
+    // 4. Eliminate .. elements that begin a rooted path, that is, replace /.. by / at the beginning of a path.
+    strcpy(name, "/.././tar_test/./test/bin/../busybox");
+    cname = clean_name(name);
+    EXPECT_EQ(0, strcmp(cname, "/tar_test/test/busybox"));
+    // 5. Leave intact .. elements that begin a non-rooted path.
+    strcpy(name, ".././tar_test/./test/bin/../busybox");
+    cname = clean_name(name);
+    EXPECT_EQ(0, strcmp(cname, "../tar_test/test/busybox"));
+    // If the result of this process is a null string, cleanname returns the string ".", representing the current directory.
+    strcpy(name, "");
+    cname = clean_name(name);
+    EXPECT_EQ(0, strcmp(cname, "."));
+    strcpy(name, "./");
+    cname = clean_name(name);
+    EXPECT_EQ(0, strcmp(cname, "."));
+    // root is remained
+    strcpy(name, "/");
+    cname = clean_name(name);
+    EXPECT_EQ(0, strcmp(cname, "/"));
+    // tailing '/' is removed
+    strcpy(name, "tar_test/");
+    cname = clean_name(name);
+    EXPECT_EQ(0, strcmp(cname, "tar_test"));
+}
+
 int main(int argc, char **argv) {
 
     ::testing::InitGoogleTest(&argc, argv);

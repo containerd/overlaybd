@@ -210,7 +210,7 @@ private:
     std::set<std::string> unpackedPaths;
     std::list<std::pair<std::string, int>> dirs; // <path, utime>
 
-    int extract_file();
+    int extract_file(const char *filename);
     int extract_regfile(const char *filename);
     int extract_regfile_meta_only(const char *filename);
     int extract_hardlink(const char *filename);
