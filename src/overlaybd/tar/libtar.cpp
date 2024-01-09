@@ -125,11 +125,20 @@ int UnTar::extract_all() {
     dirs.clear();
 
     while ((i = read_header()) == 0) {
-        if (extract_file() != 0) {
-            LOG_ERRNO_RETURN(0, -1, "extract failed, filename `", get_pathname());
+        auto name = get_pathname(); // cleaned name
+        if (name == nullptr) {
+            LOG_ERRNO_RETURN(0, -1, "get filename failed");
+        }
+        if (strcmp(name, "/") == 0) {
+            LOG_WARN("file '/' ignored: resolved to root");
+            continue;
+        }
+        std::string filename(name);
+        if (extract_file(filename.c_str()) != 0) {
+            LOG_ERRNO_RETURN(0, -1, "extract failed, filename `", filename);
         }
         if (TH_ISDIR(header)) {
-            dirs.emplace_back(std::make_pair(std::string(get_pathname()), header.get_mtime()));
+            dirs.emplace_back(std::make_pair(filename, header.get_mtime()));
         }
         count++;
     }
@@ -150,11 +159,8 @@ int UnTar::extract_all() {
     return (i == 1 ? 0 : -1);
 }
 
-int UnTar::extract_file() {
+int UnTar::extract_file(const char *filename) {
     int i;
-    // normalize name
-    std::string npath = remove_last_slash(get_pathname());
-    const char *filename = npath.c_str();
 
     // ensure parent directory exists or is created.
     photon::fs::Path p(filename);
@@ -173,18 +179,18 @@ int UnTar::extract_file() {
 
     // check file exist
     struct stat s;
-    if (fs->lstat(npath.c_str(), &s) == 0 || errno != ENOENT) {
+    if (fs->lstat(filename, &s) == 0 || errno != ENOENT) {
         if (BIT_ISSET(options, TAR_NOOVERWRITE)) {
             errno = EEXIST;
             return -1;
         } else {
             if (!S_ISDIR(s.st_mode)) {
-                if (fs->unlink(npath.c_str()) == -1 && errno != ENOENT) {
-                    LOG_ERRNO_RETURN(EEXIST, -1, "remove exist file ` failed", npath.c_str());
+                if (fs->unlink(filename) == -1 && errno != ENOENT) {
+                    LOG_ERRNO_RETURN(EEXIST, -1, "remove exist file ` failed", filename);
                 }
             } else if (!TH_ISDIR(header)) {
-                if (remove_all(npath) == -1) {
-                    LOG_ERRNO_RETURN(EEXIST, -1, "remove exist dir ` failed", npath.c_str());
+                if (remove_all(filename) == -1) {
+                    LOG_ERRNO_RETURN(EEXIST, -1, "remove exist dir ` failed", filename);
                 }
             }
         }
