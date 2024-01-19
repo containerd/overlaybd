@@ -25,6 +25,7 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 #pragma once
 #include <inttypes.h>
 #include <cstddef>
+#include <vector>
 #include <photon/fs/filesystem.h>
 #include <photon/fs/virtual-file.h>
 #include <photon/common/uuid.h>
@@ -45,6 +46,8 @@ public:
 
     // return uuid of  m_files[layer_idx];
     virtual int get_uuid(UUID &out, size_t layer_idx = 0) const = 0;
+
+    virtual std::vector<IFile *> get_lower_files() const = 0;
 };
 
 struct CommitArgs {
@@ -104,8 +107,9 @@ struct LayerInfo {
     UUID uuid;
     char *user_tag = nullptr; // a user provided string of message, 256B at most
     bool sparse_rw = false;
-    size_t len = 0;           // len of user_tag; if it's 0, it will be detected with strlen()
-    LayerInfo(photon::fs::IFile *_fdata = nullptr, photon::fs::IFile *_findex = nullptr) : fdata(_fdata), findex(_findex) {
+    size_t len = 0; // len of user_tag; if it's 0, it will be detected with strlen()
+    LayerInfo(photon::fs::IFile *_fdata = nullptr, photon::fs::IFile *_findex = nullptr)
+        : fdata(_fdata), findex(_findex) {
         parent_uuid.clear();
         uuid.generate();
     }
@@ -113,14 +117,15 @@ struct LayerInfo {
 
 struct WarpFileArgs {
     photon::fs::IFile *findex = nullptr;
-    photon::fs::IFile *fsmeta = nullptr; // sparse_file
-    photon::fs::IFile *target_file = nullptr;  // eg. remote target, local data file
+    photon::fs::IFile *fsmeta = nullptr;      // sparse_file
+    photon::fs::IFile *target_file = nullptr; // eg. remote target, local data file
     uint64_t virtual_size;
     UUID::String parent_uuid;
     UUID uuid;
     char *user_tag = nullptr; // a user provided string of message, 256B at most
     size_t len = 0;           // len of user_tag; if it's 0, it will be detected with strlen()
-    WarpFileArgs(photon::fs::IFile *findex, photon::fs::IFile *fsmeta, photon::fs::IFile *target_file)
+    WarpFileArgs(photon::fs::IFile *findex, photon::fs::IFile *fsmeta,
+                 photon::fs::IFile *target_file)
         : findex(findex), fsmeta(fsmeta), target_file(target_file) {
         uuid.generate();
     }
@@ -131,7 +136,8 @@ extern "C" IFileRW *create_file_rw(const LayerInfo &args, bool ownership = false
 // open a writable LSMT file constitued by a data file and a index file,
 // optionally obtaining the ownerships of the underlying files,
 // thus they will be destructed automatically.
-extern "C" IFileRW *open_file_rw(photon::fs::IFile *fdata, photon::fs::IFile *findex, bool ownership = false);
+extern "C" IFileRW *open_file_rw(photon::fs::IFile *fdata, photon::fs::IFile *findex,
+                                 bool ownership = false);
 
 // open a read-only LSMT file, which was created by
 // `close_seal()`ing or `commit()`ing a R/W LSMT file.
@@ -148,9 +154,10 @@ extern "C" IFileRO *open_files_ro(photon::fs::IFile **files, size_t n, bool owne
 extern "C" IFileRW *create_warpfile(WarpFileArgs &args, bool ownership = false);
 
 extern "C" IFileRW *open_warpfile_rw(photon::fs::IFile *findex, photon::fs::IFile *fsmeta_file,
-                                    photon::fs::IFile *target_file, bool ownership = false);
+                                     photon::fs::IFile *target_file, bool ownership = false);
 
-extern "C" IFileRO *open_warpfile_ro(photon::fs::IFile *warpfile, photon::fs::IFile *target_file, bool ownership = false);
+extern "C" IFileRO *open_warpfile_ro(photon::fs::IFile *warpfile, photon::fs::IFile *target_file,
+                                     bool ownership = false);
 
 // merge multiple RO files (layers) into a single RO file (layer)
 // returning 0 for success, -1 otherwise
@@ -164,4 +171,8 @@ extern "C" int merge_files_ro(photon::fs::IFile **src_files, size_t n, const Com
 extern "C" IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership = false,
                                 bool check_order = true);
 
+IMemoryIndex *open_file_index(photon::fs::IFile *file);
+IFileRO *open_files_with_merged_index(photon::fs::IFile **src_files, size_t n, IMemoryIndex *index,
+                                      bool ownership = false);
+int is_lsmt(photon::fs::IFile *file);
 } // namespace LSMT

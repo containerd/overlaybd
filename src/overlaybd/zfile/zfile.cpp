@@ -51,13 +51,7 @@ const static uint8_t FLAG_VALID_FALSE = 0;
 const static uint8_t FLAG_VALID_TRUE = 1;
 const static uint8_t FLAG_VALID_CRC_CHECK = 2;
 
-template <typename T>
-static std::unique_ptr<T[]> new_align_mem(size_t _size, size_t alignment = ALIGNMENT_4K) {
-    size_t size = (_size + alignment - 1) / alignment * alignment;
-    return std::unique_ptr<T[]>(new T[size]);
-}
-
-inline uint32_t crc32c(void *buf, size_t size) {
+inline uint32_t crc32c_salt(void *buf, size_t size) {
     return crc32::crc32c_extend(buf, size, NOI_WELL_KNOWN_PRIME);
 }
 /* ZFile Format:
@@ -489,7 +483,7 @@ public:
             int retry = 3;
         again:
             if (m_ht.opt.verify) {
-                auto c = crc32c((void *)block.buffer(), block.compressed_size);
+                auto c = crc32c_salt((void *)block.buffer(), block.compressed_size);
                 if (c != block.crc32_code()) {
                     if ((valid == FLAG_VALID_TRUE) && (retry--)) {
                         int reload_res = block.reload();
@@ -563,7 +557,7 @@ ssize_t compress_data(ICompressor *compressor, const unsigned char *buf, size_t 
     // LOG_DEBUG("compress buffer {offset: `, count: `} into ` bytes.", i, step, ret);
     compressed_len = ret;
     if (gen_crc) {
-        auto crc32_code = crc32c(dest_buf, compressed_len);
+        auto crc32_code = crc32c_salt(dest_buf, compressed_len);
         *((uint32_t *)&dest_buf[compressed_len]) = crc32_code;
         LOG_DEBUG("append ` bytes crc32_code: `", sizeof(uint32_t), crc32_code);
         compressed_len += sizeof(uint32_t);
@@ -1157,7 +1151,7 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
                 LOG_ERRNO_RETURN(0, -1, "failed to write compressed data.");
             }
             if (crc32_verify) {
-                auto crc32_code = crc32c(&compressed_data[j * buf_size], compressed_len[j]);
+                auto crc32_code = crc32c_salt(&compressed_data[j * buf_size], compressed_len[j]);
                 LOG_DEBUG("append ` bytes crc32_code: {offset: `, count: `, crc32: `}",
                           sizeof(uint32_t), moffset, compressed_len[j], HEX(crc32_code).width(8));
                 compressed_len[j] += sizeof(uint32_t);
@@ -1212,7 +1206,7 @@ int zfile_decompress(IFile *src, IFile *dst) {
     for (off_t offset = 0; offset < raw_data_size; offset += block_size) {
         auto len = (ssize_t)std::min(block_size, (size_t)raw_data_size - offset);
         auto readn = file->pread(raw_buf.get(), len, offset);
-        LOG_DEBUG("readn: `, crc32: `", readn, HEX(crc32c(raw_buf.get(), len)).width(8));
+        LOG_DEBUG("readn: `, crc32: `", readn, HEX(crc32c_salt(raw_buf.get(), len)).width(8));
         if (readn != len)
             return -1;
         if (dst->write(raw_buf.get(), readn) != readn) {
