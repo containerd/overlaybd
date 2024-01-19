@@ -61,6 +61,7 @@ public:
     const SegmentMapping *pbegin = nullptr;
     const SegmentMapping *pend = nullptr;
     uint64_t alloc_blk = 0;
+    uint64_t virtual_size = 0;
 
     inline void get_alloc_blks() {
         for (auto m : mapping) {
@@ -72,8 +73,9 @@ public:
             delete[] pbegin;
         }
     }
-    Index(const SegmentMapping *pmappings = nullptr, size_t n = 0, bool ownership = true)
-        : ownership(ownership) {
+    Index(const SegmentMapping *pmappings = nullptr, size_t n = 0, bool ownership = true,
+          uint64_t vsize = 0)
+        : ownership(ownership), virtual_size(vsize) {
         if (n == 0 || pmappings == nullptr) {
             pbegin = pend = nullptr;
             return;
@@ -81,7 +83,8 @@ public:
         pbegin = pmappings;
         pend = pbegin + n;
     }
-    Index(vector<SegmentMapping> &&m) : mapping(std::move(m)) {
+    Index(vector<SegmentMapping> &&m, uint64_t vsize = 0)
+        : mapping(std::move(m)), virtual_size(vsize) {
         if (mapping.size()) {
             pbegin = &mapping[0];
             pend = pbegin + mapping.size();
@@ -145,6 +148,10 @@ public:
         for (auto &m : array)
             m.tag += delta;
         return 0;
+    }
+
+    uint64_t vsize() const override {
+        return virtual_size;
     }
 };
 
@@ -385,6 +392,7 @@ public:
     virtual const IMemoryIndex0 *front_index() const override {
         return this;
     }
+    UNIMPLEMENTED(size_t vsize() const override);
 };
 
 static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const Index **pindexes,
@@ -540,10 +548,10 @@ IMemoryIndex0 *create_memory_index0(const SegmentMapping *pmappings, size_t n,
 }
 
 IMemoryIndex *create_memory_index(const SegmentMapping *pmappings, size_t n, uint64_t moffset_begin,
-                                  uint64_t moffset_end, bool ownership) {
+                                  uint64_t moffset_end, bool ownership, uint64_t vsize) {
     auto ok1 = verify_mapping_order(pmappings, n);
     auto ok2 = verify_mapping_moffset(pmappings, n, moffset_begin, moffset_end);
-    return (ok1 && ok2) ? new Index(pmappings, n, ownership) : nullptr;
+    return (ok1 && ok2) ? new Index(pmappings, n, ownership, vsize) : nullptr;
 }
 
 IMemoryIndex *create_level_index(const SegmentMapping *pmappings, size_t n, uint64_t moffset_begin,
@@ -605,7 +613,8 @@ static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const 
     }
 }
 
-IComboIndex *create_combo_index(IMemoryIndex0 *index0, const IMemoryIndex *index, uint8_t ro_index_count, bool ownership) {
+IComboIndex *create_combo_index(IMemoryIndex0 *index0, const IMemoryIndex *index,
+                                uint8_t ro_index_count, bool ownership) {
     if (!index0 || !index)
         LOG_ERROR_RETURN(EINVAL, nullptr, "invalid argument(s)");
 
@@ -666,6 +675,6 @@ IMemoryIndex *merge_memory_indexes(const IMemoryIndex **pindexes, size_t n) {
     auto pi = (const Index **)pindexes;
     mapping.reserve(pi[0]->size());
     merge_indexes(0, mapping, pi, n, 0, UINT64_MAX);
-    return new Index(std::move(mapping));
+    return new Index(std::move(mapping), pindexes[0]->vsize());
 }
 } // namespace LSMT

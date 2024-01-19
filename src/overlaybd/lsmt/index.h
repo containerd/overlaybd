@@ -126,6 +126,8 @@ public:
 
     // number of 512B blocks allocated
     virtual uint64_t block_count() const = 0;
+
+    virtual uint64_t vsize() const = 0;
 };
 
 // the level 0 memory index, which supports write
@@ -169,7 +171,7 @@ inline IMemoryIndex0 *create_memory_index0() {
 // the mapped offset must be within [moffset_begin, moffset_end)
 extern "C" IMemoryIndex *create_memory_index(const SegmentMapping *pmappings, std::size_t n,
                                              uint64_t moffset_begin, uint64_t moffset_end,
-                                             bool ownership = true);
+                                             bool ownership = true, uint64_t vsize = 0);
 
 // merge multiple indexes into a single one index
 // the `tag` field of each element in the result is subscript of `pindexes`:

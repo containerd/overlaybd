@@ -15,7 +15,6 @@ limitations under the License.
 */
 #include "file.h"
 #include <cstdint>
-#include <openssl/bio.h>
 #include <string.h>
 #include <stdarg.h>
 #include <memory>
@@ -165,7 +164,7 @@ struct HeaderTrailer {
 
     UUID::String uuid;        // 37 bytes.
     UUID::String parent_uuid; // 37 bytes.
-    uint16_t reserved;          // Reserved.
+    uint16_t reserved;        // Reserved.
 
     static const uint8_t LSMT_V1 = 1;     // v1 (UUID check)
     static const uint8_t LSMT_SUB_V1 = 1; // .1 deprecated level range.
@@ -179,7 +178,8 @@ struct HeaderTrailer {
 
 class LSMTReadOnlyFile;
 static LSMTReadOnlyFile *open_file_ro(IFile *file, bool ownership, bool reserve_tag);
-static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer = false, ssize_t st_size = -1);
+static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer = false,
+                                ssize_t st_size = -1);
 
 static const uint32_t ALIGNMENT = 512; // same as trim block size.
 static const uint32_t ALIGNMENT4K = 4096;
@@ -520,6 +520,10 @@ public:
         return 0;
     }
 
+    virtual std::vector<IFile *> get_lower_files() const override {
+        return m_files;
+    }
+
     template <typename T1, typename T2, typename T3>
     inline void forward(void *&buffer, T1 &offset, T2 &count, T3 step) {
         (char *&)buffer += step * ALIGNMENT;
@@ -618,7 +622,8 @@ public:
         if (!pht->is_sealed()) {
             LOG_ERROR_RETURN(ENOTSUP, -1, "Commit a compacted LSMTReadonlyFile is not allowed.");
         }
-        CompactOptions opts(&m_files, (SegmentMapping*)m_index->buffer(), m_index->size(), m_vsize, &args);
+        CompactOptions opts(&m_files, (SegmentMapping *)m_index->buffer(), m_index->size(), m_vsize,
+                            &args);
 
         atomic_uint64_t _no_use_var(0);
         return compact(opts, _no_use_var);
@@ -1053,9 +1058,9 @@ public:
 class LSMTWarpFile : public LSMTFile {
 public:
     const static int READ_BUFFER_SIZE = 65536;
-    IFile* m_target_file = nullptr;
+    IFile *m_target_file = nullptr;
 
-    LSMTWarpFile(){
+    LSMTWarpFile() {
         m_filetype = LSMTFileType::WarpFile;
     }
     ~LSMTWarpFile() {
@@ -1074,11 +1079,11 @@ public:
         };
         m.tag = tag;
         auto file = m_files[tag];
-        LOG_DEBUG("insert segment: `, filePtr: `", m,file);
+        LOG_DEBUG("insert segment: `, filePtr: `", m, file);
         auto ret = file->pwrite(buf, count, offset);
         if (ret != (ssize_t)count) {
-            LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`",
-                file, ret, offset, count);
+            LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`", file, ret,
+                             offset, count);
         }
         static_cast<IMemoryIndex0 *>(m_index)->insert(m);
         append_index(m);
@@ -1102,8 +1107,8 @@ public:
         while (lba.count > 0) {
             SegmentMapping m;
             m.offset = lba.offset / ALIGNMENT;
-            m.length = (Segment::MAX_LENGTH < lba.count / ALIGNMENT ?
-                Segment::MAX_LENGTH : lba.count / ALIGNMENT);
+            m.length = (Segment::MAX_LENGTH < lba.count / ALIGNMENT ? Segment::MAX_LENGTH
+                                                                    : lba.count / ALIGNMENT);
             m.moffset = lba.roffset / ALIGNMENT;
             m.tag = m_rw_tag + (uint8_t)SegmentType::remoteData;
             LOG_DEBUG("insert segment: ` into findex: `", m, m_findex);
@@ -1211,8 +1216,8 @@ static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer, ssize_t
         LOG_ERRNO_RETURN(0, nullptr, "failed to read file trailer.");
     if (!pht->verify_magic() || !pht->is_trailer() || !pht->is_data_file() || !pht->is_sealed())
         LOG_ERROR_RETURN(0, nullptr,
-                            "trailer magic, trailer type, "
-                            "file type or sealedness doesn't match");
+                         "trailer magic, trailer type, "
+                         "file type or sealedness doesn't match");
     return pht;
 }
 
@@ -1266,13 +1271,14 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
         if (ibuf[i].offset != SegmentMapping::INVALID_OFFSET) {
             ibuf[index_size] = ibuf[i];
             ibuf[index_size].tag = (warp_file_tag ? ibuf[i].tag : 0);
-            if (min_tag > ibuf[index_size].tag) min_tag = ibuf[index_size].tag;
+            if (min_tag > ibuf[index_size].tag)
+                min_tag = ibuf[index_size].tag;
             index_size++;
         }
     }
     if (warp_file_tag) {
         LOG_INFO("rebuild index tag for LSMTWarpFile.");
-        for (size_t i = 0; i<index_size; i++) {
+        for (size_t i = 0; i < index_size; i++) {
             if (warp_file_tag == 1) /* only fsmeta */
                 ibuf[i].tag = (uint8_t)SegmentType::fsMeta;
             if (warp_file_tag == 2) /* only remote data */
@@ -1451,8 +1457,7 @@ IFileRW *open_warpfile_rw(IFile *findex, IFile *fsmeta_file, IFile *target_file,
     auto rst = new LSMTWarpFile;
     rst->m_files.resize(2);
     LSMT::HeaderTrailer ht;
-    auto p = do_load_index(findex, &ht, false,
-        3);
+    auto p = do_load_index(findex, &ht, false, 3);
     auto pi = create_memory_index0(p, ht.index_size, 0, -1);
     if (!pi) {
         delete[] p;
@@ -1783,6 +1788,48 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
         delete l;
     }
     return rst;
+}
+
+IMemoryIndex *open_file_index(IFile *file) {
+    HeaderTrailer ht;
+    auto p = do_load_index(file, &ht, true);
+    if (!p) {
+        LOG_ERROR_RETURN(0, nullptr, "failed to load index");
+    }
+
+    auto pi = create_memory_index(p, ht.index_size, HeaderTrailer::SPACE / ALIGNMENT,
+                                  ht.index_offset / ALIGNMENT, true, ht.virtual_size);
+    if (!pi) {
+        delete[] p;
+        LOG_ERROR_RETURN(0, nullptr, "failed to create memory index");
+    }
+    return pi;
+}
+
+IFileRO *open_files_with_merged_index(IFile **src_files, size_t n, IMemoryIndex *index,
+                                      bool ownership) {
+    vector<IFile *> m_files(src_files, src_files + n);
+    auto rst = new LSMTReadOnlyFile;
+    rst->m_index = index;
+    rst->m_files = move(m_files);
+    rst->m_vsize = index->vsize();
+    rst->m_uuid.resize(rst->m_files.size());
+    rst->m_file_ownership = ownership;
+    return rst;
+}
+
+int is_lsmt(IFile *file) {
+    char buf[HeaderTrailer::SPACE];
+    auto ret = file->pread(buf, HeaderTrailer::SPACE, 0);
+    if (ret < (ssize_t)HeaderTrailer::SPACE)
+        LOG_ERRNO_RETURN(0, -1, "failed to read file header.");
+    auto pht = (HeaderTrailer *)buf;
+    if (!pht->verify_magic() || !pht->is_header()) {
+        LOG_DEBUG("file: ` is not lsmt object", file);
+        return 1;
+    }
+    LOG_DEBUG("file: ` is lsmt object", file);
+    return 0;
 }
 
 } // namespace LSMT
