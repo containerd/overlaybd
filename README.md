@@ -1,6 +1,6 @@
 # Overlaybd
 
-![logo](https://github.com/containerd/overlaybd/blob/main/docs/assets/overlaybd_icon_1x.png)
+![logo](https://github.com/containerd/overlaybd/blob/main/docs/assets/overlaybd_logo.svg)
 
 Overlaybd (overlay block device) is a novel layering block-level image format, which is design for container, secure container and applicable to virtual machine. And it is an open-source implementation of paper [DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba).
 
