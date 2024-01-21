@@ -133,6 +133,10 @@ int UnTar::extract_all() {
             LOG_WARN("file '/' ignored: resolved to root");
             continue;
         }
+        if (strncmp(name, ".wh..wh.", 8) == 0) {
+            LOG_WARN("file ` ignored: aufs", name);
+            continue;
+        }
         std::string filename(name);
         if (extract_file(filename.c_str()) != 0) {
             LOG_ERRNO_RETURN(0, -1, "extract failed, filename `", filename);
