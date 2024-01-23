@@ -16,10 +16,13 @@
 
 #include "../overlaybd/zfile/zfile.h"
 #include "../overlaybd/tar/tar_file.h"
+#include <cstdint>
 #include <photon/common/uuid.h>
 #include <photon/common/utility.h>
 #include <photon/fs/localfs.h>
 #include <photon/common/alog.h>
+#include <photon/net/basic_socket.h>
+#include <photon/fs/virtual-file.h>
 #include <cstdio>
 #include <cstdlib>
 #include <errno.h>
@@ -31,6 +34,7 @@
 #include <unistd.h>
 #include <photon/photon.h>
 #include "CLI11.hpp"
+#include "photon/net/basic_socket.h"
 #include "photon/fs/filesystem.h"
 
 using namespace std;
@@ -38,6 +42,24 @@ using namespace photon::fs;
 using namespace ZFile;
 
 IFileSystem *lfs = nullptr;
+
+class IStreamFile : public VirtualReadOnlyFile{
+public:
+    virtual ssize_t read(void *buf, size_t count) override {
+        return photon::net::read(0, buf, count);
+    }
+
+    virtual off_t lseek(off_t offset, int whence) override {
+        return INT64_MAX;
+    }
+
+    UNIMPLEMENTED(int fstat(struct stat *buf) override);
+    UNIMPLEMENTED_POINTER(IFileSystem* filesystem() override);
+};
+
+IFile *new_streamFile(){
+    return new IStreamFile;
+}
 
 int verify_crc(IFile* src_file) {
 
@@ -71,7 +93,7 @@ int main(int argc, char **argv) {
         ->default_val(4);
     app.add_option("source_file", fn_src, "source file path")
         ->type_name("FILEPATH")
-        ->check(CLI::ExistingFile)
+        // ->check(CLI::ExistingFile)
         ->required();
     app.add_option("target_file", fn_dst, "target file path")->type_name("FILEPATH");
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
@@ -82,8 +104,16 @@ int main(int argc, char **argv) {
     DEFER({photon::fini();});
 
     lfs = new_localfs_adaptor();
+
+
     if (verify) {
-        auto file = lfs->open(fn_src.c_str(), O_RDONLY);
+        IFile *file = nullptr;
+        if (fn_src.empty()) {
+            LOG_INFO("read source from STDIN");
+            file = new_streamFile();
+        } else {
+            file = lfs->open(fn_src.c_str(), O_RDONLY);
+        }
         if (!file) {
             fprintf(stderr, "failed to open file %s\n", fn_src.c_str());
             exit(-1);
@@ -94,6 +124,13 @@ int main(int argc, char **argv) {
         }
         printf("%s is a valid zfile blob.\n", fn_src.c_str());
         return 0;
+    }
+    bool pipe = false;
+    if (fn_dst == "") {
+        LOG_INFO("read source from STDIN");
+        pipe = true;
+        fn_dst = fn_src;
+        fn_src = "";
     }
 
     CompressOptions opt;
@@ -119,7 +156,7 @@ int main(int argc, char **argv) {
     CompressArgs args(opt);
     if (!extract) {
         printf("compress file %s as %s\n", fn_src.c_str(), fn_dst.c_str());
-        IFile *infile = lfs->open(fn_src.c_str(), O_RDONLY);
+        IFile *infile = (!pipe ? lfs->open(fn_src.c_str(), O_RDONLY) : new_streamFile() );
         if (infile == nullptr) {
             fprintf(stderr, "failed to open file %s\n", fn_src.c_str());
             exit(-1);
@@ -141,8 +178,10 @@ int main(int argc, char **argv) {
         printf("compress file done.\n");
         return ret;
     } else {
+        if (pipe) {
+            LOG_ERROR_RETURN(0, -1, "decompression can't use STDIN");
+        }
         printf("decompress file %s as %s\n", fn_src.c_str(), fn_dst.c_str());
-
         IFile *infile = fs->open(fn_src.c_str(), O_RDONLY);
         if (infile == nullptr) {
             fprintf(stderr, "failed to open file %s\n", fn_dst.c_str());

@@ -1106,8 +1106,6 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     if (ret < 0) {
         LOG_ERRNO_RETURN(0, -1, "failed to write header");
     }
-    auto raw_data_size = file->lseek(0, SEEK_END);
-    LOG_INFO("source data size: `", raw_data_size);
     auto block_size = opt.block_size;
     LOG_INFO("block size: `", block_size);
     auto buf_size = block_size + BUF_SIZE;
@@ -1124,30 +1122,32 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     compressed_len.resize(nbatch);
     raw_chunk_len.resize(nbatch);
     LOG_INFO("compress with start....");
-    off_t i = 0;
-    while (i < raw_data_size) {
+    off_t infile_size = 0;
+    while (true) {
         int n = 0;
-        auto step = std::min((ssize_t)block_size * nbatch, (ssize_t)(raw_data_size - i));
-        auto ret = file->pread(raw_data, step, i);
-        if (ret < step) {
-            LOG_ERRNO_RETURN(0, -1, "failed to read from source file. (readn: `)", ret);
+        auto readn = file->read(raw_data, block_size * nbatch);
+        if (readn == 0) {
+            break;
         }
-        i += step;
-        while (step > 0) {
-            if (step < block_size) {
-                raw_chunk_len[n++] = step;
+        if (readn < 0) {
+            LOG_ERRNO_RETURN(0, -1, "failed to read from source file. (readn: `)", readn);
+        }
+        infile_size += readn;
+        while (readn > 0) {
+            if (readn < block_size) {
+                raw_chunk_len[n++] = readn;
                 break;
             }
             raw_chunk_len[n++] = block_size;
-            step -= block_size;
+            readn -= block_size;
         }
-        ret = compressor->compress_batch(raw_data, &(raw_chunk_len[0]), compressed_data,
+        readn = compressor->compress_batch(raw_data, &(raw_chunk_len[0]), compressed_data,
                                          n * buf_size, &(compressed_len[0]), n);
-        if (ret != 0)
+        if (readn != 0)
             return -1;
         for (off_t j = 0; j < n; j++) {
-            ret = as->write(&compressed_data[j * buf_size], compressed_len[j]);
-            if (ret < (ssize_t)compressed_len[j]) {
+            readn = as->write(&compressed_data[j * buf_size], compressed_len[j]);
+            if (readn < (ssize_t)compressed_len[j]) {
                 LOG_ERRNO_RETURN(0, -1, "failed to write compressed data.");
             }
             if (crc32_verify) {
@@ -1155,8 +1155,8 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
                 LOG_DEBUG("append ` bytes crc32_code: {offset: `, count: `, crc32: `}",
                           sizeof(uint32_t), moffset, compressed_len[j], HEX(crc32_code).width(8));
                 compressed_len[j] += sizeof(uint32_t);
-                ret = as->write(&crc32_code, sizeof(uint32_t));
-                if (ret < (ssize_t)sizeof(uint32_t)) {
+                readn = as->write(&crc32_code, sizeof(uint32_t));
+                if (readn < (ssize_t)sizeof(uint32_t)) {
                     LOG_ERRNO_RETURN(0, -1, "failed to write crc32code, offset: `, crc32: `",
                                      moffset, HEX(crc32_code).width(8));
                 }
@@ -1176,8 +1176,8 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     LOG_INFO("index checksum: `", HEX(pht->index_crc).width(8));
     pht->index_offset = index_offset;
     pht->index_size = index_size;
-    pht->original_file_size = raw_data_size;
-    LOG_INFO("write trailer.");
+    pht->original_file_size = infile_size;
+    LOG_INFO("write trailer. (source file size: `)", infile_size);
     ret = write_header_trailer(as, false, true, true, pht);
     if (ret < 0)
         LOG_ERRNO_RETURN(0, -1, "failed to write trailer");
