@@ -170,6 +170,7 @@ TEST_F(ZFileTest, verify_compression) {
                 opt.block_size = 1<<bs;
                 CompressArgs args(opt);
                 zfile_compress(fsrc.get(), nullptr, &args);
+                fsrc->lseek(0, SEEK_SET);
                 int ret = zfile_compress(fsrc.get(), fdst.get(), &args);
                 auto fzfile = zfile_open_ro(fdst.get(), opt.verify);
                 EXPECT_EQ(ret, 0);
