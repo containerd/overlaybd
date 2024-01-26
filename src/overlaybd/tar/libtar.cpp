@@ -137,9 +137,6 @@ int UnTar::extract_all() {
         if (extract_file(filename.c_str()) != 0) {
             LOG_ERRNO_RETURN(0, -1, "extract failed, filename `", filename);
         }
-        if (TH_ISDIR(header)) {
-            dirs.emplace_back(std::make_pair(filename, header.get_mtime()));
-        }
         count++;
     }
 
@@ -230,7 +227,11 @@ int UnTar::extract_file(const char *filename) {
     if (i != 0) {
         return i;
     }
-
+    // Directory mtimes must be handled at the end to avoid further
+    // file creation in them to modify the directory mtime
+    if (TH_ISDIR(header)) {
+        dirs.emplace_back(std::make_pair(filename, header.get_mtime()));
+    }
     unpackedPaths.insert(filename);
     return 0;
 }
