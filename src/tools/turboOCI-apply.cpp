@@ -93,6 +93,9 @@ int main(int argc, char **argv) {
 
     photon::fs::IFile *src_file = nullptr;
     auto tarf = open_file(input_path.c_str(), O_RDONLY, 0666);
+    if (ZFile::is_zfile(tarf) == 1) {
+        tarf = ZFile::zfile_open_ro(tarf, true, true);
+    }
     DEFER(delete tarf);
 
     if (is_gzfile(tarf)) {
