@@ -16,6 +16,7 @@
 #pragma once
 #include <list>
 #include <string>
+#include <cstdint>
 #include <photon/fs/filesystem.h>
 
 class ImageFile;
