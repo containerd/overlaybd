@@ -51,6 +51,7 @@ using namespace photon::net::http;
 static const estring kDockerRegistryAuthChallengeKeyValuePrefix = "www-authenticate";
 static const estring kAuthHeaderKey = "Authorization";
 static const estring kBearerAuthPrefix = "Bearer ";
+static const estring kBasicAuthPrefix = "Basic ";
 static const uint64_t kMinimalTokenLife = 30L * 1000 * 1000; // token lives atleast 30s
 static const uint64_t kMinimalAUrlLife = 300L * 1000 * 1000; // actual_url lives atleast 300s
 static const uint64_t kMinimalMetaLife = 300L * 1000 * 1000; // actual_url lives atleast 300s
@@ -82,6 +83,13 @@ enum class UrlMode {
 struct UrlInfo {
     UrlMode mode;
     estring info;
+};
+
+enum class AuthType {
+    Unknown,
+    None,
+    Basic,
+    Bearer
 };
 
 class RegistryFSImpl_v2 : public RegistryFS {
@@ -197,10 +205,12 @@ public:
         Timeout tmo(timeout);
         estring authurl, scope;
         estring *token = nullptr;
-        if (get_scope_auth(url, &authurl, &scope, tmo.timeout()) < 0)
+
+        auto authtype = get_scope_auth(url, &authurl, &scope, tmo.timeout());
+        if (authtype == AuthType::Unknown)
             return nullptr;
 
-        if (!scope.empty()) {
+        if (authtype == AuthType::Bearer && !scope.empty()) {
             token = m_scope_token.acquire(scope, [&]() -> estring * {
                 estring *token = new estring();
                 if (get_token(url, authurl, *token, tmo.timeout()) < 0) {
@@ -217,9 +227,15 @@ public:
         HTTP_OP op(m_client, Verb::GET, url);
         op.follow = 0;
         op.retry = 0;
-        if (token && !token->empty()) {
+        if (authtype == AuthType::Bearer && token && !token->empty()) {
             op.req.headers.insert(kAuthHeaderKey, "Bearer ");
             op.req.headers.value_append(*token);
+        } else if (authtype == AuthType::Basic) {
+            auto auth = m_callback(url.data());
+            estring userpwd_b64;
+            photon::net::Base64Encode(estring().appends(auth.first, ":", auth.second), userpwd_b64);
+            op.req.headers.insert(kAuthHeaderKey, "Basic ");
+            op.req.headers.value_append(userpwd_b64);
         }
         op.timeout = tmo.timeout();
         op.call();
@@ -236,8 +252,15 @@ public:
         }
         if (code == 200) {
             UrlInfo *info = new UrlInfo{UrlMode::Self, ""};
-            if (token && !token->empty())
+            if (authtype == AuthType::Bearer && token && !token->empty())
                 info->info = kBearerAuthPrefix + *token;
+            else if (authtype == AuthType::Basic) {
+                auto auth = m_callback(url.data());
+                estring userpwd_b64;
+                photon::net::Base64Encode(estring().appends(auth.first, ":", auth.second), userpwd_b64);
+                info->info = kBasicAuthPrefix + userpwd_b64;
+            }
+
             if (!scope.empty())
                 m_scope_token.release(scope);
             return info;
@@ -268,8 +291,11 @@ public:
     int refresh_token(const estring &url, estring &token) {
         estring authurl, scope;
         Timeout tmo(m_timeout);
-        if (get_scope_auth(url, &authurl, &scope, tmo.timeout(), true) < 0)
+        auto authtype = get_scope_auth(url, &authurl, &scope, tmo.timeout(), true);
+        if (authtype == AuthType::Unknown)
             return -1;
+        if (authtype == AuthType::Basic || authtype == AuthType::None)
+            return 0;
         if (!scope.empty()) {
             get_token(url, authurl, token, tmo.timeout());
             if (token.empty()) {
@@ -290,7 +316,7 @@ protected:
     ObjectCache<estring, estring *> m_scope_token;
     ObjectCache<estring, UrlInfo *> m_url_info;
 
-    int get_scope_auth(const estring &url, estring *authurl, estring *scope, uint64_t timeout,
+    AuthType get_scope_auth(const estring &url, estring *authurl, estring *scope, uint64_t timeout,
                        bool push = false) {
         Timeout tmo(timeout);
         auto verb = push ? Verb::POST : Verb::GET;
@@ -305,32 +331,40 @@ protected:
         op.timeout = tmo.timeout();
         op.call();
         if (op.status_code == -1)
-            LOG_ERROR_RETURN(ENOENT, -1, "connection failed");
+            LOG_ERROR_RETURN(ENOENT, AuthType::Unknown, "connection failed");
 
         // going to challenge
         if (op.status_code != 401 && op.status_code != 403) {
             // no token request accepted, seems token not need;
-            return 0;
+            return AuthType::None;
         }
 
         auto it = op.resp.headers.find(kDockerRegistryAuthChallengeKeyValuePrefix);
         if (it == op.resp.headers.end())
-            LOG_ERROR_RETURN(EINVAL, -1, "no auth header in response");
+            LOG_ERROR_RETURN(EINVAL, AuthType::Unknown, "no auth header in response");
         estring challengeLine = it.second();
-        if (!challengeLine.starts_with(kBearerAuthPrefix))
-            LOG_ERROR_RETURN(EINVAL, -1, "auth string shows not bearer auth, ",
+
+        estring prefix = "";
+
+        if (challengeLine.starts_with(kBearerAuthPrefix))
+            prefix = kBearerAuthPrefix;
+        else if (challengeLine.starts_with(kBasicAuthPrefix))
+            return AuthType::Basic;
+        else
+            LOG_ERROR_RETURN(EINVAL, AuthType::Unknown, "auth string shows not bearer or basic auth, ",
                              VALUE(challengeLine));
-        challengeLine = challengeLine.substr(kBearerAuthPrefix.length());
+
+        challengeLine = challengeLine.substr(prefix.length());
         auto kv = str_to_kvmap(challengeLine);
         if (kv.find("realm") == kv.end() || kv.find("service") == kv.end() ||
             kv.find("scope") == kv.end()) {
-            LOG_ERROR_RETURN(EINVAL, -1, "authentication challenge failed with `",
+            LOG_ERROR_RETURN(EINVAL, AuthType::Unknown, "authentication challenge failed with `",
                              challengeLine);
         }
         *scope = estring(kv["scope"]);
         *authurl = estring().appends(kv["realm"], "?service=", kv["service"],
                     "&scope=", kv["scope"]);
-        return 0;
+        return AuthType::Bearer;
     }
 
     int parse_token(const estring &jsonStr, estring *token) {
