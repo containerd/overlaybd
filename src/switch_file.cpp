@@ -94,6 +94,7 @@ public:
             LOG_ERROR("failed to open commit file as zfile, path: `", m_filepath);
             return;
         }
+        file = zfile;
         LOG_INFO("switch to localfile '`' success.", m_filepath);
         m_local_file = file;
     }
