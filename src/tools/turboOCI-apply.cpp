@@ -23,6 +23,7 @@
 #include "../overlaybd/lsmt/file.h"
 #include "../overlaybd/zfile/zfile.h"
 #include "../overlaybd/tar/libtar.h"
+#include "../overlaybd/tar/tarerofs.h"
 #include "../overlaybd/gzindex/gzfile.h"
 #include "../overlaybd/gzip/gz.h"
 #include <errno.h>
@@ -60,12 +61,13 @@ int dump_tar_headers(IFile *src_file, const string &out) {
 }
 
 int main(int argc, char **argv) {
-    std::string image_config_path, input_path, gz_index_path, config_path;
+    std::string image_config_path, input_path, gz_index_path, config_path, fstype;
     bool raw = false, mkfs = false, verbose = false;
     bool export_tar_headers = false, import_tar_headers = false;
 
     CLI::App app{"this is turboOCI-apply, apply OCIv1 tar layer to 'Overlaybd-TurboOCI v1' format"};
     app.add_flag("--mkfs", mkfs, "mkfs before apply")->default_val(false);
+    app.add_option("--fstype", fstype, "filesystem type")->default_val("ext4");
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     app.add_option("--service_config_path", config_path, "overlaybd image service config path")
         ->type_name("FILEPATH")
@@ -124,18 +126,29 @@ int main(int argc, char **argv) {
     });
 
     // for now, buffer_file can't be used with turboOCI
-    auto target = create_ext4fs(imgfile, mkfs, false, "/");
-    DEFER({ delete target; });
+    if (fstype == "erofs") {
+        photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
 
-    photon::fs::IFile *base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
-    bool gen_turboOCI = true;
-    int option = (import_tar_headers ? TAR_IGNORE_CRC : 0);
-    auto tar =
-        new UnTar(src_file, target, option, 4096, base_file, gen_turboOCI, import_tar_headers);
+        auto tar =
+           new TarErofs(src_file, imgfile, 4096, base_file, true);
 
-    if (tar->extract_all() < 0) {
-        fprintf(stderr, "failed to extract\n");
-        exit(-1);
+        if (tar->extract_all() < 0) {
+            fprintf(stderr, "failed to extract\n");
+            exit(-1);
+        }
+    } else {
+        auto target = create_ext4fs(imgfile, mkfs, false, "/");
+        DEFER({ delete target; });
+
+        photon::fs::IFile *base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
+        bool gen_turboOCI = true;
+        int option = (import_tar_headers ? TAR_IGNORE_CRC : 0);
+        auto tar =
+            new UnTar(src_file, target, option, 4096, base_file, gen_turboOCI, import_tar_headers);
+        if (tar->extract_all() < 0) {
+            fprintf(stderr, "failed to extract\n");
+            exit(-1);
+        }
     }
     fprintf(stdout, "turboOCI-apply done\n");
     return 0;
