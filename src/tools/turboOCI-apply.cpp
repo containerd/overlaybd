@@ -129,8 +129,14 @@ int main(int argc, char **argv) {
     if (fstype == "erofs") {
         photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
 
+        ImageConfigNS::ImageConfig cfg;
+        if (!cfg.ParseJSON(image_config_path)) {
+            fprintf(stderr, "failed to parse image config\n");
+            exit(-1);
+        }
+
         auto tar =
-           new TarErofs(src_file, imgfile, 4096, base_file, true);
+           new TarErofs(src_file, imgfile, 4096, base_file, true, cfg.lowers().size() == 0);
 
         if (tar->extract_all() < 0) {
             fprintf(stderr, "failed to extract\n");
