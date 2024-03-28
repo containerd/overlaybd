@@ -21,8 +21,8 @@
 class TarErofs {
 public:
     TarErofs(photon::fs::IFile *file, photon::fs::IFile *target, uint64_t fs_blocksize = 4096,
-          photon::fs::IFile *bf = nullptr, bool meta_only = true)
-        : file(file), fout(target), fs_base_file(bf), meta_only(meta_only) {}
+          photon::fs::IFile *bf = nullptr, bool meta_only = true, bool first_layer = true)
+        : file(file), fout(target), fs_base_file(bf), meta_only(meta_only), first_layer(first_layer) {}
 
     int extract_all();
 
@@ -31,6 +31,7 @@ private:
     photon::fs::IFile *fout = nullptr; // target
     photon::fs::IFile *fs_base_file = nullptr;
     bool meta_only;
+    bool first_layer;
     std::set<std::string> unpackedPaths;
     std::list<std::pair<std::string, int>> dirs; // <path, utime>
 };
