@@ -25,6 +25,8 @@
 #define __stringify_1(x...)	#x
 #define __stringify(x...)	__stringify_1(x)
 
+#define LSMT_ALIGNMENT 512
+
 int TarErofs::extract_all() {
     ssize_t read;
     struct stat st;
@@ -44,7 +46,7 @@ int TarErofs::extract_all() {
          return -1;
     }
 
-    if (fs_base_file->fstat(&st)>= 0 && st.st_blocks > 0) {
+    if (!first_layer) {
         int fd = mkstemp(base_path);
         if (fd < 0) {
             LOG_ERROR("cannot generate a temporary file to dump overlaybd disk");
@@ -53,11 +55,12 @@ int TarErofs::extract_all() {
         std::strcat(command_line, " --base ");
         std::strcat(command_line, base_path);
 
-        if (fs_base_file->pread(&metasize, sizeof(metasize), 0) !=
-            sizeof(metasize)) {
+        // lsmt.pread should align to 512
+        if (fs_base_file->pread(&buf, LSMT_ALIGNMENT, 0) != LSMT_ALIGNMENT) {
             LOG_ERROR("failed to read EROFS metadata size");
             return -1;
         }
+        metasize = *(uint64_t *)buf;
 
         while (metasize) {
             int count = std::min(sizeof(buf), metasize);
@@ -89,6 +92,9 @@ int TarErofs::extract_all() {
     }
     status = pclose(fp);
 
+    if (!first_layer)
+        unlink(base_path);
+
     if (read < 0 || status) {
         return -1;
     }
@@ -110,9 +116,7 @@ int TarErofs::extract_all() {
             read = -1;
             break;
         }
-        metasize += read;
     }
-
 
     /* write mapfile */
     fp = fopen("upper.map", "r");
