@@ -5,7 +5,7 @@ set(PHOTON_ENABLE_EXTFS ON)
 FetchContent_Declare(
   photon
   GIT_REPOSITORY https://github.com/alibaba/PhotonLibOS.git
-  GIT_TAG v0.6.15
+  GIT_TAG v0.6.16
 )
 
 if(BUILD_TESTING)
