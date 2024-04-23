@@ -17,12 +17,14 @@
 
 OS=${1}
 PACKAGE_VERSION=${2}
+RELEASE_NO=${3}
 ARCH=`uname -m`
 BUILD_TYPE="Release"
 COMPILER=""
 PACKAGE_RELEASE=""
 CMAKE="cmake"
 CPACK="cpack"
+
 
 # Install Dependencies
 if [[ ${OS} =~ "ubuntu" ]]; then
@@ -33,20 +35,20 @@ if [[ ${OS} =~ "ubuntu" ]]; then
     apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm libzstd-dev libext2fs-dev zlib1g-dev
 
     DISTRO=${OS/:/1~}
-    PACKAGE_RELEASE="-DPACKAGE_RELEASE=0${DISTRO}"
+    PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.${DISTRO}"
 elif [[ ${OS} =~ "centos" ]]; then
     if [[ ${OS} == "centos:7" ]]; then
         yum install -y centos-release-scl
         yum install -y devtoolset-7-gcc-c++
 
         export PATH="/opt/rh/devtoolset-7/root/usr/bin:$PATH"
-        PACKAGE_RELEASE="-DPACKAGE_RELEASE=1.el7"
+        PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.el7"
         COMPILER="-DCMAKE_C_COMPILER=/opt/rh/devtoolset-7/root/usr/bin/gcc -DCMAKE_CXX_COMPILER=/opt/rh/devtoolset-7/root/usr/bin/g++"
     elif [[ ${OS} == "centos:8" ]]; then
         rm -rf /etc/yum.repos.d/* && curl -o /etc/yum.repos.d/CentOS-Base.repo https://mirrors.aliyun.com/repo/Centos-vault-8.5.2111.repo
         yum install -y gcc gcc-c++
 
-        PACKAGE_RELEASE="-DPACKAGE_RELEASE=1.el8"
+        PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.el8"
     fi
 
     yum install -y epel-release libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel
@@ -57,7 +59,7 @@ elif [[ ${OS} =~ "mariner" ]]; then
     yum install -y rpm-build make git wget sudo tar gcc gcc-c++ autoconf automake libtool
 
     DISTRO=${OS/:/.}
-    PACKAGE_RELEASE="-DPACKAGE_RELEASE=1.${DISTRO}"
+    PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.${DISTRO}"
 fi
 
 if [[ ${ARCH} == "x86_64" ]]; then
