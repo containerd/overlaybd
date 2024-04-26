@@ -70,6 +70,7 @@ struct P2PConfig : public ConfigUtils::Config {
     APPCFG_CLASS
 
     APPCFG_PARA(enable, bool, false);
+    APPCFG_PARA(ignoreRedirect, bool, false);
     APPCFG_PARA(address, std::string, "http://localhost:9731/accelerator");
 };
 

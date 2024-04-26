@@ -114,16 +114,21 @@ public:
     long GET(const char *url, photon::net::HeaderMap *headers, off_t offset, size_t count,
              photon::net::IOVWriter *writer, uint64_t timeout) {
         Timeout tmo(timeout);
-        long ret = 0;
-        UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
-            return getActualUrl(url, tmo.timeout(), ret);
-        });
-        if (actual_info == nullptr)
-            return ret;
+        const char *actual_url = url;        
 
-        const char *actual_url = url;
-        if (actual_info->mode == UrlMode::Redirect)
-            actual_url = actual_info->info.data();
+        // skip resolving source url if p2p is enabled and ignoreRedirect is set to true
+        if !(m_accelerate.size() > 0 && m_ignoreRedirect) {
+            long ret = 0;
+            UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
+                return getActualUrl(url, tmo.timeout(), ret);
+            });
+            if (actual_info == nullptr)
+                return ret;
+
+            if (actual_info->mode == UrlMode::Redirect)
+                actual_url = actual_info->info.data();
+        }
+        
         //use p2p proxy
         estring accelerate_url;
         if (m_accelerate.size() > 0) {
@@ -253,7 +258,8 @@ public:
         LOG_ERROR_RETURN(0, nullptr, "Failed to get actual url ", VALUE(url), VALUE(ret));
     }
 
-    virtual int setAccelerateAddress(const char* addr = "") override {
+    virtual int setAccelerateAddress(const bool ignoreRedirect, const char* addr = "") override {
+        m_ignoreRedirect = ignoreRedirect;
         m_accelerate = estring(addr);
         return 0;
     }
@@ -262,6 +268,7 @@ protected:
     using CURLPool = IdentityPool<photon::net::cURL, 4>;
     CURLPool m_curl_pool;
     PasswordCB m_callback;
+    bool m_ignoreRedirect;
     estring m_accelerate;
     estring m_caFile;
     uint64_t m_timeout;

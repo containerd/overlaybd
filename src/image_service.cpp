@@ -435,7 +435,7 @@ int ImageService::init() {
 bool ImageService::enable_acceleration() {
     auto conf = global_conf.p2pConfig();
     if (conf.enable() && check_accelerate_url(conf.address())) {
-        ((RegistryFS*)global_fs.underlay_registryfs)->setAccelerateAddress(conf.address().c_str());
+        ((RegistryFS*)global_fs.underlay_registryfs)->setAccelerateAddress(conf.ignoreRedirect(), conf.address().c_str());
         global_fs.remote_fs = global_fs.srcfs;
         return true;
     } else {
