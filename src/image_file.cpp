@@ -102,7 +102,7 @@ IFile *ImageFile::__open_ro_target_file(const std::string &path) {
 }
 
 IFile *ImageFile::__open_ro_target_remote(const std::string &dir, const std::string &data_digest,
-                                               const uint64_t size, int layer_index) {
+                                          const uint64_t size, int layer_index) {
     std::string url;
 
     if (conf.repoBlobUrl() == "") {
@@ -153,8 +153,7 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
         LOG_ERROR_RETURN(0, nullptr, "empty repoBlobUrl for remote layer");
     }
     estring url = estring().appends("/", conf.repoBlobUrl(),
-                                    (conf.repoBlobUrl().back() != '/') ? "/" : "",
-                                    digest);
+                                    (conf.repoBlobUrl().back() != '/') ? "/" : "", digest);
 
     LOG_INFO("open file from remotefs: `, size: `", url, size);
     IFile *remote_file = image_service.global_fs.remote_fs->open(url.c_str(), O_RDONLY);
@@ -164,8 +163,14 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
         set_failed("failed to open remote file ", url, ": ", err_msg);
         LOG_ERRNO_RETURN(0, nullptr, "failed to open remote file `: `", url, err_msg);
     }
-    remote_file->ioctl(SET_SIZE, size);
-    remote_file->ioctl(SET_LOCAL_DIR, dir);
+    if (!dir.empty()) {
+        remote_file->ioctl(SET_SIZE, size);
+        remote_file->ioctl(SET_LOCAL_DIR, dir);
+    } else {
+        LOG_WARN(
+            "local dir of layer %d (%s) didn't set, skip background anyway",
+            layer_index, digest.c_str());
+    }
 
     IFile *tar_file = new_tar_file_adaptor(remote_file);
     if (!tar_file) {
@@ -183,15 +188,15 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
         LOG_ERRNO_RETURN(0, nullptr, "failed to open switch file `", url);
     }
 
-    if (conf.HasMember("download") && conf.download().enable() == 1) {
+    if (conf.HasMember("download") && conf.download().enable() == 1 && !dir.empty()) {
         // download from registry, verify sha256 after downloaded.
         IFile *srcfile = image_service.global_fs.srcfs->open(url.c_str(), O_RDONLY);
         if (srcfile == nullptr) {
             LOG_WARN("failed to open source file, ignore download");
         } else {
-            BKDL::BkDownload *obj =
-                new BKDL::BkDownload(switch_file, srcfile, size, dir, digest, url, m_status,
-                    conf.download().maxMBps(), conf.download().tryCnt(), conf.download().blockSize());
+            BKDL::BkDownload *obj = new BKDL::BkDownload(
+                switch_file, srcfile, size, dir, digest, url, m_status, conf.download().maxMBps(),
+                conf.download().tryCnt(), conf.download().blockSize());
             LOG_DEBUG("add to download list for `", dir);
             dl_list.push_back(obj);
         }
@@ -209,8 +214,8 @@ void ImageFile::start_bk_dl_thread() {
     uint64_t extra_range = conf.download().delayExtra();
     extra_range = (extra_range <= 0) ? 30 : extra_range;
     uint64_t delay_sec = (rand() % extra_range) + conf.download().delay();
-    LOG_INFO("background download is enabled, delay `, maxMBps `, tryCnt `, blockSize `",
-             delay_sec, conf.download().maxMBps(), conf.download().tryCnt(), conf.download().blockSize());
+    LOG_INFO("background download is enabled, delay `, maxMBps `, tryCnt `, blockSize `", delay_sec,
+             conf.download().maxMBps(), conf.download().tryCnt(), conf.download().blockSize());
     dl_thread_jh = photon::thread_enable_join(
         photon::thread_create11(&BKDL::bk_download_proc, dl_list, delay_sec, m_status));
 }
@@ -256,30 +261,30 @@ void *do_parallel_open_files(ImageFile *imgfile, ParallelOpenTask &tm) {
     return nullptr;
 }
 
-int ImageFile::open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer,
-                                int index) {
-    std::string opened;
+IFile *ImageFile::open_localfile(ImageConfigNS::LayerConfig &layer, std::string &opened) {
     if (layer.file() != "") {
         opened = layer.file();
-        file = __open_ro_file(opened);
-    } else {
-        // open downloaded blob or remote blob
-        if (BKDL::check_downloaded(layer.dir())) {
-            opened = layer.dir() + "/" + COMMIT_FILE_NAME;
-            file = __open_ro_file(opened);
-        } else {
-            auto sealed = layer.dir() + "/" + SEALED_FILE_NAME;
-            if (::access(sealed.c_str(), 0) == 0) {
-                // open sealed blob
-                opened = sealed;
-                file = __open_ro_file(opened);
-            } else {
-                opened = layer.digest();
-                file = __open_ro_remote(layer.dir(), layer.digest(), layer.size(), index);
-            }
-        }
+        return __open_ro_file(opened);
     }
-
+    if (BKDL::check_downloaded(layer.dir())) {
+        opened = layer.dir() + "/" + COMMIT_FILE_NAME;
+        return __open_ro_file(opened);
+    }
+    auto sealed = layer.dir() + "/" + SEALED_FILE_NAME;
+    if (::access(sealed.c_str(), 0) == 0) {
+        // open sealed blob
+        opened = sealed;
+        return __open_ro_file(opened);
+    }
+    return nullptr;
+}
+int ImageFile::open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer, int index) {
+    std::string opened;
+    file = open_localfile(layer, opened); // try to open localfile if downloaded
+    if (file == nullptr) {
+        opened = layer.digest();
+        file = __open_ro_remote(layer.dir(), layer.digest(), layer.size(), index);
+    }
     if (file == nullptr) {
         return -1;
     }
@@ -305,8 +310,8 @@ int ImageFile::open_lower_layer(IFile *&file, ImageConfigNS::LayerConfig &layer,
         }
         target_file = new_gzfile(target_file, gz_index, true);
         if (image_service.global_conf.gzipCacheConfig().enable() && layer.targetDigest() != "") {
-            target_file = image_service.global_fs.gzcache_fs->
-                          open_cached_gzip_file(target_file, layer.targetDigest().c_str());
+            target_file = image_service.global_fs.gzcache_fs->open_cached_gzip_file(
+                target_file, layer.targetDigest().c_str());
         }
     }
     if (target_file != nullptr) {
@@ -395,7 +400,8 @@ LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
     }
 
     if (upper.target() != "") {
-        LOG_INFO("turboOCIv1 upper layer : `, `, `, `", upper.index(), upper.data(), upper.target());
+        LOG_INFO("turboOCIv1 upper layer : `, `, `, `", upper.index(), upper.data(),
+                 upper.target());
         target_file = open_localfile_adaptor(upper.target().c_str(), O_RDWR, 0644);
         if (!target_file) {
             LOG_ERROR("open(`,flags), `:`", upper.target(), errno, strerror(errno));
@@ -411,16 +417,16 @@ LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
         }
         ret = LSMT::open_warpfile_rw(idx_file, data_file, target_file, true);
         if (!ret) {
-            LOG_ERROR("LSMT::open_warpfile_rw(`,`,`,`) return NULL",
-                    (uint64_t)data_file, (uint64_t)idx_file, (uint64_t)target_file, true);
+            LOG_ERROR("LSMT::open_warpfile_rw(`,`,`,`) return NULL", (uint64_t)data_file,
+                      (uint64_t)idx_file, (uint64_t)target_file, true);
             goto ERROR_EXIT;
         }
     } else {
         LOG_INFO("overlaybd upper layer : ` , `", upper.index(), upper.data());
         ret = LSMT::open_file_rw(data_file, idx_file, true);
         if (!ret) {
-            LOG_ERROR("LSMT::open_file_rw(`,`,`) return NULL",
-                    (uint64_t)data_file, (uint64_t)idx_file, true);
+            LOG_ERROR("LSMT::open_file_rw(`,`,`) return NULL", (uint64_t)data_file,
+                      (uint64_t)idx_file, true);
             goto ERROR_EXIT;
         }
     }
@@ -453,8 +459,7 @@ int ImageFile::init_image_file() {
         LOG_INFO("Acceleration layer found at `, ignore the last lower", accel_layer);
 
         std::string trace_file = accel_layer + "/trace";
-        if (Prefetcher::detect_mode(trace_file) ==
-            Prefetcher::Mode::Replay) {
+        if (Prefetcher::detect_mode(trace_file) == Prefetcher::Mode::Replay) {
             m_prefetcher = new_prefetcher(trace_file, concurrency);
         }
 
@@ -519,8 +524,8 @@ void ImageFile::set_auth_failed() {
     }
 }
 
-template<typename...Ts>
-void ImageFile::set_failed(const Ts&...xs) {
+template <typename... Ts>
+void ImageFile::set_failed(const Ts &...xs) {
     if (m_status == 0) // only set exit in image boot phase
     {
         m_status = -1;

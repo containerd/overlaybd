@@ -119,6 +119,8 @@ private:
     template<typename...Ts> void set_failed(const Ts&...xs);
     LSMT::IFileRO *open_lowers(std::vector<ImageConfigNS::LayerConfig> &, bool &);
     LSMT::IFileRW *open_upper(ImageConfigNS::UpperConfig &);
+
+    IFile *open_localfile(ImageConfigNS::LayerConfig &layer, std::string &opened);
     IFile *__open_ro_file(const std::string &);
     IFile *__open_ro_target_file(const std::string &);
     IFile *__open_ro_remote(const std::string &dir, const std::string &, const uint64_t, int);

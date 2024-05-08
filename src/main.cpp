@@ -456,6 +456,8 @@ int main(int argc, char **argv) {
         LOG_INFO("reset netlink done");
     }
 
+    LOG_INFO("current version: `", OVERLAYBD_VERSION);
+
     std::vector<struct tcmulib_handler> handlers;
     struct tcmulib_handler overlaybd_handler;
     overlaybd_handler.name = "Handler for overlaybd devices";

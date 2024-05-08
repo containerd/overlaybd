@@ -19,7 +19,8 @@ COPY . .
 ARG OS
 ARG RELEASE_VERSION
 ARG RELEASE_NO
-RUN ls -l /src && chmod 755 .github/workflows/release/build.sh && .github/workflows/release/build.sh ${OS} ${RELEASE_VERSION} ${RELEASE_NO}
+ARG COMMIT_ID
+RUN ls -l /src && chmod 755 .github/workflows/release/build.sh && .github/workflows/release/build.sh ${OS} ${RELEASE_VERSION} ${RELEASE_NO} ${COMMIT_ID}
 
 FROM scratch AS release
 COPY --from=builder /src/build/overlaybd-*.* /

@@ -12,13 +12,15 @@ if (NOT (${ARCH} STREQUAL x86_64) AND NOT (${ARCH} STREQUAL aarch64) AND NOT (${
     message(FATAL_ERROR "Unknown CPU architecture ${ARCH}")
 endif ()
 
+option(OBD_VER "Overlaybd version" "overlaybd/0.0.0-undefined")
+
 set(LIBRARY_OUTPUT_PATH "${CMAKE_SOURCE_DIR}/build/output")
 set(EXECUTABLE_OUTPUT_PATH "${CMAKE_SOURCE_DIR}/build/output")
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fpic -Wall -Werror=sign-compare")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fpic -Wall -Werror=sign-compare")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fpic -Wall -Werror=sign-compare -DOVERLAYBD_VER=${OBD_VER}")
 
 if (${ARCH} STREQUAL aarch64)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
@@ -39,6 +41,7 @@ endif()
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED on)
 set(ENABLE_MIMIC_VDSO off)
+
 option(BUILD_CURL_FROM_SOURCE "Compile static libcurl" off)
 option(ORIGIN_EXT2FS "Use original libext2fs" off)
 find_package(photon REQUIRED)

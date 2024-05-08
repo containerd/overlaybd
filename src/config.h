@@ -19,6 +19,10 @@
 #include <vector>
 #include "overlaybd/config_util.h"
 
+#define MACROTOSTR(x) #x
+#define PRINTMACRO(x) MACROTOSTR(x)
+static const char OVERLAYBD_VERSION[] = PRINTMACRO(OVERLAYBD_VER);
+
 namespace ImageConfigNS {
 const int MAX_LAYER_CNT = 256;
 
