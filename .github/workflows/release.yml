@@ -53,6 +53,7 @@ jobs:
           RELEASE_VERSION="${new_version}rc" #1.1.4rc
         fi
         RELEASE_VERSION=${RELEASE_VERSION#v}
+        COMMIT_ID="${RELEASE_VERSION}-$(git rev-parse --short HEAD)"
         RELEASE_NO="$(date +%Y%m%d).$(git rev-parse --short HEAD)"
 
         echo "RELEASE_VERSION=${RELEASE_VERSION} RELEASE_NO=${RELEASE_NO}"
@@ -67,7 +68,7 @@ jobs:
         echo "OS=${OS}"
 
 
-        docker buildx build --build-arg BUILD_IMAGE=${BUILD_IMAGE} --build-arg OS=${OS} --build-arg RELEASE_VERSION=${RELEASE_VERSION} --build-arg RELEASE_NO=${RELEASE_NO} -f .github/workflows/release/Dockerfile --platform=${{ matrix.platforms }} -o releases/ .
+        docker buildx build --build-arg COMMIT_ID=${COMMIT_ID} --build-arg BUILD_IMAGE=${BUILD_IMAGE} --build-arg OS=${OS} --build-arg RELEASE_VERSION=${RELEASE_VERSION} --build-arg RELEASE_NO=${RELEASE_NO} -f .github/workflows/release/Dockerfile --platform=${{ matrix.platforms }} -o releases/ .
 
         # remove unused package
         if [[ "${OS}" =~ "ubuntu" ]]; then
