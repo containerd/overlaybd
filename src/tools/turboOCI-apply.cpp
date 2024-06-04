@@ -23,7 +23,7 @@
 #include "../overlaybd/lsmt/file.h"
 #include "../overlaybd/zfile/zfile.h"
 #include "../overlaybd/tar/libtar.h"
-#include "../overlaybd/tar/tarerofs.h"
+#include "../overlaybd/tar/erofs/tarerofs_interface.h"
 #include "../overlaybd/gzindex/gzfile.h"
 #include "../overlaybd/gzip/gz.h"
 #include <errno.h>
@@ -136,7 +136,7 @@ int main(int argc, char **argv) {
         }
 
         auto tar =
-           new TarErofs(src_file, imgfile, 4096, base_file, true, cfg.lowers().size() == 0);
+           new TarErofsInter(src_file, imgfile, 4096, base_file, true, cfg.lowers().size() == 0);
 
         if (tar->extract_all() < 0) {
             fprintf(stderr, "failed to extract\n");
