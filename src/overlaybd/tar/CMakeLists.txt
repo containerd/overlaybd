@@ -8,3 +8,6 @@ target_include_directories(tar_lib PUBLIC
 if(BUILD_TESTING)
   add_subdirectory(test)
 endif()
+
+add_subdirectory(erofs)
+target_link_libraries(tar_lib PRIVATE erofs_lib)
