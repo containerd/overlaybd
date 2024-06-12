@@ -528,9 +528,12 @@ inline IFile *RegistryFSImpl::open(const char *pathname, int) {
 }
 
 IFileSystem *new_registryfs_v1(PasswordCB callback, const char *caFile, uint64_t timeout,
-                               const char *cert_file, const char *key_file) {
+                               const char *cert_file, const char *key_file, const char *__) {
     if (!callback)
         LOG_ERROR_RETURN(EINVAL, nullptr, "password callback not set");
+    if (__ != nullptr) {
+        LOG_WARN("customized UA is unsupported");
+    }
     return new RegistryFSImpl(callback, caFile ? caFile : "", timeout,
                               cert_file ? cert_file : "", key_file ? key_file : "");
 }

@@ -13,7 +13,9 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
+#include "../../version.h"
 #include "registryfs.h"
+
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -124,12 +126,17 @@ public:
     }
 
     RegistryFSImpl_v2(PasswordCB callback, const char *caFile, uint64_t timeout,
-                      photon::net::TLSContext *ctx)
+                      photon::net::TLSContext *ctx, const char *ua)
         : m_callback(callback), m_caFile(caFile), m_timeout(timeout), m_tls_ctx(ctx),
           m_meta_size(kMinimalMetaLife), m_scope_token(kMinimalTokenLife),
           m_url_info(kMinimalAUrlLife) {
 
         m_client = nullptr;
+        if (ua == nullptr) {
+            m_useragent = OVERLAYBD_VERSION;
+        } else {
+            m_useragent = ua;
+        }
         this->refresh_client();
     }
 
@@ -286,6 +293,8 @@ public:
             delete m_client;
         }
         m_client = new_http_client(nullptr, m_tls_ctx);
+        LOG_INFO("set user agent: `", m_useragent);
+        m_client->set_user_agent(m_useragent);
     }
 
     int refresh_token(const estring &url, estring &token) {
@@ -309,6 +318,7 @@ protected:
     PasswordCB m_callback;
     estring m_accelerate;
     estring m_caFile;
+    estring m_useragent;
     uint64_t m_timeout;
     photon::net::TLSContext *m_tls_ctx;
     photon::net::http::Client *m_client;
@@ -523,14 +533,14 @@ inline IFile *RegistryFSImpl_v2::open(const char *pathname, int) {
 }
 
 IFileSystem *new_registryfs_v2(PasswordCB callback, const char *caFile, uint64_t timeout,
-                               const char *cert_file, const char *key_file) {
+                               const char *cert_file, const char *key_file, const char *customized_ua) {
     if (!callback)
         LOG_ERROR_RETURN(EINVAL, nullptr, "password callback not set");
     auto ctx = new_tls_context_from_file(cert_file, key_file);
     if (!ctx) {
         LOG_ERRNO_RETURN(0, nullptr, "failed to new tls context");
     }
-    return new RegistryFSImpl_v2(callback, caFile ? caFile : "", timeout, ctx);
+    return new RegistryFSImpl_v2(callback, caFile ? caFile : "", timeout, ctx, customized_ua);
 }
 
 class RegistryUploader : public VirtualFile {
@@ -727,7 +737,7 @@ public:
         photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_NONE);
         DEFER(photon::fini());
         m_upload_fs = new RegistryFSImpl_v2({this, &RegistryUploader::load_auth},
-                                            "", m_timeout, m_tls_ctx);
+                                            "", m_timeout, m_tls_ctx, nullptr);
         DEFER({ delete m_upload_fs; });
         m_http_client_ts = photon::now;
         ::posix_memalign(&m_upload_buf, 4096, 1024 * 1024);
