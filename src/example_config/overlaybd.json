@@ -35,5 +35,6 @@
         "updateInterval": 60000000
     },
     "enableAudit": true,
-    "auditPath": "/var/log/overlaybd-audit.log"
+    "auditPath": "/var/log/overlaybd-audit.log",
+    "registryFsVersion": "v2"
 }

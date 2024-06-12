@@ -209,6 +209,8 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | prefetchConfig.concurrency    | Prefetch concurrency for reloading trace, `16` is default                                   |
 | certConfig.certFile | The path for SSL/TLS client certificate file                                                          |
 | certConfig.keyFile  | The path for SSL/TLS client key file                                                                  |
+| userAgent  | customized userAgent to identify HTTP request. default value is package version like 'overlaybd/1.1.14-6c449832'      |
+
 
 > NOTE: `download` is the config for background downloading. After an overlaybd device is lauched, a background task will be running to fetch the whole blobs into local directories. After downloading, I/O requests are directed to local files. Unlike other options, download config is reloaded when a device launching.
 

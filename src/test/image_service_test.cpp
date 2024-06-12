@@ -24,10 +24,15 @@
 #include "photon/net/socket.h"
 #include "photon/io/fd-events.h"
 #include "photon/net/curl.h"
+#include "../version.h"
+#include <photon/net/http/client.h>
+
 
 #include <fcntl.h>
 
 #include "../image_service.cpp"
+
+char *test_ua = nullptr;
 
 photon::net::ISocketServer *new_server(std::string ip, uint16_t port) {
     auto server = photon::net::new_tcp_socket_server();
@@ -111,6 +116,51 @@ TEST(ImageTest, enableMetrics) {
     delete server;
     delete is;
 }
+
+
+int ua_check_handler(void*, photon::net::http::Request &req, photon::net::http::Response &resp, std::string_view) {
+    auto ua = req.headers["User-Agent"];
+    LOG_DEBUG(VALUE(ua));
+    EXPECT_EQ(ua, test_ua);
+    resp.set_result(200);
+    LOG_INFO("expected UA: `", test_ua);
+    std::string str = "success";
+    resp.headers.content_length(7);
+    resp.write((void*)str.data(), str.size());
+    return 0;
+}
+
+
+TEST(http_client, user_agent) {
+    auto tcpserver = photon::net::new_tcp_socket_server();
+    DEFER(delete tcpserver);
+    tcpserver->bind(18731);
+    tcpserver->listen();
+    auto server = photon::net::http::new_http_server();
+    DEFER(delete server);
+    server->add_handler({nullptr, &ua_check_handler});
+    tcpserver->set_handler(server->get_connection_handler());
+    tcpserver->start_loop();
+
+    test_ua = "mytestUA";
+
+    std::string target_get = "http://localhost:18731/file";
+    auto client = photon::net::http::new_http_client();
+    client->set_user_agent(test_ua);
+    DEFER(delete client);
+    auto op = client->new_operation(photon::net::http::Verb::GET, target_get);
+    DEFER(delete op);
+    op->req.headers.content_length(0);
+    client->call(op);
+    EXPECT_EQ(op->status_code, 200);
+    std::string buf;
+    buf.resize(op->resp.headers.content_length());
+    op->resp.read((void*)buf.data(), op->resp.headers.content_length());
+    LOG_DEBUG(VALUE(buf));
+    EXPECT_EQ(true, buf == "success");
+}
+
+
 
 int main(int argc, char** argv) {
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);

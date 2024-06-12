@@ -17,11 +17,8 @@
 
 #include <string>
 #include <vector>
+#include "version.h"
 #include "overlaybd/config_util.h"
-
-#define MACROTOSTR(x) #x
-#define PRINTMACRO(x) MACROTOSTR(x)
-static const char OVERLAYBD_VERSION[] = PRINTMACRO(OVERLAYBD_VER);
 
 namespace ImageConfigNS {
 const int MAX_LAYER_CNT = 256;
@@ -157,6 +154,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(logConfig, LogConfig);
     APPCFG_PARA(prefetchConfig, PrefetchConfig);
     APPCFG_PARA(certConfig, CertConfig);
+    APPCFG_PARA(userAgent, std::string, OVERLAYBD_VERSION);
 };
 
 struct AuthConfig : public ConfigUtils::Config {

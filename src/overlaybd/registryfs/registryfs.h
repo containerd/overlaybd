@@ -32,13 +32,15 @@ photon::fs::IFileSystem *new_registryfs_v1(PasswordCB callback,
                                            const char *caFile = nullptr,
                                            uint64_t timeout = -1,
                                            const char *cert_file = nullptr,
-                                           const char *key_file = nullptr);
+                                           const char *key_file = nullptr,
+                                           const char *__ = nullptr);
 
 photon::fs::IFileSystem *new_registryfs_v2(PasswordCB callback,
                                            const char *caFile = nullptr,
                                            uint64_t timeout = -1,
                                            const char *cert_file = nullptr,
-                                           const char *key_file = nullptr);
+                                           const char *key_file = nullptr,
+                                           const char *customized_ua = nullptr);
 
 photon::fs::IFile* new_registry_uploader(photon::fs::IFile *lfile,
                                          std::string &upload_url,

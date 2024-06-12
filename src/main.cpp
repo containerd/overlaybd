@@ -13,6 +13,7 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
+#include "version.h"
 #include "image_file.h"
 #include "image_service.h"
 #include <photon/common/alog.h>
