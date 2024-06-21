@@ -2,17 +2,52 @@
 #include "erofs/io.h"
 #include <photon/fs/filesystem.h>
 
+#define SECTOR_SIZE 512ULL
+#define SECTOR_BITS 9
 
 struct erofs_vfops_wrapper {
 	struct erofs_vfops ops;
 	void *private_data;
 };
 
+struct erofs_sector {
+   int64_t addr;
+   bool dirty;
+   char data[SECTOR_SIZE];
+};
+
+class ErofsCache {
+public:
+    ErofsCache(photon::fs::IFile *f, int ord) {
+        file = f;
+        order = ord;
+        caches = (struct erofs_sector*)malloc((1 << order) * sizeof(struct erofs_sector));
+        for (int i = 0; i < (1 << order); i ++) {
+            ((struct erofs_sector *)caches + i)->addr = -1;
+            ((struct erofs_sector *)caches + i)->dirty = false;
+        }
+    }
+
+    ~ErofsCache() {
+        free(caches);
+    }
+
+   ssize_t write_sector(u64 addr, char *buf);
+   ssize_t read_sector(u64 addr, char *buf);
+   int flush();
+
+public:
+    struct erofs_sector *caches;
+    photon::fs::IFile *file;
+    int order;
+};
+
 class TarErofsInter::TarErofsImpl {
 public:
     TarErofsImpl(photon::fs::IFile *file, photon::fs::IFile *target, uint64_t fs_blocksize = 4096,
           photon::fs::IFile *bf = nullptr, bool meta_only = true, bool first_layer = true)
-        : file(file), fout(target), fs_base_file(bf), meta_only(meta_only), first_layer(first_layer) {
+        : file(file), fout(target), fs_base_file(bf), meta_only(meta_only), first_layer(first_layer),
+        erofs_cache(target, 7){
 
         target_vfops.ops.pread = target_pread;
         target_vfops.ops.pwrite = target_pwrite;
@@ -43,6 +78,7 @@ public:
     bool first_layer;
     struct erofs_vfops_wrapper target_vfops;
     struct erofs_vfops_wrapper source_vfops;
+    ErofsCache erofs_cache;
 public:
     /* I/O control for target */
     static ssize_t target_pread(struct erofs_vfile *vf, void *buf, u64 offset, size_t len);

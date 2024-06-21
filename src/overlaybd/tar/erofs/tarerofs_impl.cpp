@@ -11,130 +11,257 @@
 
 #define TAREROFS_BLOCK_SIZE 4096
 #define TAREROFS_BLOCK_BITS 12
-#define DATA_OFFSET 1073741824
-#define MIN_RW_LEN 512ULL
-#define round_down_blk(addr) ((addr) & (~(MIN_RW_LEN - 1)))
-#define round_up_blk(addr) (round_down_blk((addr) + MIN_RW_LEN - 1))
+#define round_down_blk(addr) ((addr) & (~(SECTOR_SIZE - 1)))
+#define round_up_blk(addr) (round_down_blk((addr) + SECTOR_SIZE - 1))
+#define min(a, b) (a) < (b) ? (a) : (b)
 #define MAP_FILE_NAME "upper.map"
+
+#define EROFS_UNIMPLEMENTED -1
+
+ssize_t ErofsCache::write_sector(u64 addr, char *buf)
+{
+    if (addr & (SECTOR_SIZE-1)) {
+        LOG_ERROR("Invalid addr, should be aligned to SECTOR_SIZE.");
+        return -1;
+    }
+
+    u64 idx = (addr & ((1 << (order + SECTOR_BITS)) - 1)) >> SECTOR_BITS;
+    struct erofs_sector *p = (struct erofs_sector*)(caches + idx);
+
+    if (p->addr != -1 && p->addr != (int64_t)addr && p->dirty)
+        if (file->pwrite(p->data, SECTOR_SIZE, p->addr) != SECTOR_SIZE) {
+            LOG_ERROR("Fail to write sector %lld.", p->addr);
+            return -1;
+        }
+    memcpy(p->data, buf, SECTOR_SIZE);
+    p->dirty = true;
+    p->addr = addr;
+    return SECTOR_SIZE;
+}
+
+ssize_t ErofsCache::read_sector(u64 addr, char *buf)
+{
+    if (addr & (SECTOR_SIZE - 1)) {
+        LOG_ERROR("Invalid addr, should be aligned to SECTOR_SIZE.");
+        return -1;
+    }
+
+    u64 idx = (addr & ((1 << (order + SECTOR_BITS)) - 1)) >> SECTOR_BITS;
+    struct erofs_sector *p = (struct erofs_sector*)(caches + idx);
+
+    if (p->addr == (int64_t)addr) {
+        memcpy(buf, p->data, SECTOR_SIZE);
+        return SECTOR_SIZE;
+    } else {
+        if(p->dirty) {
+            if (file->pwrite(p->data, SECTOR_SIZE, p->addr) != SECTOR_SIZE) {
+                LOG_ERROR("Fail to write sector %lld.", p->addr);
+                return -1;
+            }
+        }
+        if (file->pread(p->data, SECTOR_SIZE, addr) != SECTOR_SIZE) {
+            LOG_ERROR("Fail to read sector %lld", addr);
+            return -1;
+        }
+        p->addr = addr;
+        p->dirty = false;
+        memcpy(buf, p->data, SECTOR_SIZE);
+        return SECTOR_SIZE;
+    }
+}
+
+int ErofsCache::flush()
+{
+    struct erofs_sector *p;
+
+    for (int i = 0; i < (1 << order); i ++) {
+        p = caches + i;
+        if (p->dirty)
+            if (file->pwrite(p->data, SECTOR_SIZE, p->addr) != SECTOR_SIZE) {
+                LOG_ERROR("Fail to flush sector %lld.\n", p->addr);
+                return -1;
+            }
+    }
+
+    return 0;
+}
 
 /*
  * Helper function for reading from the photon file, since
  * the photon file requires reads to be 512-byte aligned.
  */
-static ssize_t read_photon_file(void *buf, u64 offset, size_t len, photon::fs::IFile *file)
+static ssize_t read_photon_file(void *buf, u64 offset, size_t len,
+                                ErofsCache *cache)
 {
-    size_t ret;
+
+    ssize_t read;
     u64 start, end;
-    char *big_buf;
+    char extra_buf[SECTOR_SIZE];
+    u64 i, j;
 
     start = round_down_blk(offset);
     end = round_up_blk(offset + len);
+    read = 0;
 
-    big_buf = (char *)malloc(end - start);
-    if (!big_buf) {
-        LOG_ERROR("Fail to malloc.");
-        return -1;
+    /* we use the extra_buf to store the first sector or last sector when:
+     * - start != offset
+     * or
+     * - end != offset + len
+     */
+    if (start != offset || end != offset + len) {
+        i = start == offset ? start : start + SECTOR_SIZE;
+        j = end == offset + len ? end : end - SECTOR_SIZE;
+
+        /* read the first sector */
+        if (i != start) {
+            if (cache->read_sector(start, extra_buf) != SECTOR_SIZE) {
+                LOG_ERROR("Fail to read start sector.");
+                return -1;
+            }
+            memcpy(buf, extra_buf + offset - start,
+                        min(start + SECTOR_SIZE - offset,len));
+            read += min(start + SECTOR_SIZE - offset,len);
+        }
+
+        /* read the last sector and avoid re-reading the same sector as above */
+        if (j != end && (i == start || end - start > SECTOR_SIZE)) {
+            if (cache->read_sector(end - SECTOR_SIZE,
+                extra_buf) != SECTOR_SIZE)
+            {
+                LOG_ERROR("Fail to read start sector.");
+                return -1;
+            }
+            memcpy(buf + end - SECTOR_SIZE - offset, extra_buf,
+                                        len + offset + SECTOR_SIZE - end);
+            read += len + offset + SECTOR_SIZE - end;
+        }
+
+        for (u64 addr = i; addr < j; addr += SECTOR_SIZE) {
+            if (cache->read_sector(addr,
+                                   addr - offset + (char*)buf) != SECTOR_SIZE)
+            {
+                LOG_ERROR("Fail to read sector %lld in read_photo_file.\n", i);
+                return -1;
+            }
+            read += SECTOR_SIZE;
+        }
+    } else {
+        /* if read request is sector-aligned, we use the original buffer */
+        for (u64 i = start; i < end; i += SECTOR_SIZE) {
+            if (cache->read_sector(i, (char*)buf + i - start) != SECTOR_SIZE) {
+                LOG_ERROR("Fail to read start sector.");
+                return -1;
+            }
+            read += SECTOR_SIZE;
+        }
     }
 
-    ret = file->pread(big_buf, end - start, start);
-    if (ret != end - start) {
-        LOG_ERROR("Pread faild.");
-        free(big_buf);
-        return -1;
-    }
-
-    memcpy(buf, big_buf + offset - start, len);
-    return len;
+	return read;
 }
 
 /*
  * Helper function for writing to a photon file.
  */
- static ssize_t write_photon_file(const void *buf, u64 offset, size_t len, photon::fs::IFile *file)
+ static ssize_t write_photon_file(const void *buf, u64 offset, size_t len,
+                                  ErofsCache *cache)
  {
-    ssize_t ret;
+    ssize_t write;
     u64 start, end;
-    size_t saved_len = len;
-    char *big_buf;
+    char extra_buf[SECTOR_SIZE];
+    u64 i, j;
 
     start = round_down_blk(offset);
     end = round_up_blk(offset + len);
+    write = 0;
 
     if (start != offset || end != offset + len) {
-        big_buf = (char *)malloc(end - start);
-        if (!big_buf) {
-            LOG_ERROR("Fail to malloc.");
-            return -1;
-        }
-        /* writes within a sector range */
-        if (end - start == MIN_RW_LEN) {
-            ret = file->pread(big_buf, MIN_RW_LEN, start);
-            if (ret != MIN_RW_LEN) {
-                LOG_ERROR("Fail to pread.");
-                free(big_buf);
+        i = start == offset ? start : start + SECTOR_SIZE;
+        j = end == offset + len ? end : end - SECTOR_SIZE;
+
+        if (i != start) {
+            if (cache->read_sector(start, extra_buf) != SECTOR_SIZE) {
+                LOG_ERROR("Fail to read sector %lld.\n", start);
                 return -1;
             }
-        } else {
-            /*
-             * writes that span at least two sectors,
-             * we read the head and tail sectors in such case
-             */
-            if (start != offset) {
-                ret = file->pread(big_buf, (size_t)MIN_RW_LEN, start);
-                if (ret != MIN_RW_LEN) {
-                    LOG_ERROR("Fail to pread.");
-                    free(big_buf);
-                    return -1;
-                }
+            memcpy(extra_buf + offset - start, buf,
+                   min(start +  SECTOR_SIZE - offset, len));
+            if (cache->write_sector(start, extra_buf) != SECTOR_SIZE) {
+                LOG_ERROR("Fail to write sector %lld\n", start);
+                return -1;
             }
-
-            if (end != offset + len) {
-                ret = file->pread(big_buf + end - start - MIN_RW_LEN,
-                                (size_t)MIN_RW_LEN,
-                                (off_t)end - MIN_RW_LEN);
-                if (ret != MIN_RW_LEN) {
-                    LOG_ERROR("Fail to pread.");
-                    free(big_buf);
-                    return -1;
-                }
-            }
+            write += min(start +  SECTOR_SIZE - offset, len);
         }
 
-        memcpy(big_buf + offset - start, buf, len);
-        len = end - start;
-        ret = file->pwrite(big_buf, len, start);
-        free(big_buf);
+        if (j != end && (i == start || end - start > SECTOR_SIZE)) {
+            if (cache->read_sector(end - SECTOR_SIZE, extra_buf)
+                != SECTOR_SIZE)
+            {
+                LOG_ERROR("Fail to read sector %lld.", end - SECTOR_SIZE);
+                return -1;
+            }
+            memcpy(extra_buf, buf + end - SECTOR_SIZE - offset,
+                   offset + len + SECTOR_SIZE - end);
+            if (cache->write_sector(end - SECTOR_SIZE, extra_buf)
+                != SECTOR_SIZE)
+            {
+                LOG_ERROR("Fail to write sector %lld.", end - SECTOR_SIZE);
+                return -1;
+            }
+            write += offset + len + SECTOR_SIZE - end;
+        }
+
+        for (u64 addr = i; addr < j; addr += SECTOR_SIZE) {
+            if (cache->write_sector(addr, (char*)buf + addr - offset)
+                != SECTOR_SIZE)
+            {
+                LOG_ERROR("Fail to write sector %lld.", addr);
+                return -1;
+            }
+            write += SECTOR_SIZE;
+        }
     } else {
-        ret = file->pwrite(buf, len, offset);
+        for (u64 addr = start; addr < end; addr += SECTOR_SIZE) {
+            if (cache->write_sector(addr, (char *)buf + addr - start)
+                != SECTOR_SIZE)
+            {
+                LOG_ERROR("Fail to write sector %lld.", addr);
+                return -1;
+            }
+            write += SECTOR_SIZE;
+        }
     }
 
-    if ((size_t)ret != len) {
-        LOG_ERROR("Fail to write photo file.");
-        return -1;
-    }
-
-    return saved_len;
+    return write;
 }
 
-TarErofsInter::TarErofsImpl *TarErofsInter::TarErofsImpl::ops_to_tarerofsimpl(struct erofs_vfops *ops)
+TarErofsInter::TarErofsImpl*
+TarErofsInter::TarErofsImpl::ops_to_tarerofsimpl(struct erofs_vfops *ops)
 {
-    struct erofs_vfops_wrapper *evw = reinterpret_cast<struct erofs_vfops_wrapper*>(ops);
-    TarErofsImpl *obj = reinterpret_cast<TarErofsImpl*>(evw->private_data);
+    struct erofs_vfops_wrapper *evw =
+        reinterpret_cast<struct erofs_vfops_wrapper*>(ops);
+    TarErofsImpl *obj =
+        reinterpret_cast<TarErofsImpl*>(evw->private_data);
     return obj;
 }
 
 /* I/O control for target */
-ssize_t TarErofsInter::TarErofsImpl::target_pread(struct erofs_vfile *vf, void *buf, u64 offset, size_t len)
+ssize_t
+TarErofsInter::TarErofsImpl::target_pread(struct erofs_vfile *vf,
+                                          void *buf, u64 offset, size_t len)
 {
     TarErofsImpl *obj = ops_to_tarerofsimpl(vf->ops);
     photon::fs::IFile *fout = obj->fout;
 
-    if (read_photon_file(buf, offset, len, fout) != (ssize_t)len)
+    if (read_photon_file(buf, offset, len, &obj->erofs_cache) != (ssize_t)len)
         return -1;
+
     return len;
 }
 
-ssize_t TarErofsInter::TarErofsImpl::target_pwrite(struct erofs_vfile *vf, const void *buf, u64 offset, size_t len)
+ssize_t
+TarErofsInter::TarErofsImpl::target_pwrite(struct erofs_vfile *vf,
+                                           const void *buf, u64 offset,
+                                           size_t len)
 {
     TarErofsImpl *obj = ops_to_tarerofsimpl(vf->ops);
     photon::fs::IFile *fout = obj->fout;
@@ -143,19 +270,20 @@ ssize_t TarErofsInter::TarErofsImpl::target_pwrite(struct erofs_vfile *vf, const
     if (!buf)
         return -EINVAL;
 
-    ret = write_photon_file(buf, offset, len, fout);
+    ret = write_photon_file(buf, offset, len, &obj->erofs_cache);
     return ret;
 }
 
 int TarErofsInter::TarErofsImpl::target_fsync(struct erofs_vfile *vf)
 {
     TarErofsImpl *obj = ops_to_tarerofsimpl(vf->ops);
-    photon::fs::IFile *fout = obj->fout;
 
-    return fout->fsync();
+    return obj->erofs_cache.flush();
 }
 
-int TarErofsInter::TarErofsImpl::target_fallocate(struct erofs_vfile *vf, u64 offset, size_t len, bool pad)
+int
+TarErofsInter::TarErofsImpl::target_fallocate(struct erofs_vfile *vf,
+                                              u64 offset, size_t len, bool pad)
 {
 	static const char zero[4096] = {0};
 	ssize_t ret;
@@ -169,55 +297,71 @@ int TarErofsInter::TarErofsImpl::target_fallocate(struct erofs_vfile *vf, u64 of
 	}
 	ret = target_pwrite(vf, zero, offset, len);
 	if (ret != (ssize_t)len) {
-		return -2;
+		return -1;
 	}
 	return 0;
 }
 
-int TarErofsInter::TarErofsImpl::target_ftruncate(struct erofs_vfile *vf, u64 length)
+int
+TarErofsInter::TarErofsImpl::target_ftruncate(struct erofs_vfile *vf,
+                                              u64 length)
 {
     return 0;
 }
 
 
-ssize_t TarErofsInter::TarErofsImpl::target_read(struct erofs_vfile *vf, void *buf, size_t len)
+ssize_t
+TarErofsInter::TarErofsImpl::target_read(struct erofs_vfile *vf,
+                                         void *buf, size_t len)
 {
-    return -1;
+    return EROFS_UNIMPLEMENTED;
 }
 
-off_t TarErofsInter::TarErofsImpl::target_lseek(struct erofs_vfile *vf, u64 offset, int whence)
+off_t
+TarErofsInter::TarErofsImpl::target_lseek(struct erofs_vfile *vf,
+                                          u64 offset, int whence)
 {
-    return -1;
+    return EROFS_UNIMPLEMENTED;
 }
 
 /* I/O control for source */
-ssize_t TarErofsInter::TarErofsImpl::source_pread(struct erofs_vfile *vf, void *buf, u64 offset, size_t len)
+ssize_t
+TarErofsInter::TarErofsImpl::source_pread(struct erofs_vfile *vf,
+                                          void *buf, u64 offset, size_t len)
 {
-    return -1;
+    return EROFS_UNIMPLEMENTED;
 }
 
-ssize_t TarErofsInter::TarErofsImpl::source_pwrite(struct erofs_vfile *vf, const void *buf, u64 offset, size_t len)
+ssize_t
+TarErofsInter::TarErofsImpl::source_pwrite(struct erofs_vfile *vf,
+                                           const void *buf,
+                                           u64 offset, size_t len)
 {
-    return -1;
+    return EROFS_UNIMPLEMENTED;
 }
 
 int TarErofsInter::TarErofsImpl::source_fsync(struct erofs_vfile *vf)
 {
-    return -1;
+    return EROFS_UNIMPLEMENTED;
 }
 
-int TarErofsInter::TarErofsImpl::source_fallocate(struct erofs_vfile *vf, u64 offset, size_t len, bool pad)
+int
+TarErofsInter::TarErofsImpl::source_fallocate(struct erofs_vfile *vf,
+                                              u64 offset, size_t len, bool pad)
 {
-    return -1;
+    return EROFS_UNIMPLEMENTED;
 }
 
-int TarErofsInter::TarErofsImpl::source_ftruncate(struct erofs_vfile *vf, u64 length)
+int
+TarErofsInter::TarErofsImpl::source_ftruncate(struct erofs_vfile *vf,
+                                              u64 length)
 {
-    return -1;
+    return EROFS_UNIMPLEMENTED;
 }
 
-
-ssize_t TarErofsInter::TarErofsImpl::source_read(struct erofs_vfile *vf, void *buf, size_t bytes)
+ssize_t
+TarErofsInter::TarErofsImpl::source_read(struct erofs_vfile *vf,
+                                         void *buf, size_t bytes)
 {
     TarErofsImpl *obj = ops_to_tarerofsimpl(vf->ops);
 
@@ -240,7 +384,9 @@ ssize_t TarErofsInter::TarErofsImpl::source_read(struct erofs_vfile *vf, void *b
 }
 
 
-off_t TarErofsInter::TarErofsImpl::source_lseek(struct erofs_vfile *vf, u64 offset, int whence)
+off_t
+TarErofsInter::TarErofsImpl::source_lseek(struct erofs_vfile *vf,
+                                          u64 offset, int whence)
 {
     TarErofsImpl *obj = ops_to_tarerofsimpl(vf->ops);
     photon::fs::IFile *file = obj->file;
@@ -258,7 +404,8 @@ struct erofs_mkfs_cfg {
 
 static int rebuild_src_count;
 
-int erofs_mkfs(struct erofs_mkfs_cfg *cfg) {
+int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
+{
     int err;
     struct erofs_tarfile *erofstar;
     struct erofs_sb_info *sbi;
@@ -349,7 +496,9 @@ exit:
     return err;
 }
 
-static int init_sbi(struct erofs_sb_info *sbi, photon::fs::IFile *fout, struct erofs_vfops *ops)
+static int
+init_sbi(struct erofs_sb_info *sbi,
+         photon::fs::IFile *fout, struct erofs_vfops *ops)
 {
     int err;
     struct timeval t;
@@ -367,7 +516,9 @@ static int init_sbi(struct erofs_sb_info *sbi, photon::fs::IFile *fout, struct e
     return 0;
 }
 
-static int init_tar(struct erofs_tarfile *erofstar, photon::fs::IFile *tar_file, struct erofs_vfops *ops)
+static int
+init_tar(struct erofs_tarfile *erofstar,
+         photon::fs::IFile *tar_file, struct erofs_vfops *ops)
 {
     int err;
     struct stat st;
@@ -415,7 +566,9 @@ static int write_map_file(photon::fs::IFile *fout)
        return -1;
     }
 
-    while (fscanf(fp, "%" PRIx64" %x %" PRIx64 "\n", &blkaddr, &nblocks, &toff) >= 3) {
+    while (fscanf(fp, "%" PRIx64" %x %" PRIx64 "\n", &blkaddr, &nblocks, &toff)
+           >= 3)
+    {
         LSMT::RemoteMapping lba;
         lba.offset = blkaddr * TAREROFS_BLOCK_SIZE;
         lba.count = nblocks * TAREROFS_BLOCK_SIZE;
@@ -430,9 +583,11 @@ static int write_map_file(photon::fs::IFile *fout)
     return 0;
 }
 
-static void close_sbi(struct erofs_sb_info *sbi)
+static void close_sbi(struct erofs_sb_info *sbi, ErofsCache *cache)
 {
-    return;
+    if (cache->flush()) {
+        LOG_ERROR("Fail to flush caches.");
+    }
 }
 
 static void close_tar(struct erofs_tarfile *erofstar)
@@ -447,19 +602,19 @@ int TarErofsInter::TarErofsImpl::extract_all() {
     int err;
 
     /* initialization of sbi */
-    err = init_sbi(&sbi, fout, reinterpret_cast<struct erofs_vfops*>(&target_vfops));
+    err = init_sbi(&sbi, fout,
+                   reinterpret_cast<struct erofs_vfops*>(&target_vfops));
     if (err) {
-        close_sbi(&sbi);
+        close_sbi(&sbi, &erofs_cache);
         LOG_ERROR("Failed to init sbi.");
         return err;
     }
     /* initialization of erofstar */
-    err = init_tar(&erofstar, file, reinterpret_cast<struct erofs_vfops*>(&source_vfops));
+    err = init_tar(&erofstar, file,
+                   reinterpret_cast<struct erofs_vfops*>(&source_vfops));
     if (err) {
-        close_sbi(&sbi);
-        close_tar(&erofstar);
         LOG_ERROR("Failed to init tarerofs");
-        return err;
+        goto exit;
     }
 
     cfg.sbi = &sbi;
@@ -469,29 +624,28 @@ int TarErofsInter::TarErofsImpl::extract_all() {
 
     err = erofs_mkfs(&cfg);
     if (err) {
-        close_sbi(&sbi);
-        close_tar(&erofstar);
         LOG_ERROR("Failed to mkfs.");
-        return err;
+        goto exit;
     }
 
     /* write mapfile */
     err = write_map_file(fout);
     if (err) {
-        close_sbi(&sbi);
-        close_tar(&erofstar);
         LOG_ERROR("Failed to write mapfile.");
-        return err;
+        goto exit;
     }
-
-    close_sbi(&sbi);
+exit:
+    close_sbi(&sbi, &erofs_cache);
     close_tar(&erofstar);
-    return 0;
+    return err;
 }
 
-TarErofsInter::TarErofsInter(photon::fs::IFile *file, photon::fs::IFile *target, uint64_t fs_blocksize,
-          photon::fs::IFile *bf, bool meta_only, bool first_layer) :
-          impl(new TarErofsImpl(file, target, fs_blocksize, bf, meta_only, first_layer))
+TarErofsInter::TarErofsInter(photon::fs::IFile *file,
+                             photon::fs::IFile *target, uint64_t fs_blocksize,
+                             photon::fs::IFile *bf, bool meta_only,
+                             bool first_layer) :
+    impl(new TarErofsImpl(file, target, fs_blocksize,
+                          bf, meta_only, first_layer))
 {
 }
 
