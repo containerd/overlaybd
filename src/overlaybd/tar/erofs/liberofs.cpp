@@ -4,6 +4,7 @@
 #include "erofs/cache.h"
 #include "erofs/block_list.h"
 #include "erofs/inode.h"
+#include "erofs/config.h"
 #include "../../lsmt/file.h"
 #include "../../lsmt/index.h"
 #include <photon/common/alog.h>
@@ -449,7 +450,6 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
             err =  PTR_ERR(sb_bh);
             goto exit;
         }
-        //erofs_uuid_generate(sbi->uuid);
     } else {
         err = erofs_read_superblock(sbi);
         if (err) {
@@ -475,7 +475,7 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
         goto exit;
     }
 
-    err = erofs_rebuild_dump_tree(root, cfg->incremental, cfg->ovlfs_strip);
+    err = erofs_rebuild_dump_tree(root, cfg->incremental);
     if (err < 0) {
         LOG_ERROR("[erofs] Fail to dump tree.");
         goto exit;
@@ -514,14 +514,8 @@ static int erofs_init_sbi(struct erofs_sb_info *sbi, photon::fs::IFile *fout,
                           struct erofs_vfops *ops, int blkbits)
 {
     int err;
-    struct timeval t;
 
     sbi->blkszbits = (char)blkbits;
-    err = gettimeofday(&t, NULL);
-    if (err)
-        return err;
-    sbi->build_time = t.tv_sec;
-    sbi->build_time_nsec = t.tv_usec;
     sbi->bdev.ops = ops;
     fout->lseek(0, 0);
     sbi->devsz = INT64_MAX;
@@ -614,6 +608,7 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
     struct erofs_sb_info sbi = {};
     struct erofs_tarfile erofstar = {};
     struct erofs_mkfs_cfg cfg;
+    struct erofs_configure *erofs_cfg;
     int err;
 
     _target = target;
@@ -657,7 +652,8 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
     cfg.sbi = &sbi;
     cfg.erofstar = &erofstar;
     cfg.incremental = !first_layer;
-    cfg.ovlfs_strip = true;
+    erofs_cfg = erofs_get_configure();
+    erofs_cfg->c_ovlfs_strip = true;
 
     err = erofs_mkfs(&cfg);
     if (err) {
