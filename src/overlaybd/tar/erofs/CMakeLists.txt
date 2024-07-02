@@ -13,7 +13,7 @@ execute_process(
     WORKING_DIRECTORY ${erofs-utils_SOURCE_DIR}
 )
 execute_process(
-    COMMAND ./configure --disable-lz4 --without-liblzma --without-libzstd --without-uuid
+    COMMAND ./configure --disable-lz4 --disable-lzma --without-libzstd --without-uuid --disable-multithreading
     WORKING_DIRECTORY ${erofs-utils_SOURCE_DIR}
 )
 execute_process(
