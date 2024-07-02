@@ -3,7 +3,7 @@ include(FetchContent)
 FetchContent_Declare(
     erofs-utils
     GIT_REPOSITORY https://gitee.com/anolis/erofs-utils.git
-    GIT_TAG      overlaybd-dev-3
+    GIT_TAG      6ae5eb64136aeea90bda46d286af4628ea35d974
 )
 
 FetchContent_MakeAvailable(erofs-utils)
@@ -13,7 +13,7 @@ execute_process(
     WORKING_DIRECTORY ${erofs-utils_SOURCE_DIR}
 )
 execute_process(
-    COMMAND ./configure --disable-lz4 --without-liblzma --without-libzstd --without-uuid
+    COMMAND ./configure --disable-lz4 --disable-lzma --without-libzstd --without-uuid --disable-multithreading
     WORKING_DIRECTORY ${erofs-utils_SOURCE_DIR}
 )
 execute_process(

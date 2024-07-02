@@ -16,7 +16,6 @@
 #define round_down_blk(addr) ((addr) & (~(SECTOR_SIZE - 1)))
 #define round_up_blk(addr) (round_down_blk((addr) + SECTOR_SIZE - 1))
 #define min(a, b) (a) < (b) ? (a) : (b)
-#define MAP_FILE_NAME "upper.map"
 
 #define EROFS_UNIMPLEMENTED 1
 
@@ -257,7 +256,7 @@ static ssize_t erofs_read_photon_file(void *buf, u64 offset, size_t len,
                 LOG_ERROR("Fail to read sector %lld.", end - SECTOR_SIZE);
                 return -1;
             }
-            memcpy(extra_buf, buf + end - SECTOR_SIZE - offset,
+            memcpy(extra_buf, (char*)buf + end - SECTOR_SIZE - offset,
                    offset + len + SECTOR_SIZE - end);
             if (cache->write_sector(end - SECTOR_SIZE, extra_buf)
                 != SECTOR_SIZE)
@@ -377,28 +376,13 @@ static int erofs_source_fallocate(struct erofs_vfile *vf,
 
 static int erofs_source_ftruncate(struct erofs_vfile *vf, u64 length)
 {
-    return EROFS_UNIMPLEMENTED;
+    return -EROFS_UNIMPLEMENTED;
 }
 
 static ssize_t erofs_source_read(struct erofs_vfile *vf, void *buf,
                                  size_t bytes)
 {
-    u64 i = 0;
-    while (bytes) {
-        u64 len = bytes > INT_MAX ? INT_MAX : bytes;
-        u64 ret;
-
-        ret = _source->read(buf + i, len);
-        if (ret < 1) {
-            if (ret == 0)
-                break;
-            else
-                return -1;
-        }
-        bytes -= ret;
-        i += ret;
-    }
-    return i;
+    return _source->read(buf, bytes);
 }
 
 static off_t erofs_source_lseek(struct erofs_vfile *vf, u64 offset, int whence)
@@ -411,6 +395,7 @@ struct erofs_mkfs_cfg {
     struct erofs_tarfile *erofstar;
     bool incremental;
     bool ovlfs_strip;
+    FILE *mp_fp;
 };
 
 static int rebuild_src_count;
@@ -421,7 +406,7 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
     struct erofs_tarfile *erofstar;
     struct erofs_sb_info *sbi;
     struct erofs_buffer_head *sb_bh;
-    struct erofs_inode *root;
+    struct erofs_inode *root = NULL;
     erofs_blk_t nblocks;
 
     erofstar = cfg->erofstar;
@@ -429,10 +414,10 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
     if (!erofstar || !sbi)
         return -EINVAL;
 
-    if (!erofstar->mapfile)
+    if (!cfg->mp_fp)
         return -EINVAL;
 
-    err = erofs_blocklist_open(erofstar->mapfile, true);
+    err = erofs_blocklist_open(cfg->mp_fp, true);
     if (err) {
         LOG_ERROR("[erofs] Fail to open erofs blocklist.");
         return -EINVAL;
@@ -444,7 +429,12 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
     }
 
     if (!cfg->incremental) {
-        sb_bh = erofs_reserve_sb(sbi);
+        sbi->bmgr = erofs_buffer_init(sbi, 0);
+        if (!sbi->bmgr) {
+            err = -ENOMEM;
+            goto exit;
+        }
+        sb_bh = erofs_reserve_sb(sbi->bmgr);
         if (IS_ERR(sb_bh)) {
             LOG_ERROR("[erofs] Fail to reseve space for superblock.");
             err =  PTR_ERR(sb_bh);
@@ -456,7 +446,11 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
             LOG_ERROR("[erofs] Fail to read superblock.");
             goto exit;
         }
-        erofs_buffer_init(sbi, sbi->primarydevice_blocks);
+        sbi->bmgr = erofs_buffer_init(sbi, sbi->primarydevice_blocks);
+        if (!sbi->bmgr) {
+            err = -ENOMEM;
+            goto exit;
+        }
         sb_bh = NULL;
     }
 
@@ -471,17 +465,17 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
 
     while (!(err = tarerofs_parse_tar(root, erofstar)));
     if (err < 0) {
-        LOG_ERROR("[erofs] Fail to parse tar file.");
+        LOG_ERROR("[erofs] Fail to parse tar file.", err);
         goto exit;
     }
 
     err = erofs_rebuild_dump_tree(root, cfg->incremental);
     if (err < 0) {
-        LOG_ERROR("[erofs] Fail to dump tree.");
+        LOG_ERROR("[erofs] Fail to dump tree.", err);
         goto exit;
     }
 
-    err = erofs_bflush(NULL);
+    err = erofs_bflush(sbi->bmgr, NULL);
     if (err) {
         LOG_ERROR("[erofs] Bflush failed.");
         goto exit;
@@ -498,7 +492,7 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
     }
 
     /* flush all remaining buffers */
-    err = erofs_bflush(NULL);
+    err = erofs_bflush(sbi->bmgr, NULL);
     if (err)
         goto exit;
 
@@ -506,6 +500,7 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
 exit:
     if (root)
         erofs_iput(root);
+    erofs_buffer_exit(sbi->bmgr);
     erofs_blocklist_close();
     return err;
 }
@@ -513,8 +508,6 @@ exit:
 static int erofs_init_sbi(struct erofs_sb_info *sbi, photon::fs::IFile *fout,
                           struct erofs_vfops *ops, int blkbits)
 {
-    int err;
-
     sbi->blkszbits = (char)blkbits;
     sbi->bdev.ops = ops;
     fout->lseek(0, 0);
@@ -524,13 +517,9 @@ static int erofs_init_sbi(struct erofs_sb_info *sbi, photon::fs::IFile *fout,
 }
 
 static int erofs_init_tar(struct erofs_tarfile *erofstar,
-                          photon::fs::IFile *tar_file, struct erofs_vfops *ops)
+                          struct erofs_vfops *ops)
 {
-    int err;
-    struct stat st;
-
     erofstar->global.xattrs = LIST_HEAD_INIT(erofstar->global.xattrs);
-    erofstar->mapfile = MAP_FILE_NAME;
     erofstar->aufs = true;
     erofstar->rvsp_mode = true;
     erofstar->dev = rebuild_src_count + 1;
@@ -538,12 +527,7 @@ static int erofs_init_tar(struct erofs_tarfile *erofstar,
     erofstar->ios.feof = false;
     erofstar->ios.tail = erofstar->ios.head = 0;
     erofstar->ios.dumpfd = -1;
-    err = tar_file->fstat(&st);
-    if (err) {
-        LOG_ERROR("Fail to fstat tar file.");
-        return err;
-    }
-    erofstar->ios.sz = st.st_size;
+    erofstar->ios.sz = 0;
     erofstar->ios.bufsize = 16384;
     do {
             erofstar->ios.buffer = (char*)malloc(erofstar->ios.bufsize);
@@ -560,18 +544,16 @@ static int erofs_init_tar(struct erofs_tarfile *erofstar,
     return 0;
 }
 
-static int erofs_write_map_file(photon::fs::IFile *fout, uint64_t blksz)
+static int erofs_write_map_file(photon::fs::IFile *fout, uint64_t blksz, FILE *fp)
 {
-    FILE *fp;
     uint64_t blkaddr, toff;
     uint32_t nblocks;
 
-    fp = fopen(MAP_FILE_NAME, "r");
     if (fp == NULL) {
        LOG_ERROR("unable to get upper.map, ignored");
        return -1;
     }
-
+    rewind(fp);
     while (fscanf(fp, "%" PRIx64" %x %" PRIx64 "\n", &blkaddr, &nblocks, &toff)
            >= 3)
     {
@@ -584,9 +566,8 @@ static int erofs_write_map_file(photon::fs::IFile *fout, uint64_t blksz)
             LOG_ERRNO_RETURN(0, -1, "failed to write lba");
         }
     }
-    fclose(fp);
 
-    return unlink(MAP_FILE_NAME);
+    return 0;
 }
 
 static int erofs_close_sbi(struct erofs_sb_info *sbi, ErofsCache *cache)
@@ -643,7 +624,7 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
         return err;
     }
     /* initialization of erofstar */
-    err = erofs_init_tar(&erofstar, _source, &source_vfops);
+    err = erofs_init_tar(&erofstar, &source_vfops);
     if (err) {
         LOG_ERROR("Failed to init tarerofs");
         goto exit;
@@ -654,6 +635,7 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
     cfg.incremental = !first_layer;
     erofs_cfg = erofs_get_configure();
     erofs_cfg->c_ovlfs_strip = true;
+    cfg.mp_fp = std::tmpfile();
 
     err = erofs_mkfs(&cfg);
     if (err) {
@@ -662,7 +644,7 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
     }
 
     /* write mapfile */
-    err = erofs_write_map_file(_target, blksize);
+    err = erofs_write_map_file(_target, blksize, cfg.mp_fp);
     if (err) {
         LOG_ERROR("Failed to write mapfile.");
         goto exit;
@@ -670,6 +652,7 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
 exit:
     err = erofs_close_sbi(&sbi, &erofs_cache);
     erofs_close_tar(&erofstar);
+    std::fclose(cfg.mp_fp);
     return err;
 }
 
