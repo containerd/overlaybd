@@ -35,16 +35,21 @@ if(ENABLE_DSA OR ENABLE_ISAL)
         target_link_libraries(crc32_lib -lisal)
     endif()
 endif()
-set (CMAKE_CXX_STANDARD 14)
 
 add_library(zfile_lib STATIC ${SOURCE_ZFILE} ${SOURCE_LZ4})
 target_link_libraries(zfile_lib photon_static crc32_lib ${LIBZSTD})
 
 if (ENABLE_QAT)
+    add_subdirectory(thirdparty)
+    add_dependencies(zfile_lib thirdparty_lib)
+    # target_link_directories(zfile_lib PUBLIC ${LIBRARY_OUTPUT_PATH})
+    # target_include_directories(zfile_lib PUBLIC ${LIBRARY_OUTPUT_PATH}/include)
     target_compile_definitions(zfile_lib PUBLIC -DENABLE_QAT)
-    target_link_libraries(zfile_lib -lpthread -lpci)
+    target_link_libraries(zfile_lib -lpci -lqatzip)
     #target_link_libraries(zfile_lib -lqat_s -lusdm_drv_s -lpthread -lpci)
 endif()
+
+set (CMAKE_CXX_STANDARD 14)
 
 if (BUILD_TESTING)
     add_subdirectory(test)
