@@ -39,9 +39,23 @@ if [[ ${OS} =~ "ubuntu" ]]; then
     PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.${DISTRO}"
 elif [[ ${OS} =~ "centos" ]]; then
     if [[ ${OS} == "centos:7" ]]; then
-        yum install -y centos-release-scl
-        yum install -y devtoolset-7-gcc-c++
+        sed -i s/mirror.centos.org/vault.centos.org/g /etc/yum.repos.d/*.repo
+        sed -i s/^#.*baseurl=http/baseurl=http/g /etc/yum.repos.d/*.repo
+        sed -i s/^mirrorlist=http/#mirrorlist=http/g /etc/yum.repos.d/*.repo
+        yum clean all
+        rm -rf /var/cache/yum
+        yum -y update
 
+        yum install -y centos-release-scl
+
+        sed -i s/mirror.centos.org/vault.centos.org/g /etc/yum.repos.d/*.repo
+        sed -i s/^#.*baseurl=http/baseurl=http/g /etc/yum.repos.d/*.repo
+        sed -i s/^mirrorlist=http/#mirrorlist=http/g /etc/yum.repos.d/*.repo
+        yum clean all
+        rm -rf /var/cache/yum
+        yum -y update
+
+        yum install -y devtoolset-7-gcc-c++
         export PATH="/opt/rh/devtoolset-7/root/usr/bin:$PATH"
         PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.el7"
         COMPILER="-DCMAKE_C_COMPILER=/opt/rh/devtoolset-7/root/usr/bin/gcc -DCMAKE_CXX_COMPILER=/opt/rh/devtoolset-7/root/usr/bin/g++"
