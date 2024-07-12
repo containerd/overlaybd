@@ -5,13 +5,14 @@
 #include <photon/fs/fiemap.h>
 #include <photon/common/string_view.h>
 
-class LibErofs{
+class LibErofs {
 public:
-    LibErofs(photon::fs::IFile *target, uint64_t blksize);
+    LibErofs(photon::fs::IFile *target, uint64_t blksize, bool import_tar_headers = false);
     ~LibErofs();
     int extract_tar(photon::fs::IFile *source, bool meta_only, bool first_layer);
 private:
     photon::fs::IFile * target= nullptr; /* output file */
     uint64_t blksize;
+    bool ddtaridx;
 };
 #endif

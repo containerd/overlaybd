@@ -127,15 +127,13 @@ int main(int argc, char **argv) {
 
     // for now, buffer_file can't be used with turboOCI
     if (fstype == "erofs") {
-        photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
-
         ImageConfigNS::ImageConfig cfg;
         if (!cfg.ParseJSON(image_config_path)) {
             fprintf(stderr, "failed to parse image config\n");
             exit(-1);
         }
 
-        auto tar = new LibErofs(imgfile, 4096);
+        auto tar = new LibErofs(imgfile, 4096, import_tar_headers);
         if (tar->extract_tar(src_file, true, cfg.lowers().size() == 0) < 0) {
             fprintf(stderr, "failed to extract\n");
             exit(-1);
