@@ -2,6 +2,7 @@
 #include "erofs/tar.h"
 #include "erofs/io.h"
 #include "erofs/cache.h"
+#include "erofs/blobchunk.h"
 #include "erofs/block_list.h"
 #include "erofs/inode.h"
 #include "erofs/config.h"
@@ -423,11 +424,6 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
         return -EINVAL;
     }
 
-    if (!erofstar->rvsp_mode) {
-        LOG_ERROR("[erofs] Must be in RVSP mode.");
-        return -EINVAL;
-    }
-
     if (!cfg->incremental) {
         sbi->bmgr = erofs_buffer_init(sbi, 0);
         if (!sbi->bmgr) {
@@ -473,6 +469,14 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
     if (err < 0) {
         LOG_ERROR("[erofs] Fail to dump tree.", err);
         goto exit;
+    }
+
+    if (!erofstar->rvsp_mode) {
+       err = erofs_mkfs_dump_blobs(sbi);
+       if (err) {
+           LOG_ERROR("[erofs] Fail to dump blob", err);
+           goto exit;
+       }
     }
 
     err = erofs_bflush(sbi->bmgr, NULL);
@@ -521,7 +525,6 @@ static int erofs_init_tar(struct erofs_tarfile *erofstar,
 {
     erofstar->global.xattrs = LIST_HEAD_INIT(erofstar->global.xattrs);
     erofstar->aufs = true;
-    erofstar->rvsp_mode = true;
     erofstar->dev = rebuild_src_count + 1;
 
     erofstar->ios.feof = false;
@@ -630,6 +633,9 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
         goto exit;
     }
 
+    erofstar.rvsp_mode = true;
+    if (ddtaridx)
+            erofstar.ddtaridx_mode = true;
     cfg.sbi = &sbi;
     cfg.erofstar = &erofstar;
     cfg.incremental = !first_layer;
@@ -656,8 +662,8 @@ exit:
     return err;
 }
 
-LibErofs::LibErofs(photon::fs::IFile *target, uint64_t blksize)
-    : target(target), blksize(blksize)
+LibErofs::LibErofs(photon::fs::IFile *target, uint64_t blksize, bool import_tar_headers)
+    : target(target), blksize(blksize), ddtaridx(import_tar_headers)
 {
 }
 

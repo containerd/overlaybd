@@ -2,8 +2,8 @@ include(FetchContent)
 
 FetchContent_Declare(
     erofs-utils
-    GIT_REPOSITORY https://gitee.com/anolis/erofs-utils.git
-    GIT_TAG      6ae5eb64136aeea90bda46d286af4628ea35d974
+    GIT_REPOSITORY git://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs-utils.git
+    GIT_TAG        617d708925b3c5d1dd132853e47d9d9f51443e6f
 )
 
 FetchContent_MakeAvailable(erofs-utils)
