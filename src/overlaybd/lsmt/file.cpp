@@ -181,8 +181,6 @@ static LSMTReadOnlyFile *open_file_ro(IFile *file, bool ownership, bool reserve_
 static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer = false,
                                 ssize_t st_size = -1);
 
-static const uint32_t ALIGNMENT = 512; // same as trim block size.
-static const uint32_t ALIGNMENT4K = 4096;
 
 static const int ABORT_FLAG_DETECTED = -2;
 
@@ -546,7 +544,9 @@ public:
             auto ret = pread(buf, MAX_IO_SIZE, offset);
             if (ret < (ssize_t)MAX_IO_SIZE)
                 return -1;
-            (char *&)buf += MAX_IO_SIZE;
+            if (buf != nullptr) {
+                (char *&)buf += MAX_IO_SIZE;
+            }
             count -= MAX_IO_SIZE;
             offset += MAX_IO_SIZE;
         }
@@ -557,8 +557,10 @@ public:
             m_index, s,
             [&](const Segment &m) __attribute__((always_inline)) {
                 auto step = m.length * ALIGNMENT;
-                memset(buf, 0, step);
-                (char *&)buf += step;
+                if (buf != nullptr) {
+                    memset(buf, 0, step);
+                    (char *&)buf += step;
+                }
                 return 0;
             },
             [&](const SegmentMapping &m) __attribute__((always_inline)) {

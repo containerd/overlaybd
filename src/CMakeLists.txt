@@ -14,6 +14,7 @@ add_library(overlaybd_image_lib
   bk_download.cpp
   prefetch.cpp
   tools/sha256file.cpp
+  tools/comm_func.cpp
 )
 target_include_directories(overlaybd_image_lib PUBLIC
   ${CURL_INCLUDE_DIRS}

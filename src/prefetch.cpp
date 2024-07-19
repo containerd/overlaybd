@@ -13,7 +13,9 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+#include <cerrno>
 #include <memory>
+#include <string>
 #include <vector>
 #include <map>
 #include <queue>
@@ -21,14 +23,23 @@ limitations under the License.
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <fstream>
+#include <regex>
 
 #include "prefetch.h"
+#include "tools/comm_func.h"
+#include "overlaybd/lsmt/file.h"
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
 #include <photon/fs/forwardfs.h>
 #include <photon/fs/localfs.h>
 #include <photon/thread/thread11.h>
 #include "overlaybd/zfile/crc32/crc32c.h"
+#include "photon/fs/filesystem.h"
+#include "photon/fs/fiemap.h"
+#include "photon/fs/path.h"
+#include "photon/common/enumerable.h"
+
 
 using namespace std;
 
@@ -47,6 +58,10 @@ private:
 
 class PrefetcherImpl : public Prefetcher {
 public:
+
+    PrefetcherImpl(int concurrency) : m_concurrency(concurrency) {
+        m_mode = Mode::Replay;
+    };
     explicit PrefetcherImpl(const string &trace_file_path, int concurrency) : m_concurrency(concurrency) {
         // Detect mode
         size_t file_size = 0;
@@ -76,7 +91,7 @@ public:
         }
     }
 
-    ~PrefetcherImpl() {
+    virtual ~PrefetcherImpl() {
         if (m_mode == Mode::Record) {
             m_record_stopped = true;
             if (m_detect_thread_interruptible) {
@@ -87,6 +102,9 @@ public:
 
         } else if (m_mode == Mode::Replay) {
             m_replay_stopped = true;
+            if (m_reload_thread) {
+                photon::thread_shutdown((photon::thread *)m_reload_thread);
+            }
             if (m_replay_thread) {
                 for (auto th : m_replay_threads) {
                     if (th) {
@@ -106,17 +124,23 @@ public:
         return new PrefetchFile(src_file, layer_index, this);
     }
 
-    void record(TraceOp op, uint32_t layer_index, size_t count, off_t offset) override {
+    virtual int record(TraceOp op, uint32_t layer_index, size_t count, off_t offset) override {
         if (m_record_stopped) {
-            return;
+            return 0;
         }
         TraceFormat trace = {op, layer_index, count, offset};
         m_record_array.push_back(trace);
+        return 0;
     }
 
     void do_replay() {
+        if (m_reload_thread != nullptr) {
+            photon::thread_join(m_reload_thread); // waiting for trace generation.
+            m_reload_thread = nullptr;
+        }
         struct timeval start;
         gettimeofday(&start, NULL);
+        auto records = m_replay_queue.size();
         LOG_INFO("Prefetch: Replay ` records from ` layers, concurrency `",
                  m_replay_queue.size(), m_src_files.size(), m_concurrency);
         for (int i = 0; i < m_concurrency; ++i) {
@@ -131,21 +155,24 @@ public:
         struct timeval end;
         gettimeofday(&end, NULL);
         uint64_t elapsed = 1000000UL * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
-        LOG_INFO("Prefetch: Replay done, time cost ` ms", elapsed / 1000);
+        LOG_INFO("Prefetch: Replay ` records done, time cost ` ms", records, elapsed / 1000);
     }
 
-    void replay() override {
+    virtual int replay(const IFile* imagefile) override {
         if (m_mode != Mode::Replay) {
-            return;
+            return -1;
         }
-        if (m_replay_queue.empty() || m_src_files.empty()) {
-            return;
+        if (m_reload_thread == nullptr && (m_replay_queue.empty() || m_src_files.empty())) {
+            return 0;
         }
         auto th = photon::thread_create11(&PrefetcherImpl::do_replay, this);
         m_replay_thread = photon::thread_enable_join(th);
+        return 0;
     }
 
     int replay_worker_thread() {
+        auto buf = new char[MAX_IO_SIZE];
+        DEFER(delete []buf);
         while (!m_replay_queue.empty() && !m_replay_stopped) {
             auto trace = m_replay_queue.front();
             m_replay_queue.pop();
@@ -155,9 +182,9 @@ public:
             }
             auto src_file = iter->second;
             if (trace.op == PrefetcherImpl::TraceOp::READ) {
-                ssize_t n_read = src_file->pread(nullptr, trace.count, trace.offset);
+                ssize_t n_read = src_file->pread(buf, trace.count, trace.offset);
                 if (n_read != (ssize_t)trace.count) {
-                    LOG_WARN("Prefetch: replay pread failed: `, `, respect: `, got: `", ERRNO(),
+                    LOG_WARN("Prefetch: replay pread failed: `, `, expect: `, got: `", ERRNO(),
                               trace, trace.count, n_read);
                     continue;
                 }
@@ -170,7 +197,7 @@ public:
         m_src_files[layer_index] = src_file;
     }
 
-private:
+// private:
     struct TraceFormat {
         TraceOp op;
         uint32_t layer_index;
@@ -193,6 +220,7 @@ private:
     vector<photon::join_handle *> m_replay_threads;
     photon::join_handle *m_replay_thread = nullptr;
     photon::join_handle *m_detect_thread = nullptr;
+    photon::join_handle *m_reload_thread = nullptr;
     bool m_detect_thread_interruptible = false;
     string m_lock_file_path;
     string m_ok_file_path;
@@ -313,6 +341,166 @@ private:
     friend LogBuffer &operator<<(LogBuffer &log, const PrefetcherImpl::TraceFormat &f);
 };
 
+class DynamicPrefetcher : public PrefetcherImpl {
+public:
+
+    const size_t MAX_FILE_SIZE = 65536;
+    std::string m_prefetch_list = "";
+    vector<string> files;
+
+     DynamicPrefetcher(const std::string &prefetch_list, int concurrency) :
+        PrefetcherImpl(concurrency), m_prefetch_list(prefetch_list)
+    {
+        reload();
+    }
+
+    IFile *new_prefetch_file(IFile *src_file, uint32_t layer_index) override {
+        // no need to do anything
+        return src_file;
+    }
+
+
+    std::string trim(const std::string& str, char c) {
+        if (str.empty()) {
+            return str;
+        }
+        size_t start = 0;
+        size_t end = str.size() - 1;
+        while (start <= end && str[start] == c) {
+            ++start;
+        }
+        while (end >= start && str[start] == c) {
+            --end;
+        }
+        return str.substr(start, end - start + 1);
+    }
+
+    bool invalid_abs_path(const std::string& path) {
+        const std::regex pathRegex(R"(((\/)?((([a-zA-Z0-9_\-\.]+\/)*[a-zA-Z0-9_\-\.]+\/?)|(\.\.?))?))");
+        return std::regex_match(path, pathRegex);
+    }
+
+    virtual int reload(){
+        std::ifstream file(m_prefetch_list);
+        if (!file.is_open()) {
+            LOG_ERROR_RETURN(0, -1, "open ` failed");
+        }
+        file.seekg(0, ios::end);
+        size_t filesize = file.tellg();
+        if (filesize > MAX_FILE_SIZE) {
+            LOG_ERROR_RETURN(0, -1, "prefetch list file too large");
+        }
+        file.seekg(0, ios::beg);
+        std::string line;
+        while (std::getline(file, line)) {
+            line = trim(trim(line, ' '), '/');
+            if (line.empty() || !invalid_abs_path(line)) {
+                continue;
+            }
+            LOG_DEBUG("prefetch item: `", line);
+            files.push_back(line);
+        }
+        file.close();
+        LOG_INFO("` items need prefetch.", files.size());
+        return 0;
+    }
+
+
+    UNIMPLEMENTED(int record(TraceOp op, uint32_t layer_index, size_t count, off_t offset) override);
+
+    int listdir(IFileSystem *fs, const string &path, vector<string> &items) {
+        struct stat st;
+        if (fs->stat(path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            LOG_ERROR_RETURN(0, -1, "` is not a directory", path);
+        }
+        for (auto fn : enumerable(Walker(fs, path))) {
+            LOG_DEBUG("get file: `", fn.data());
+            items.push_back(fn.data());
+        }
+        return 0;
+    }
+
+    int get_extents(IFileSystem *fs, const string &fn) {
+        auto file = fs->open(fn.data(), O_RDONLY);
+        if (file == nullptr) {
+            LOG_ERROR_RETURN(0, -1, "invalid file path: `", fn);
+        }
+        DEFER(delete file);
+        struct stat buf;
+        file->fstat(&buf);
+        uint64_t size = buf.st_size;
+        photon::fs::fiemap_t<8192> fie(0, size);
+        if (file->fiemap(&fie) != 0) {
+            LOG_ERROR_RETURN(0, -1, "get file extents of ` failed.", fn);
+        }
+        uint64_t count = ((size+ LSMT::ALIGNMENT - 1) / LSMT::ALIGNMENT) * LSMT::ALIGNMENT;
+        for (uint32_t i = 0; i < fie.fm_mapped_extents; i++) {
+            LOG_DEBUG("get segment: ` `", fie.fm_extents[i].fe_physical, fie.fm_extents[i].fe_length);
+            TraceFormat raw_tf = {
+                .op = TraceOp::READ,
+                .layer_index = 0,
+                .count = (fie.fm_extents[i].fe_length < count ? fie.fm_extents[i].fe_length : count),
+                .offset = (off_t)fie.fm_extents[i].fe_physical,
+            };
+            count -= raw_tf.count;
+            while ((ssize_t)raw_tf.count > 0) {
+                ssize_t slice_count = raw_tf.count;
+                if (slice_count > MAX_IO_SIZE) {
+                    slice_count = MAX_IO_SIZE;
+                }
+                m_replay_queue.emplace(TraceFormat {
+                    .op = raw_tf.op,
+                    .layer_index = raw_tf.layer_index,
+                    .count = (size_t)slice_count,
+                    .offset = raw_tf.offset,
+                });
+                LOG_DEBUG("push replay task: `", m_replay_queue.back());
+                raw_tf.count -= slice_count;
+                raw_tf.offset += slice_count;
+            }
+        }
+        return 0;
+    }
+
+
+    int generate_trace(const IFile *imagefile) {
+
+        auto fs = create_ext4fs(const_cast<IFile*>(imagefile), false, true, "/");
+        if (fs == nullptr) {
+            LOG_ERROR_RETURN(0, -1, "unrecognized filesystem in dynamic prefetcher");
+        }
+
+        register_src_file(0, const_cast<IFile*>(imagefile));
+
+        LOG_INFO("get file extents from overlaybd");
+        // TODO: parallel get file extents via target_file->fiemap
+        for (auto entry : files) {
+            vector<string> items;
+            if (entry.back() == '/' || entry.back()=='*') {
+                listdir(fs, entry, items);
+            } else {
+                items.push_back(entry);
+            }
+            for (auto fn : items) {
+                if (get_extents(fs, fn)!=0) {
+                    LOG_WARN("get extents failed: `", fn);
+                    continue;
+                }
+            }
+        }
+        delete fs;
+        return 0;
+    }
+
+    virtual int replay(const IFile *imagefile) override {
+
+        auto th = photon::thread_create11(&DynamicPrefetcher::generate_trace, this, imagefile);
+        m_reload_thread = photon::thread_enable_join(th);
+        return PrefetcherImpl::replay(nullptr);
+    }
+};
+
+
 LogBuffer &operator<<(LogBuffer &log, const PrefetcherImpl::TraceFormat &f) {
     return log << "Op " << char(f.op) << ", Count " << f.count << ", Offset " << f.offset
                << ", Layer_index " << f.layer_index;
@@ -335,7 +523,24 @@ ssize_t PrefetchFile::pread(void *buf, size_t count, off_t offset) {
 }
 
 Prefetcher *new_prefetcher(const string &trace_file_path, int concurrency) {
-    return new PrefetcherImpl(trace_file_path, concurrency);
+    auto file = open_localfile_adaptor(trace_file_path.c_str(), O_RDONLY);
+    struct stat st;
+    if (file == nullptr || file->fstat(&st)!=0) {
+        LOG_ERROR_RETURN(0, nullptr, "open ` failed", trace_file_path);
+    }
+    DEFER(delete file);
+    PrefetcherImpl::TraceHeader hdr = {};
+    ssize_t n_read = file->read(&hdr, sizeof(PrefetcherImpl::TraceHeader));
+    if ((st.st_size == 0) || ((n_read == sizeof(PrefetcherImpl::TraceHeader)) &&(PrefetcherImpl::TRACE_MAGIC == hdr.magic))) {
+        return new PrefetcherImpl(trace_file_path, concurrency);
+    }
+    LOG_INFO("create DynamicPrefetcher(jobs: `)", concurrency);
+    return new DynamicPrefetcher(trace_file_path, concurrency);
+}
+
+
+Prefetcher *new_dynamic_prefetcher(const string &prefetch_list, int concurrency) {
+    return new DynamicPrefetcher(prefetch_list, concurrency);
 }
 
 Prefetcher::Mode Prefetcher::detect_mode(const string &trace_file_path, size_t *file_size) {

@@ -104,6 +104,7 @@ public:
     uint32_t block_size;
     bool read_only = false;
 
+    // a merged view after stack all layers.
     IFile* get_base() {
         return m_file;
     }

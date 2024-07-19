@@ -365,7 +365,7 @@ LSMT::IFileRO *ImageFile::open_lowers(std::vector<ImageConfigNS::LayerConfig> &l
     LOG_INFO("LSMT::open_files_ro(files, `) success", lowers.size());
 
     if (m_prefetcher != nullptr) {
-        m_prefetcher->replay();
+        m_prefetcher->replay((IFile*)ret);
     }
 
     return ret;
@@ -463,7 +463,7 @@ int ImageFile::init_image_file() {
             m_prefetcher = new_prefetcher(trace_file, concurrency);
         }
 
-    } else if (!conf.recordTracePath().empty()) {
+    } else if (!conf.recordTracePath().empty() && (::access(conf.recordTracePath().c_str(), F_OK) == 0)) {
         auto mode = Prefetcher::detect_mode(conf.recordTracePath());
         if (mode != Prefetcher::Mode::Record && mode != Prefetcher::Mode::Replay) {
             LOG_ERROR("Prefetch: incorrect mode ` for prefetching", mode);

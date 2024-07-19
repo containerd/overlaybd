@@ -78,7 +78,7 @@ The whole project is managed by CMake. Binaries and resource files will be insta
 ```bash
 mkdir build
 cd build
-cmake ..
+cmake .. # -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=true -DBUILD_TESTING=true
 make -j
 sudo make install
 ```

@@ -35,6 +35,8 @@ namespace LSMT {
 
 static const int MAX_STACK_LAYERS = 255;
 
+static const uint32_t ALIGNMENT = 512; // same as trim block size.
+static const uint32_t ALIGNMENT4K = 4096;
 class IFileRO : public photon::fs::VirtualReadOnlyFile {
 public:
     static const int GetType = 12;
