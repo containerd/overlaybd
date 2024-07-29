@@ -17,6 +17,7 @@
 #define round_down_blk(addr) ((addr) & (~(SECTOR_SIZE - 1)))
 #define round_up_blk(addr) (round_down_blk((addr) + SECTOR_SIZE - 1))
 #define min(a, b) (a) < (b) ? (a) : (b)
+#define EROFS_ROOT_XATTR_SZ (16 * 1024)
 
 #define EROFS_UNIMPLEMENTED 1
 
@@ -641,6 +642,10 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
     cfg.incremental = !first_layer;
     erofs_cfg = erofs_get_configure();
     erofs_cfg->c_ovlfs_strip = true;
+    if (first_layer)
+        erofs_cfg->c_root_xattr_isize = EROFS_ROOT_XATTR_SZ;
+    else
+        erofs_cfg->c_root_xattr_isize = 0;
     cfg.mp_fp = std::tmpfile();
 
     err = erofs_mkfs(&cfg);
