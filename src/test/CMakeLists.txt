@@ -37,3 +37,15 @@ target_include_directories(simple_credsrv_test PUBLIC
     ${rapidjson_SOURCE_DIR}/include
     $ENV{GTEST}/googletest/include
 )
+
+add_executable(trace_test trace_test.cpp ../tools/comm_func.cpp)
+target_include_directories(trace_test PUBLIC
+    ${PHOTON_INCLUDE_DIR}
+    ${rapidjson_SOURCE_DIR}/include
+)
+target_link_libraries(trace_test gtest gtest_main gflags pthread photon_static overlaybd_lib overlaybd_image_lib)
+
+add_test(
+    NAME trace_test
+    COMMAND ${EXECUTABLE_OUTPUT_PATH}/trace_test
+)
