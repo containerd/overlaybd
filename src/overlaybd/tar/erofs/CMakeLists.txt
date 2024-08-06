@@ -2,7 +2,7 @@ include(FetchContent)
 
 FetchContent_Declare(
     erofs-utils
-    GIT_REPOSITORY git://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs-utils.git
+    GIT_REPOSITORY https://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs-utils.git
     GIT_TAG        ac0997ea32a465a6b0db7b782bb8d4d07952365a
 )
 
