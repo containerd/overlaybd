@@ -59,9 +59,15 @@ elif [[ ${OS} =~ "centos" ]]; then
         export PATH="/opt/rh/devtoolset-7/root/usr/bin:$PATH"
         PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.el7"
         COMPILER="-DCMAKE_C_COMPILER=/opt/rh/devtoolset-7/root/usr/bin/gcc -DCMAKE_CXX_COMPILER=/opt/rh/devtoolset-7/root/usr/bin/g++"
+        /opt/rh/devtoolset-7/root/usr/bin/gcc --version
+        /opt/rh/devtoolset-7/root/usr/bin/g++ --version
     elif [[ ${OS} == "centos:8" ]]; then
         rm -rf /etc/yum.repos.d/* && curl -o /etc/yum.repos.d/CentOS-Base.repo https://mirrors.aliyun.com/repo/Centos-vault-8.5.2111.repo
-        yum install -y gcc gcc-c++
+
+        yum install -y gcc-toolset-9-gcc gcc-toolset-9-gcc-c++
+        COMPILER="-DCMAKE_C_COMPILER=/opt/rh/gcc-toolset-9/root/usr/bin/gcc -DCMAKE_CXX_COMPILER=/opt/rh/gcc-toolset-9/root/usr/bin/g++"
+        /opt/rh/gcc-toolset-9/root/usr/bin/gcc --version
+        /opt/rh/gcc-toolset-9/root/usr/bin/g++ --version
 
         PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.el8"
     fi
