@@ -168,7 +168,7 @@ IFile *ImageFile::__open_ro_remote(const std::string &dir, const std::string &di
         remote_file->ioctl(SET_LOCAL_DIR, dir);
     } else {
         LOG_WARN(
-            "local dir of layer %d (%s) didn't set, skip background anyway",
+            "local dir of layer ` (`) didn't set, skip background anyway",
             layer_index, digest.c_str());
     }
 
@@ -364,10 +364,6 @@ LSMT::IFileRO *ImageFile::open_lowers(std::vector<ImageConfigNS::LayerConfig> &l
     }
     LOG_INFO("LSMT::open_files_ro(files, `) success", lowers.size());
 
-    if (m_prefetcher != nullptr) {
-        m_prefetcher->replay((IFile*)ret);
-    }
-
     return ret;
 
 ERROR_EXIT:
@@ -507,6 +503,9 @@ int ImageFile::init_image_file() {
 SUCCESS_EXIT:
     if (conf.download().enable() && !record_no_download) {
         start_bk_dl_thread();
+    }
+    if (m_prefetcher != nullptr) {
+        m_prefetcher->replay(m_file);
     }
     return 1;
 
