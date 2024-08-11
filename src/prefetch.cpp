@@ -346,6 +346,7 @@ public:
 
     const size_t MAX_FILE_SIZE = 65536;
     std::string m_prefetch_list = "";
+    std::string fstype = "ext4";
     vector<string> files;
 
      DynamicPrefetcher(const std::string &prefetch_list, int concurrency) :
@@ -464,8 +465,13 @@ public:
 
 
     int generate_trace(const IFile *imagefile) {
+        photon::fs::IFileSystem *fs;
 
-        auto fs = create_ext4fs(const_cast<IFile*>(imagefile), false, true, "/");
+        if (fstype == "erofs")
+            fs = create_erofs_fs(const_cast<IFile*>(imagefile), 4096);
+        else
+            fs = create_ext4fs(const_cast<IFile*>(imagefile), false, true, "/");
+
         if (fs == nullptr) {
             LOG_ERROR_RETURN(0, -1, "unrecognized filesystem in dynamic prefetcher");
         }
@@ -494,6 +500,11 @@ public:
 
     virtual int replay(const IFile *imagefile) override {
 
+		if (is_erofs_fs(imagefile))
+			fstype = "erofs";
+		else
+			fstype = "ext4";
+		LOG_DEBUG("get fstype `", fstype);
         auto th = photon::thread_create11(&DynamicPrefetcher::generate_trace, this, imagefile);
         m_reload_thread = photon::thread_enable_join(th);
         return PrefetcherImpl::replay(nullptr);
