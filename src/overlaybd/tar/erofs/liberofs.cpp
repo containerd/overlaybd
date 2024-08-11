@@ -27,7 +27,9 @@ struct liberofs_inmem_sector {
 
 class ErofsCache {
 public:
-    ErofsCache() {}
+    ErofsCache(photon::fs::IFile *file, unsigned long int capacity):
+    file(file), capacity(capacity)
+    {}
     ~ErofsCache() {}
     ssize_t write_sector(u64 addr, char *buf);
     ssize_t read_sector(u64 addr, char *buf);
@@ -39,11 +41,11 @@ public:
     std::set<u64> dirty;
 };
 
-static struct erofs_vfops target_vfops;
-static struct erofs_vfops source_vfops;
-static ErofsCache erofs_cache;
-static photon::fs::IFile *_target;
-static photon::fs::IFile *_source;
+struct liberofs_file {
+    struct erofs_vfops ops;
+    photon::fs::IFile *file;
+    ErofsCache *cache;
+};
 
 ssize_t ErofsCache::write_sector(u64 addr, char *buf)
 {
@@ -297,7 +299,13 @@ static ssize_t erofs_read_photon_file(void *buf, u64 offset, size_t len,
 static ssize_t erofs_target_pread(struct erofs_vfile *vf, void *buf, u64 offset,
                                   size_t len)
 {
-    if (erofs_read_photon_file(buf, offset, len, &erofs_cache) != (ssize_t)len)
+    struct liberofs_file *target_file =
+                            reinterpret_cast<struct liberofs_file *>(vf->ops);
+
+    if (!target_file)
+        return -EINVAL;
+    if (erofs_read_photon_file(buf, offset, len, target_file->cache)
+                               != (ssize_t)len)
         return -1;
 
     return len;
@@ -306,15 +314,25 @@ static ssize_t erofs_target_pread(struct erofs_vfile *vf, void *buf, u64 offset,
 static ssize_t erofs_target_pwrite(struct erofs_vfile *vf, const void *buf,
                                    u64 offset, size_t len)
 {
+    struct liberofs_file *target_file =
+                            reinterpret_cast<struct liberofs_file *>(vf->ops);
+
+    if (!target_file)
+        return -EINVAL;
     if (!buf)
         return -EINVAL;
 
-    return erofs_write_photon_file(buf, offset, len, &erofs_cache);
+    return erofs_write_photon_file(buf, offset, len, target_file->cache);
 }
 
 static int erofs_target_fsync(struct erofs_vfile *vf)
 {
-    return erofs_cache.flush();
+    struct liberofs_file *target_file =
+                            reinterpret_cast<struct liberofs_file *>(vf->ops);
+
+    if (!target_file)
+        return -EINVAL;
+    return target_file->cache->flush();
 }
 
 static int erofs_target_fallocate(struct erofs_vfile *vf, u64 offset,
@@ -384,12 +402,21 @@ static int erofs_source_ftruncate(struct erofs_vfile *vf, u64 length)
 static ssize_t erofs_source_read(struct erofs_vfile *vf, void *buf,
                                  size_t bytes)
 {
-    return _source->read(buf, bytes);
+    struct liberofs_file *source_file =
+                            reinterpret_cast<struct liberofs_file *>(vf->ops);
+
+    if (!source_file)
+        return -EINVAL;
+    return source_file->file->read(buf, bytes);
 }
 
 static off_t erofs_source_lseek(struct erofs_vfile *vf, u64 offset, int whence)
 {
-    return _source->lseek(offset, whence);
+    struct liberofs_file *source_file =
+                            reinterpret_cast<struct liberofs_file *>(vf->ops);
+    if (!source_file)
+        return -EINVAL;
+    return source_file->file->lseek(offset, whence);
 }
 
 struct erofs_mkfs_cfg {
@@ -594,41 +621,41 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
     struct erofs_tarfile erofstar = {};
     struct erofs_mkfs_cfg cfg;
     struct erofs_configure *erofs_cfg;
+    struct liberofs_file target_file, source_file;
     int err;
 
-    _target = target;
-    _source = source;
+    target_file.ops.pread = erofs_target_pread;
+    target_file.ops.pwrite = erofs_target_pwrite;
+    target_file.ops.pread = erofs_target_pread;
+    target_file.ops.pwrite = erofs_target_pwrite;
+    target_file.ops.fsync = erofs_target_fsync;
+    target_file.ops.fallocate = erofs_target_fallocate;
+    target_file.ops.ftruncate = erofs_target_ftruncate;
+    target_file.ops.read = erofs_target_read;
+    target_file.ops.lseek = erofs_target_lseek;
+    target_file.file = target;
+    target_file.cache = new ErofsCache(target, 128);
 
-    target_vfops.pread = erofs_target_pread;
-    target_vfops.pwrite = erofs_target_pwrite;
-    target_vfops.pread = erofs_target_pread;
-    target_vfops.pwrite = erofs_target_pwrite;
-    target_vfops.fsync = erofs_target_fsync;
-    target_vfops.fallocate = erofs_target_fallocate;
-    target_vfops.ftruncate = erofs_target_ftruncate;
-    target_vfops.read = erofs_target_read;
-    target_vfops.lseek = erofs_target_lseek;
-
-    source_vfops.pread = erofs_source_pread;
-    source_vfops.pwrite = erofs_source_pwrite;
-    source_vfops.fsync = erofs_source_fsync;
-    source_vfops.fallocate = erofs_source_fallocate;
-    source_vfops.ftruncate = erofs_source_ftruncate;
-    source_vfops.read = erofs_source_read;
-    source_vfops.lseek = erofs_source_lseek;
-
-    erofs_cache.file = _target;
-    erofs_cache.capacity = 128;
+    source_file.ops.pread = erofs_source_pread;
+    source_file.ops.pwrite = erofs_source_pwrite;
+    source_file.ops.fsync = erofs_source_fsync;
+    source_file.ops.fallocate = erofs_source_fallocate;
+    source_file.ops.ftruncate = erofs_source_ftruncate;
+    source_file.ops.read = erofs_source_read;
+    source_file.ops.lseek = erofs_source_lseek;
+    source_file.file = source;
+    source_file.cache = NULL;
 
     /* initialization of sbi */
-    err = erofs_init_sbi(&sbi, _target, &target_vfops, ilog2(blksize));
+    err = erofs_init_sbi(&sbi, target_file.file, &target_file.ops, ilog2(blksize));
     if (err) {
-        erofs_close_sbi(&sbi, &erofs_cache);
+        erofs_close_sbi(&sbi, target_file.cache);
+        delete target_file.cache;
         LOG_ERROR("Failed to init sbi.");
         return err;
     }
     /* initialization of erofstar */
-    err = erofs_init_tar(&erofstar, &source_vfops);
+    err = erofs_init_tar(&erofstar, &source_file.ops);
     if (err) {
         LOG_ERROR("Failed to init tarerofs");
         goto exit;
@@ -655,15 +682,16 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
     }
 
     /* write mapfile */
-    err = erofs_write_map_file(_target, blksize, cfg.mp_fp);
+    err = erofs_write_map_file(target_file.file, blksize, cfg.mp_fp);
     if (err) {
         LOG_ERROR("Failed to write mapfile.");
         goto exit;
     }
 exit:
-    err = erofs_close_sbi(&sbi, &erofs_cache);
+    err = erofs_close_sbi(&sbi, target_file.cache);
     erofs_close_tar(&erofstar);
     std::fclose(cfg.mp_fp);
+    delete target_file.cache;
     return err;
 }
 
