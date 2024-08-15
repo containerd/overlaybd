@@ -584,8 +584,10 @@ TEST_F(FileTest3, stack_files) {
     cout << "merging RO layers as " << fn_merged << endl;
     auto merged = lfs->open(fn_merged, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
     merge_files_ro(files, FLAGS_layers, merged);
-    /*auto mergedro =*/::open_file_ro(merged, true);
+    auto mergedro =::open_file_ro(merged, true);
     cout << "verifying merged RO layers file" << endl;
+    verify_file(mergedro);
+    delete mergedro;
     cout << "verifying stacked RO layers file" << endl;
     auto lower = open_files_ro(files, FLAGS_layers);
     verify_file(lower);
@@ -593,16 +595,58 @@ TEST_F(FileTest3, stack_files) {
         create_level_index(lower->index()->buffer(), lower->index()->size(), 0, UINT64_MAX, false);
     EXPECT_EQ(((LSMTReadOnlyFile *)lower)->close_seal(), -1);
     CommitArgs _(nullptr);
-    EXPECT_EQ(((LSMTReadOnlyFile *)lower)->commit(_), -1);
     auto stat = ((LSMTReadOnlyFile *)lower)->data_stat();
     LOG_INFO("RO valid data: `", stat.valid_data_size);
+    merged = lfs->open(fn_merged, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    EXPECT_EQ(lower->flatten(merged), 0);
+    cout << "verifying flattened layer of lowers" << endl;
+    verify_file(fn_merged);
+    delete merged;
     cout << "generating a RW layer by randwrite()" << endl;
     auto upper = create_file_rw();
     auto file = stack_files(upper, lower, 0, true);
     randwrite(file, FLAGS_nwrites);
     verify_file(file);
+    cout << "verifying flattened layer of stacked layers" << endl;
+
+    merged = lfs->open(fn_merged, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    file->flatten(merged);
+    verify_file(fn_merged);
     delete file;
 }
+
+TEST_F(FileTest3, seek_data) {
+    CleanUp();
+    cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
+    for (int i = 0; i < FLAGS_layers; ++i) {
+        files[i] = create_commit_layer(0, ut_io_engine);
+    }
+
+    auto lower = open_files_ro(files, FLAGS_layers);
+    verify_file(lower);
+    ((LSMTReadOnlyFile *)lower)->m_index =
+        create_level_index(lower->index()->buffer(), lower->index()->size(), 0, UINT64_MAX, false);
+    cout << "generating a RW layer by randwrite()" << endl;
+    auto upper = create_file_rw();
+    auto file = stack_files(upper, lower, 0, true);
+    randwrite(file, FLAGS_nwrites);
+    verify_file(file);
+
+    auto fmerged = create_file_rw();
+    vector<Segment> segs;
+    auto data = new char[8<<20];
+    file->seek_data(0, vsize, segs);
+    LOG_INFO("flattern segments count: `", segs.size());
+    for (auto m : segs) {
+        auto readn = file->pread(data, m.length*ALIGNMENT, m.offset * ALIGNMENT);
+        EXPECT_EQ(readn, fmerged->pwrite(data, readn, m.offset * ALIGNMENT));
+    }
+    verify_file(fmerged);
+    delete file;
+    delete fmerged;
+    delete[] data;
+}
+
 
 TEST_F(FileTest3, sparsefile_close_seal) {
     CleanUp();

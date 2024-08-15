@@ -28,6 +28,7 @@
 #include <photon/fs/aligned-file.h>
 #include <photon/fs/localfs.h>
 #include "overlaybd/lsmt/file.h"
+#include "overlaybd/lsmt/index.h"
 #include "overlaybd/zfile/zfile.h"
 #include "config.h"
 #include "image_file.h"
@@ -514,6 +515,12 @@ ERROR_EXIT:
     delete upper_file;
     return -1;
 }
+
+int ImageFile::compact(IFile *as) {
+    return ((LSMT::IFileRO*)m_file)->flatten(as);
+}
+
+
 
 void ImageFile::set_auth_failed() {
     if (m_status == 0) // only set exit in image boot phase

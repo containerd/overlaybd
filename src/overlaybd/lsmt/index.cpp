@@ -153,6 +153,8 @@ public:
     uint64_t vsize() const override {
         return virtual_size;
     }
+
+    UNIMPLEMENTED_POINTER(IMemoryIndex  *make_read_only_index() const override);
 };
 
 class LevelIndex : public Index {
@@ -253,6 +255,8 @@ public:
             m_alloc = m_alloc + m.length;
         }
     } alloc_blk;
+
+    // Index0(const set<SegmentMapping> &mapping) : mapping(mapping){};
 
     Index0(const SegmentMapping *pmappings = nullptr, size_t n = 0) {
         if (pmappings == nullptr)
@@ -505,6 +509,21 @@ public:
         merge_indexes(0, mappings, indexes, 2, 0, UINT64_MAX, false, max_level);
         return new Index(std::move(mappings));
     }
+
+     virtual Index *make_read_only_index() const override{
+        vector<SegmentMapping> mappings;
+        auto ro_idx0 = new Index;
+        ro_idx0->ownership = false;
+        ro_idx0->assign(mapping.begin(), mapping.end());
+        if (m_backing_index == nullptr) {
+            return ro_idx0;
+        }
+        const Index *indexes[2] = {ro_idx0, const_cast<Index *>(m_backing_index)};
+        merge_indexes(0, mappings, indexes, 2, 0, UINT64_MAX, false, 2);
+        delete ro_idx0;
+        return new Index(std::move(mappings));
+    }
+
 };
 
 //======================== END OF ComboIndex =============================//

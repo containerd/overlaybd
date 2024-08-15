@@ -109,6 +109,8 @@ public:
         return m_file;
     }
 
+    int compact(IFile *as);
+
 private:
     Prefetcher *m_prefetcher = nullptr;
     ImageConfigNS::ImageConfig conf;
@@ -126,5 +128,7 @@ private:
     IFile *__open_ro_target_file(const std::string &);
     IFile *__open_ro_remote(const std::string &dir, const std::string &, const uint64_t, int);
     IFile *__open_ro_target_remote(const std::string &dir, const std::string &, const uint64_t, int);
+
+    // size_t seek_data(off_t begin, off_t end);
     void start_bk_dl_thread();
 };

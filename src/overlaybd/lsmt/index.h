@@ -128,6 +128,8 @@ public:
     virtual uint64_t block_count() const = 0;
 
     virtual uint64_t vsize() const = 0;
+
+    virtual IMemoryIndex *make_read_only_index() const = 0;
 };
 
 // the level 0 memory index, which supports write
@@ -139,7 +141,7 @@ public:
     // dump the the whole index as an array
     // memory allocation is aligned to the `alignment`
     virtual SegmentMapping *dump(size_t alignment = 0) const = 0;
-    virtual IMemoryIndex *make_read_only_index() const = 0;
+    // virtual IMemoryIndex *make_read_only_index() const = 0;
 };
 
 class IComboIndex : public IMemoryIndex0 {
@@ -153,6 +155,8 @@ public:
     // and then clear the original index0.
     // virtual IMemoryIndex0* gc_index() = 0;
     virtual IMemoryIndex *load_range_index(int, int) const = 0;
+
+
 };
 
 // create writable level 0 memory index from an array of mappings;
