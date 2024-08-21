@@ -75,7 +75,6 @@ struct CommitArgs {
 class IFileRW : public IFileRO {
 public:
     virtual IMemoryIndex0 *index() const override = 0;
-
     const int Index_Group_Commit = 10;
 
     static const int RemoteData = 11;

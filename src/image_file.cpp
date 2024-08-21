@@ -520,8 +520,6 @@ int ImageFile::compact(IFile *as) {
     return ((LSMT::IFileRO*)m_file)->flatten(as);
 }
 
-
-
 void ImageFile::set_auth_failed() {
     if (m_status == 0) // only set exit in image boot phase
     {
