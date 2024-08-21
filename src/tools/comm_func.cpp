@@ -22,6 +22,7 @@
 #include <photon/fs/extfs/extfs.h>
 #include "../image_service.h"
 #include "../image_file.h"
+#include "../overlaybd/tar/erofs/liberofs.h"
 
 
 using namespace std;
@@ -77,4 +78,16 @@ photon::fs::IFileSystem *create_ext4fs(photon::fs::IFile *imgfile, bool mkfs,
         exit(-1);
     }
     return target;
+}
+
+bool is_erofs_fs(const photon::fs::IFile *imgfile)
+{
+    if (imgfile == nullptr)
+        LOG_ERRNO_RETURN(-EINVAL, false, "Imgfile is nullptr");
+    return erofs_check_fs(imgfile);
+}
+
+photon::fs::IFileSystem *create_erofs_fs(photon::fs::IFile *imgfile, uint64_t blksz)
+{
+    return erofs_create_fs(imgfile, blksz);
 }
