@@ -33,6 +33,7 @@
 #include "compressor.h"
 #include <atomic>
 #include <thread>
+#include "photon/thread/thread11.h"
 
 using namespace photon::fs;
 
@@ -938,6 +939,16 @@ public:
     UNIMPLEMENTED(int fstat(struct stat *buf) override);
 };
 
+ssize_t read_chunk(IFile *file, char *buf, off_t offset, size_t length, ssize_t *result) {
+    LOG_DEBUG("read zfile index chunk {offset: `, len: `}", offset, length);
+    if (file->pread(buf, length, offset) != (ssize_t)length) {
+        *result = -1;
+        LOG_ERRNO_RETURN(0, -1, "failed to read index chunk {offset: `, len: `}.", offset, length);
+    }
+    *result = 0;
+    return 0;
+}
+
 bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_trailer,
                      CompressionFile::JumpTable &jump_table, bool trailer = true) {
     char buf[CompressionFile::HeaderTrailer::SPACE];
@@ -994,8 +1005,25 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
     }
     auto ibuf = std::unique_ptr<uint32_t[]>(new uint32_t[pht->index_size]);
     LOG_DEBUG("index_offset: `", pht->index_offset);
-    ret = file->pread((void *)(ibuf.get()), index_bytes, pht->index_offset);
-    if (ret < (ssize_t)index_bytes) {
+
+    size_t delta = 1UL<<20;
+    std::vector<photon::join_handle*> ths;
+    ssize_t *r = new ssize_t[index_bytes / delta + 1]{};
+    DEFER(delete []r);
+    int idx = 0;
+    for (off_t offset = 0; offset < (off_t)index_bytes; offset += delta) {
+        size_t chunk_size = std::min(index_bytes - offset, delta);
+        auto th = photon::thread_create11(&ZFile::read_chunk, file, (char*)ibuf.get() + offset, pht->index_offset + offset, chunk_size, &r[idx++]);
+        ths.push_back(photon::thread_enable_join(th));
+    }
+    ret = 0;
+    for (int i =0; i<idx; i++){
+        photon::thread_join(ths[i]);
+        if (r[i]!=0) {
+            ret = -1;
+        }
+    }
+    if (ret != 0) {
         LOG_ERRNO_RETURN(0, false, "failed to read index");
     }
     if (pht->is_digest_enabled()) {

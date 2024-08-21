@@ -50,6 +50,11 @@ public:
     virtual int get_uuid(UUID &out, size_t layer_idx = 0) const = 0;
 
     virtual std::vector<IFile *> get_lower_files() const = 0;
+
+    virtual ssize_t seek_data(off_t begin, off_t end, std::vector<Segment> &segs) = 0;
+
+    virtual int flatten(IFile *as) = 0;
+
 };
 
 struct CommitArgs {
@@ -70,7 +75,6 @@ struct CommitArgs {
 class IFileRW : public IFileRO {
 public:
     virtual IMemoryIndex0 *index() const override = 0;
-
     const int Index_Group_Commit = 10;
 
     static const int RemoteData = 11;
@@ -96,6 +100,7 @@ public:
         uint64_t valid_data_size = -1; // size of valid data (excluding garbage)
     };
     virtual DataStat data_stat() const = 0;
+
 };
 
 // create a new writable LSMT file constitued by a data file and an index file,

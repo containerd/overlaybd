@@ -177,6 +177,7 @@ struct HeaderTrailer {
 } __attribute__((packed));
 
 class LSMTReadOnlyFile;
+static int merge_files_ro(vector<IFile *> files, const CommitArgs &args);
 static LSMTReadOnlyFile *open_file_ro(IFile *file, bool ownership, bool reserve_tag);
 static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer = false,
                                 ssize_t st_size = -1);
@@ -642,6 +643,33 @@ public:
         ret.valid_data_size = size;
         return ret;
     }
+
+    virtual ssize_t seek_data(off_t begin, off_t end, vector<Segment> &segs) override {
+
+        begin /= ALIGNMENT;
+        end /= ALIGNMENT;
+        while (begin < end) {
+            SegmentMapping mappings[128];
+            auto length = (end - begin < Segment::MAX_LENGTH ? end - begin : Segment::MAX_LENGTH);
+            Segment s{(uint64_t)begin, (uint32_t)length};
+            auto find = m_index->lookup(s, mappings, 128);
+            if (find == 0) {
+                begin+=length;
+                continue;
+            }
+            segs.insert(segs.end(), mappings, mappings + find);
+            begin=mappings[find-1].end();
+
+        }
+        return segs.size();
+    }
+
+    virtual int flatten(IFile *as) override{
+        CommitArgs args(as);
+        vector<IFile*> files = m_files;
+        reverse(files.begin(), files.end());
+        return merge_files_ro(files, args);
+    }
 };
 
 class LSMTFile : public LSMTReadOnlyFile {
@@ -955,6 +983,15 @@ public:
         LOG_DEBUG("data_size: ` ( valid: ` )", data_stat.total_data_size,
                   data_stat.valid_data_size);
         return data_stat;
+    }
+
+    virtual int flatten(IFile *as) override {
+
+        unique_ptr<IComboIndex> pmi((IComboIndex*)(m_index->make_read_only_index()));
+        CommitArgs args(as);
+        atomic_uint64_t _no_use_var(0);
+        CompactOptions opts(&m_files, (SegmentMapping*)(pmi->buffer()), pmi->size(), m_vsize, &args);
+        return compact(opts, _no_use_var);
     }
 };
 class LSMTSparseFile : public LSMTFile {
@@ -1677,7 +1714,7 @@ IFileRO *open_files_ro(IFile **files, size_t n, bool ownership) {
     return rst;
 }
 
-int merge_files_ro(vector<IFile *> files, const CommitArgs &args) {
+static int merge_files_ro(vector<IFile *> files, const CommitArgs &args) {
     uint64_t vsize;
     vector<UUID> files_uuid(files.size());
     auto pmi = unique_ptr<IMemoryIndex>(load_merge_index(files, files_uuid, vsize));

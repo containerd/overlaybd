@@ -58,6 +58,7 @@ public:
     // bool enable_acceleration(GlobalFs *global_fs, ImageConfigNS::P2PConfig conf);
     bool enable_acceleration();
 
+
     ImageConfigNS::GlobalConfig global_conf;
     struct GlobalFs global_fs;
     std::unique_ptr<OverlayBDMetric> metrics;
