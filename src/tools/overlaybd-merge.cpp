@@ -20,15 +20,9 @@
 #include <photon/fs/virtual-file.h>
 #include <photon/fs/extfs/extfs.h>
 #include <photon/photon.h>
-#include "../overlaybd/lsmt/file.h"
 #include "../overlaybd/zfile/zfile.h"
-#include "../overlaybd/tar/libtar.h"
-#include "../overlaybd/gzindex/gzfile.h"
-#include "../overlaybd/gzip/gz.h"
-#include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
-#include <memory>
 #include <string>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,12 +31,22 @@
 #include <unistd.h>
 #include "../image_service.h"
 #include "../image_file.h"
+#include "../overlaybd/registryfs/registryfs.h"
+#include "../overlaybd/tar/tar_file.h"
 #include "CLI11.hpp"
 #include "comm_func.h"
 #include "sha256file.h"
 
 using namespace std;
 using namespace photon::fs;
+
+std::string image_config_path, input_path, output, config_path, sha256_checksum;
+int upload_bs = 65536;
+bool zfile = false, verbose = false, tar = false;
+std::string upload_url, cred_file_path, tls_key_path, tls_cert_path;
+
+IFile *upload_builder = nullptr, *rst = nullptr;
+
 
 class FIFOFile : public VirtualReadOnlyFile {
 public:
@@ -79,15 +83,20 @@ public:
 };
 
 int main(int argc, char **argv) {
-    std::string image_config_path, input_path, output, config_path, sha256_checksum;
-    string tarheader;
-    bool zfile = false, mkfs = false, verbose = false, raw = false;
 
     CLI::App app{"this is overlaybd-merge, merge multiple overlaybd layers into a single."};
 
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     app.add_option("--service_config_path", config_path, "overlaybd image service config path")->type_name("FILEPATH")->check(CLI::ExistingFile)->default_val("/etc/overlaybd/overlaybd.json");
-    app.add_flag("--compress", zfile, "do zfile compression for the output layer")->default_val(true);
+    app.add_flag("--compress", zfile, "do zfile compression for the output layer")->run_callback_for_default()->default_val(true);
+    app.add_flag("-t", tar, "wrapper with tar")->default_val(false);
+
+    app.add_option("--upload", upload_url, "upload to remote registry URL while generating merged layer.");
+    app.add_option("--upload_bs", upload_bs, "block size for upload, in KB")->default_val(262144);
+    app.add_option("--cred_file_path", cred_file_path, "cred file path for registryfs")->type_name("FILEPATH")->check(CLI::ExistingFile);
+    app.add_option("--tls_key_path", tls_key_path, "TLSKeyPairPath for private Registry")->type_name("FILEPATH")->check(CLI::ExistingFile);
+    app.add_option("--tls_cert_path", tls_cert_path, "TLSCertPath for private Registry")->type_name("FILEPATH")->check(CLI::ExistingFile);
+
 
     app.add_option("image_config_path", image_config_path, "overlaybd image config path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     app.add_option("output", output, "compacted layer path")->type_name("FILEPATH");
@@ -95,6 +104,10 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
 
     set_log_output_level(verbose ? 0 : 1);
+
+    if (tar && (upload_url.empty() == false)) {
+        rst = new_tar_file_adaptor(rst);
+    }
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     DEFER({photon::fini();});
 
@@ -110,14 +123,23 @@ int main(int argc, char **argv) {
         delete imgfile;
         delete imgservice;
     });
-    auto rst = open_localfile_adaptor(output.c_str(), O_CREAT|O_TRUNC|O_RDWR, 0644);
+    rst = open_localfile_adaptor(output.c_str(), O_CREAT|O_TRUNC|O_RDWR, 0644);
     if (rst == nullptr){
         fprintf(stderr, "failed to create output file\n");
         exit(-1);
     }
     DEFER(delete rst);
+
     if (zfile) {
-        rst = ZFile::new_zfile_builder(rst);
+        ZFile::CompressOptions opt;
+        opt.verify = 1;
+        ZFile::CompressArgs zfile_args(opt);
+        if (!upload_url.empty()) {
+            LOG_INFO("enable upload. URL: `, upload_bs: `, tls_key_path: `, tls_cert_path: `", upload_url, upload_bs, tls_key_path, tls_cert_path);
+            upload_builder = create_uploader(&zfile_args, rst, upload_url, cred_file_path, 2, upload_bs, tls_key_path, tls_cert_path);
+            rst = upload_builder;
+        }
+        rst = ZFile::new_zfile_builder(rst, &zfile_args, false);
         if (rst == nullptr) {
             fprintf(stderr, "failed to create zfile\n");
             exit(-1);
@@ -127,6 +149,13 @@ int main(int argc, char **argv) {
         fprintf(stderr, "failed to compact\n");
         exit(-1);
     }
-
+    rst->close();
+    string digest = "";
+    if (upload_builder != nullptr && registry_uploader_fini(upload_builder, digest) != 0){
+        fprintf(stderr, "failed to upload\n");
+        exit(-1);
+    };
+    fprintf(stderr, "%s\n", digest.c_str());
+    delete upload_builder;
     return 0;
 }

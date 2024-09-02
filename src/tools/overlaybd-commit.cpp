@@ -21,12 +21,9 @@
 #include "../overlaybd/lsmt/file.h"
 #include "../overlaybd/zfile/zfile.h"
 #include "../overlaybd/tar/tar_file.h"
-#include "../overlaybd/registryfs/registryfs.h"
-#include "../image_service.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
-#include <memory>
 #include <string>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,10 +31,27 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include "CLI11.hpp"
+#include "comm_func.h"
+#include "../overlaybd/registryfs/registryfs.h"
+
 
 using namespace std;
 using namespace LSMT;
 using namespace photon::fs;
+
+string commit_msg;
+string uuid, parent_uuid;
+std::string algorithm;
+int block_size = -1;
+std::string data_file_path, index_file_path, commit_file_path, remote_mapping_file;
+bool compress_zfile = false;
+bool build_turboOCI = false;
+bool build_fastoci = false;
+bool tar = false, rm_old = false, seal = false, commit_sealed = false;
+bool verbose = false;
+int compress_threads = 1;
+std::string upload_url, cred_file_path, tls_key_path, tls_cert_path;
+ssize_t upload_bs = 262144;
 
 
 IFile *open_file(IFileSystem *fs, const char *fn, int flags, mode_t mode = 0) {
@@ -50,19 +64,6 @@ IFile *open_file(IFileSystem *fs, const char *fn, int flags, mode_t mode = 0) {
 }
 
 int main(int argc, char **argv) {
-    string commit_msg;
-    string uuid, parent_uuid;
-    std::string algorithm;
-    int block_size = -1;
-    std::string data_file_path, index_file_path, commit_file_path, remote_mapping_file;
-    bool compress_zfile = false;
-    bool build_turboOCI = false;
-    bool build_fastoci = false;
-    bool tar = false, rm_old = false, seal = false, commit_sealed = false;
-    bool verbose = false;
-    int compress_threads = 1;
-    std::string upload_url, cred_file_path;
-    ssize_t upload_bs = 262144;
 
     CLI::App app{"this is overlaybd-commit"};
     app.add_option("-m", commit_msg, "add some custom message if needed");
@@ -87,10 +88,18 @@ int main(int argc, char **argv) {
     app.add_option("--upload", upload_url, "registry upload url");
     app.add_option("--upload_bs", upload_bs, "block size for upload, in KB");
     app.add_option("--cred_file_path", cred_file_path, "cred file path for registryfs")->type_name("FILEPATH")->check(CLI::ExistingFile);
+    app.add_option("--tls_key_path", tls_key_path, "TLSKeyPairPath for private Registry")->type_name("FILEPATH")->check(CLI::ExistingFile);
+    app.add_option("--tls_cert_path", tls_cert_path, "TLSCertPath for private Registry")->type_name("FILEPATH")->check(CLI::ExistingFile);
+
+
 
     CLI11_PARSE(app, argc, argv);
     build_turboOCI = build_turboOCI || build_fastoci;
     set_log_output_level(verbose ? 0 : 1);
+    if (tar && (upload_url.empty() == false)){
+        fprintf(stderr, "unsupport option with '-t' and '--upload' at the same time.");
+        exit(-1);
+    }
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     DEFER({photon::fini();});
 
@@ -164,21 +173,10 @@ int main(int argc, char **argv) {
         zfile_args->overwrite_header = true;
 
         if (!upload_url.empty()) {
-            zfile_args->overwrite_header = false;
-            LOG_INFO("upload to `", upload_url);
-            std::string username, password;
-            if (load_cred_from_file(cred_file_path, upload_url, username, password) <  0) {
-                fprintf(stderr, "failed to read upload cred file\n");
-                exit(-1);
-            }
-            upload_builder = new_registry_uploader(out, upload_url, username, password, 2UL*60*1000*1000, upload_bs*1024);
-            if (upload_builder == nullptr) {
-                fprintf(stderr, "failed to init upload\n");
-                exit(-1);
-            }
+            LOG_INFO("enable upload. URL: `, upload_bs: `, tls_key_path: `, tls_cert_path: `", upload_url, upload_bs, tls_key_path, tls_cert_path);
+            upload_builder = create_uploader(zfile_args, out, upload_url, cred_file_path, 2, upload_bs, tls_key_path, tls_cert_path);
             out = upload_builder;
         }
-
         zfile_builder = ZFile::new_zfile_builder(out, zfile_args, false);
         out = zfile_builder;
     } else {
@@ -213,12 +211,12 @@ int main(int argc, char **argv) {
     if (zfile_args) {
         delete zfile_args;
     }
-
-    if (upload_builder != nullptr && upload_builder->fsync() < 0) {
-        fprintf(stderr, "failed to commit or upload");
-        return -1;
-    }
-
+    string digest = "";
+    if (upload_builder != nullptr && registry_uploader_fini(upload_builder, digest) != 0){
+        fprintf(stderr, "failed to commit or upload\n");
+        exit(-1);
+    };
+    fprintf(stderr, "%s\n", digest.c_str());
     delete upload_builder;
     delete fout;
     delete fin;

@@ -17,6 +17,7 @@
 #include "registryfs.h"
 
 
+#include <cerrno>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -561,8 +562,8 @@ public:
     uint64_t m_timeout = -1;
     estring m_token;
 
-    RegistryUploader(IFile *lfile, std::string &upload_url, std::string &username,
-                     std::string &password, uint64_t timeout, ssize_t upload_bs,
+    RegistryUploader(IFile *lfile, const std::string &upload_url, const std::string &username,
+                     const std::string &password, uint64_t timeout, ssize_t upload_bs,
                      photon::net::TLSContext *ctx)
         : m_local_file(lfile), m_origin_upload_url(upload_url), m_username(username), m_password(password),
           m_timeout(timeout), m_tls_ctx(ctx) {
@@ -829,15 +830,15 @@ public:
             LOG_INFO(VALUE(m_upload_url));
             return 0;
         }
-        LOG_ERROR_RETURN(0, -1, "failed to get upload url, code=`", op.status_code);
+        LOG_ERROR_RETURN(0, -1, "failed to get upload url [`], code=`", m_upload_url, op.status_code);
     }
 
 protected:
     photon::net::TLSContext *m_tls_ctx;
 };
 
-IFile *new_registry_uploader(IFile *lfile, std::string &upload_url, std::string &username,
-                             std::string &password, uint64_t timeout, ssize_t upload_bs,
+IFile *new_registry_uploader(IFile *lfile, const std::string &upload_url, const std::string &username,
+                             const std::string &password, uint64_t timeout, ssize_t upload_bs,
                              const char *cert_file, const char *key_file) {
     auto ctx = new_tls_context_from_file(cert_file, key_file);
     if (!ctx) {
@@ -892,4 +893,15 @@ photon::net::TLSContext *new_tls_context_from_file(const char *cert_file, const 
         LOG_ERRNO_RETURN(0, nullptr, "failed to read SSL/TLS client key file `", key_file);
     }
     return photon::net::new_tls_context(cert_str.c_str(), key_str.c_str(), nullptr);
+}
+
+int registry_uploader_fini(photon::fs::IFile *uploader, std::string &digest) {
+    if (uploader == nullptr) {
+        LOG_ERRNO_RETURN(0, EINVAL, "invalid pointer");
+    }
+    if (uploader->fsync() < 0) {
+        LOG_ERRNO_RETURN(0, -1, "failed to upload blob");
+    }
+    digest = ((RegistryUploader *) uploader)->m_sha256sum;
+    return 0;
 }

@@ -43,10 +43,14 @@ photon::fs::IFileSystem *new_registryfs_v2(PasswordCB callback,
                                            const char *customized_ua = nullptr);
 
 photon::fs::IFile* new_registry_uploader(photon::fs::IFile *lfile,
-                                         std::string &upload_url,
-                                         std::string &username, std::string &password,
+                                         const std::string &upload_url,
+                                         const std::string &username,
+                                         const std::string &password,
                                          uint64_t timeout,
                                          ssize_t upload_bs = -1,
                                          const char *cert_file = nullptr,
                                          const char *key_file = nullptr);
+
+int registry_uploader_fini(photon::fs::IFile *uploader, std::string &digest);
+
 }
