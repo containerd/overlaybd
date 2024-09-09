@@ -20,6 +20,7 @@
 #include <photon/fs/subfs.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/extfs/extfs.h>
+#include "../overlaybd/registryfs/registryfs.h"
 #include "../image_service.h"
 #include "../image_file.h"
 #include "../overlaybd/tar/erofs/liberofs.h"
@@ -90,4 +91,24 @@ bool is_erofs_fs(const photon::fs::IFile *imgfile)
 photon::fs::IFileSystem *create_erofs_fs(photon::fs::IFile *imgfile, uint64_t blksz)
 {
     return erofs_create_fs(imgfile, blksz);
+}
+IFile *create_uploader(ZFile::CompressArgs *zfile_args,  IFile *src,
+    const string &upload_url, const string &cred_file_path, uint64_t timeout_minute, uint64_t upload_bs_KB,
+    const string &tls_key_path,  const string &tls_cert_path
+    ){
+
+    zfile_args->overwrite_header = false;
+    LOG_INFO("upload to `", upload_url);
+    std::string username, password;
+    if (load_cred_from_file(cred_file_path, upload_url, username, password) <  0) {
+        fprintf(stderr, "failed to read upload cred file\n");
+        exit(-1);
+    }
+    auto upload_builder = new_registry_uploader(src, upload_url, username, password,
+        timeout_minute*60*1000*1000, upload_bs_KB*1024, tls_cert_path.c_str(), tls_key_path.c_str());
+    if (upload_builder == nullptr) {
+        fprintf(stderr, "failed to init upload\n");
+        exit(-1);
+    }
+    return upload_builder;
 }

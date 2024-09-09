@@ -246,6 +246,12 @@ void test_combo(const IMemoryIndex *indexes[], size_t ni, const SegmentMapping s
         auto ret = memcmp(pm, stdrst, nrst * sizeof(stdrst[0]));
         EXPECT_EQ(ret, 0);
     }
+    LOG_INFO("make RO index of ci");
+    auto ro_idx = ci.make_read_only_index();
+    if (ro_idx->size() == nrst) {
+        auto ret = memcmp(ro_idx->buffer(), stdrst, nrst * sizeof(stdrst[0]));
+        EXPECT_EQ(ret, 0);
+    }
 
     ci.backing_index();
     // delete mi;
@@ -599,7 +605,10 @@ TEST_F(FileTest3, stack_files) {
     LOG_INFO("RO valid data: `", stat.valid_data_size);
     merged = lfs->open(fn_merged, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
     EXPECT_EQ(lower->flatten(merged), 0);
-    cout << "verifying flattened layer of lowers" << endl;
+    // auto localfile = lfs->open(fn_merged, O_RDONLY);
+    struct stat st;
+    merged->fstat(&st);
+    cout << "verifying flattened layer of lowers, st_size: "<<st.st_size << endl;
     verify_file(fn_merged);
     delete merged;
     cout << "generating a RW layer by randwrite()" << endl;
@@ -607,12 +616,16 @@ TEST_F(FileTest3, stack_files) {
     auto file = stack_files(upper, lower, 0, true);
     randwrite(file, FLAGS_nwrites);
     verify_file(file);
-    cout << "verifying flattened layer of stacked layers" << endl;
 
     merged = lfs->open(fn_merged, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
     file->flatten(merged);
+    merged->fstat(&st);
+    cout << "verifying flattened layer of stacked layers, st_size: "<<st.st_size << endl;
+    merged->close();
+
     verify_file(fn_merged);
     delete file;
+    delete merged;
 }
 
 TEST_F(FileTest3, seek_data) {
