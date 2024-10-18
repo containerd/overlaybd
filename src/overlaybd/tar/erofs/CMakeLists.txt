@@ -39,3 +39,7 @@ target_include_directories(erofs_lib PRIVATE
 
 target_compile_options(erofs_lib PRIVATE "-include${EROFS_CONFIG_FILE}")
 target_link_libraries(erofs_lib PRIVATE ${EROFS_LIB_STATIC})
+
+if(BUILD_TESTING)
+  add_subdirectory(test)
+endif()
