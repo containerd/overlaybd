@@ -580,25 +580,38 @@ static int erofs_init_tar(struct erofs_tarfile *erofstar,
 static int erofs_write_map_file(photon::fs::IFile *fout, uint64_t blksz, FILE *fp)
 {
     uint64_t blkaddr, toff;
-    uint32_t nblocks;
+    uint32_t nblocks, zeroedlen;
+    char *line = NULL;
+    size_t len  = 0;
+    int cnt;
 
     if (fp == NULL) {
        LOG_ERROR("unable to get upper.map, ignored");
        return -1;
     }
     rewind(fp);
-    while (fscanf(fp, "%" PRIx64" %x %" PRIx64 "\n", &blkaddr, &nblocks, &toff)
-           >= 3)
-    {
+
+    while (getline(&line, &len, fp) != -1) {
         LSMT::RemoteMapping lba;
+
+        cnt = sscanf(line, "%" PRIx64" %x%" PRIx64 "%u", &blkaddr, &nblocks, &toff, &zeroedlen);
+        if (cnt < 3) {
+            LOG_ERROR("Bad formatted map file.");
+            break;
+        }
+
         lba.offset = blkaddr * blksz;
         lba.count = nblocks * blksz;
         lba.roffset = toff;
+        if (cnt > 3)
+            lba.count = round_up_blk(lba.count - zeroedlen);
+
         int nwrite = fout->ioctl(LSMT::IFileRW::RemoteData, lba);
         if ((unsigned) nwrite != lba.count) {
             LOG_ERRNO_RETURN(0, -1, "failed to write lba");
         }
     }
+    free(line);
 
     return 0;
 }
