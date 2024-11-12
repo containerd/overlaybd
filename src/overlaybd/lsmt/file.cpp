@@ -573,9 +573,19 @@ public:
                 // LOG_DEBUG("offset: `, length: `", m.moffset, size);
                 ssize_t ret = m_files[m.tag]->pread(buf, size, m.moffset * ALIGNMENT);
                 if (ret < size) {
-                    LOG_ERRNO_RETURN(0, (int)ret,
-                                     "failed to read from `-th file ( ` pread return: ` < size: `)",
-                                     m.tag, m_files[m.tag], ret, size);
+                    if (ret < 0) {
+                        LOG_ERRNO_RETURN(0, -1,
+                                         "failed to read from `-th file ( ` pread return: ` < size: `)",
+                                         m.tag, m_files[m.tag], ret, size);
+                    }
+                    size_t ret2 = m_files[m.tag]->pread((char *)buf + ret, size - ret, m.moffset * ALIGNMENT + ret);
+                    if (ret2) {
+                        LOG_ERRNO_RETURN(0, (int)ret,
+                                         "failed to read from `-th file ( ` pread return: ` < size: `)",
+                                         m.tag, m_files[m.tag], ret, size);
+                    } else {
+                        memset((char *)buf + ret, 0, size - ret);
+                    }
                 }
                 lsmt_io_size += ret;
                 lsmt_io_cnt++;
