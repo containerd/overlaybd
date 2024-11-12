@@ -624,7 +624,7 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
     struct erofs_mkfs_cfg mkfs_cfg;
     struct erofs_configure *erofs_cfg;
     struct liberofs_file target_file, source_file;
-    int err;
+    int err, err2;
 
     target_file.ops.pread = erofs_target_pread;
     target_file.ops.pwrite = erofs_target_pwrite;
@@ -690,11 +690,11 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
         goto exit;
     }
 exit:
-    err = erofs_close_sbi(&sbi, target_file.cache);
+    err2 = erofs_close_sbi(&sbi, target_file.cache);
     erofs_close_tar(&erofstar);
     std::fclose(mkfs_cfg.mp_fp);
     delete target_file.cache;
-    return err;
+    return err ? err : err2;
 }
 
 LibErofs::LibErofs(photon::fs::IFile *target, uint64_t blksize, bool import_tar_headers)
