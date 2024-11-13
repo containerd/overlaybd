@@ -431,7 +431,7 @@ struct erofs_mkfs_cfg {
 
 static int rebuild_src_count;
 
-int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
+int erofs_mkfs(struct erofs_mkfs_cfg *mkfs_cfg)
 {
     int err;
     struct erofs_tarfile *erofstar;
@@ -440,21 +440,21 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
     struct erofs_inode *root = NULL;
     erofs_blk_t nblocks;
 
-    erofstar = cfg->erofstar;
-    sbi = cfg->sbi;
+    erofstar = mkfs_cfg->erofstar;
+    sbi = mkfs_cfg->sbi;
     if (!erofstar || !sbi)
         return -EINVAL;
 
-    if (!cfg->mp_fp)
+    if (!mkfs_cfg->mp_fp)
         return -EINVAL;
 
-    err = erofs_blocklist_open(cfg->mp_fp, true);
+    err = erofs_blocklist_open(mkfs_cfg->mp_fp, true);
     if (err) {
         LOG_ERROR("[erofs] Fail to open erofs blocklist.");
         return -EINVAL;
     }
 
-    if (!cfg->incremental) {
+    if (!mkfs_cfg->incremental) {
         sbi->bmgr = erofs_buffer_init(sbi, 0);
         if (!sbi->bmgr) {
             err = -ENOMEM;
@@ -495,7 +495,7 @@ int erofs_mkfs(struct erofs_mkfs_cfg *cfg)
         goto exit;
     }
 
-    err = erofs_rebuild_dump_tree(root, cfg->incremental);
+    err = erofs_rebuild_dump_tree(root, mkfs_cfg->incremental);
     if (err < 0) {
         LOG_ERROR("[erofs] Fail to dump tree.", err);
         goto exit;
@@ -580,25 +580,38 @@ static int erofs_init_tar(struct erofs_tarfile *erofstar,
 static int erofs_write_map_file(photon::fs::IFile *fout, uint64_t blksz, FILE *fp)
 {
     uint64_t blkaddr, toff;
-    uint32_t nblocks;
+    uint32_t nblocks, zeroedlen;
+    char *line = NULL;
+    size_t len  = 0;
+    int cnt;
 
     if (fp == NULL) {
        LOG_ERROR("unable to get upper.map, ignored");
        return -1;
     }
     rewind(fp);
-    while (fscanf(fp, "%" PRIx64" %x %" PRIx64 "\n", &blkaddr, &nblocks, &toff)
-           >= 3)
-    {
+
+    while (getline(&line, &len, fp) != -1) {
         LSMT::RemoteMapping lba;
+
+        cnt = sscanf(line, "%" PRIx64" %x%" PRIx64 "%u", &blkaddr, &nblocks, &toff, &zeroedlen);
+        if (cnt < 3) {
+            LOG_ERROR("Bad formatted map file.");
+            break;
+        }
+
         lba.offset = blkaddr * blksz;
         lba.count = nblocks * blksz;
         lba.roffset = toff;
+        if (cnt > 3)
+            lba.count = round_up_blk(lba.count - zeroedlen);
+
         int nwrite = fout->ioctl(LSMT::IFileRW::RemoteData, lba);
         if ((unsigned) nwrite != lba.count) {
             LOG_ERRNO_RETURN(0, -1, "failed to write lba");
         }
     }
+    free(line);
 
     return 0;
 }
@@ -621,10 +634,10 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
 {
     struct erofs_sb_info sbi = {};
     struct erofs_tarfile erofstar = {};
-    struct erofs_mkfs_cfg cfg;
+    struct erofs_mkfs_cfg mkfs_cfg;
     struct erofs_configure *erofs_cfg;
     struct liberofs_file target_file, source_file;
-    int err;
+    int err, err2;
 
     target_file.ops.pread = erofs_target_pread;
     target_file.ops.pwrite = erofs_target_pwrite;
@@ -666,35 +679,35 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
     erofstar.rvsp_mode = true;
     if (ddtaridx)
             erofstar.ddtaridx_mode = true;
-    cfg.sbi = &sbi;
-    cfg.erofstar = &erofstar;
-    cfg.incremental = !first_layer;
+    mkfs_cfg.sbi = &sbi;
+    mkfs_cfg.erofstar = &erofstar;
+    mkfs_cfg.incremental = !first_layer;
     erofs_cfg = erofs_get_configure();
     erofs_cfg->c_ovlfs_strip = true;
     if (first_layer)
         erofs_cfg->c_root_xattr_isize = EROFS_ROOT_XATTR_SZ;
     else
         erofs_cfg->c_root_xattr_isize = 0;
-    cfg.mp_fp = std::tmpfile();
+    mkfs_cfg.mp_fp = std::tmpfile();
 
-    err = erofs_mkfs(&cfg);
+    err = erofs_mkfs(&mkfs_cfg);
     if (err) {
         LOG_ERROR("Failed to mkfs.");
         goto exit;
     }
 
     /* write mapfile */
-    err = erofs_write_map_file(target_file.file, blksize, cfg.mp_fp);
+    err = erofs_write_map_file(target_file.file, blksize, mkfs_cfg.mp_fp);
     if (err) {
         LOG_ERROR("Failed to write mapfile.");
         goto exit;
     }
 exit:
-    err = erofs_close_sbi(&sbi, target_file.cache);
+    err2 = erofs_close_sbi(&sbi, target_file.cache);
     erofs_close_tar(&erofstar);
-    std::fclose(cfg.mp_fp);
+    std::fclose(mkfs_cfg.mp_fp);
     delete target_file.cache;
-    return err;
+    return err ? err : err2;
 }
 
 LibErofs::LibErofs(photon::fs::IFile *target, uint64_t blksize, bool import_tar_headers)
