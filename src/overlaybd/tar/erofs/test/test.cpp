@@ -269,14 +269,18 @@ protected:
 
     virtual void TearDown() override{
         ASSERT_NE(nullptr, host_fs);
-        if (host_fs->access(src_path.c_str(), 0) == 0)
+        if (host_fs->access(src_path.c_str(), 0) == 0) {
             ASSERT_EQ(0, host_fs->unlink(src_path.c_str()));
-        if (host_fs->access(fn_idx.c_str(), 0) == 0)
+        }
+        if (host_fs->access(fn_idx.c_str(), 0) == 0) {
             ASSERT_EQ(0, host_fs->unlink(fn_idx.c_str()));
-        if (host_fs->access(fn_meta.c_str(), 0) == 0)
+        }
+        if (host_fs->access(fn_meta.c_str(), 0) == 0) {
             ASSERT_EQ(0, host_fs->unlink(fn_meta.c_str()));
-        if (host_fs->access(sha256_path.c_str(), 0) == 0)
+        }
+        if (host_fs->access(sha256_path.c_str(), 0) == 0) {
             ASSERT_EQ(0, host_fs->unlink(sha256_path.c_str()));
+        }
         delete host_fs;
     }
 
@@ -534,7 +538,7 @@ TEST_F(ErofsPax, pax_test) {
             auto dir = erofs_fs->opendir(tmp.c_str());
             while (dir->next()) {
                 dirent *dent = dir->get();
-                items.emplace_back(tmp + "/" + dent->d_name);
+                items.emplace_back(tmp + "/" + std::string(dent->d_name));
             }
             dir->closedir();
             delete dir;
@@ -549,6 +553,233 @@ TEST_F(ErofsPax, pax_test) {
     ASSERT_STREQ(std_res.c_str(), sha256file->sha256_checksum().c_str());
     delete sha256_f;
     delete sha256file;
+}
+
+/* test for the internal ErofsCache */
+typedef uint64_t        u64;
+class ErofsCache {
+public:
+    ErofsCache(photon::fs::IFile *file, unsigned long int capacity):
+    file(file), capacity(capacity)
+    {}
+    ~ErofsCache() {}
+    ssize_t write_sector(u64 addr, char *buf);
+    ssize_t read_sector(u64 addr, char *buf);
+    int flush();
+public:
+    photon::fs::IFile *file;
+    long unsigned int capacity;
+    std::map<u64, struct liberofs_inmem_sector*>caches;
+    std::set<u64> dirty;
+};
+
+/* helper functions for reading and writing photon files */
+extern ssize_t erofs_read_photon_file(void *buf, u64 offset, size_t len,
+                                      ErofsCache *cache);
+extern ssize_t erofs_write_photon_file(const void *buf, u64 offset,
+                                       size_t len, ErofsCache *cache);
+class ErofsCacheTest: public ::testing::Test {
+protected:
+    std::string workdir = "/tmp/erofs_cache_test";
+    std::string file_path = workdir + "/img_file";
+    photon::fs::IFileSystem *host_fs;
+    photon::fs::IFile *img_file;
+    ErofsCache *cache;
+
+    virtual void SetUp() override{
+        /* prepare for workdir */
+        host_fs = photon::fs::new_localfs_adaptor();
+        ASSERT_NE(nullptr, host_fs);
+        if (host_fs->access(workdir.c_str(), 0)) {
+            ASSERT_EQ(host_fs->mkdir(workdir.c_str(), 0755), 0);
+        }
+
+        /* prepare for img_file */
+        img_file = host_fs->open(file_path.c_str(), O_RDWR | O_CREAT | O_TRUNC,
+                                 0666);
+        ASSERT_NE(nullptr, img_file);
+
+        /*
+         * prepare for cache. here, we use a cache with a size of only
+         * one sector to simulate a memory-constrained situation.
+         */
+        cache = new ErofsCache(img_file, 1);
+        ASSERT_NE(nullptr, cache);
+    }
+
+    virtual void TearDown() override{
+        ASSERT_NE(nullptr, host_fs);
+        if (host_fs->access(file_path.c_str(), 0) == 0) {
+            ASSERT_EQ(host_fs->unlink(file_path.c_str()), 0);
+        }
+        delete host_fs;
+        delete img_file;
+        delete cache;
+    }
+};
+
+TEST_F(ErofsCacheTest, erofs_cache) {
+
+#define SECTOR_SIZE 512ULL
+#define HALF_SECTOR (SECTOR_SIZE / 2)
+#define BIG_OFFSET ((1ULL << 32) - 1)
+#define round_down_blk(addr) ((addr) & (~(SECTOR_SIZE - 1)))
+#define round_up_blk(addr) (round_down_blk((addr) + SECTOR_SIZE - 1))
+
+    char buffer[SECTOR_SIZE];
+    char buffer_cmp[SECTOR_SIZE];
+
+    /*
+     * TC001
+     * 1. write 0xff to [0, 512]
+     * 2. write 0x00 to [256, 512]
+     * 3. compare
+     */
+    memset(buffer, 0xff, SECTOR_SIZE);
+    ASSERT_EQ(SECTOR_SIZE, erofs_write_photon_file(buffer, 0, SECTOR_SIZE,
+                                                   cache));
+    memset(buffer, 0x00, SECTOR_SIZE);
+    ASSERT_EQ(HALF_SECTOR, erofs_write_photon_file(buffer, HALF_SECTOR,
+                                                   HALF_SECTOR, cache));
+    memset(buffer_cmp, 0xff, HALF_SECTOR);
+    memset(buffer_cmp + HALF_SECTOR, 0x00, HALF_SECTOR);
+    ASSERT_EQ(SECTOR_SIZE, erofs_read_photon_file(buffer, 0, SECTOR_SIZE,
+                                                  cache));
+    ASSERT_EQ(0, memcmp(buffer, buffer_cmp, SECTOR_SIZE));
+
+    /*
+     * TC002
+     * 1. write 0xff to [0, 1024]
+     * 2. write 0x00 to [0, 512]
+     * 3. flush, then read and compare
+     */
+    memset(buffer, 0xff, SECTOR_SIZE);
+    ASSERT_EQ(SECTOR_SIZE, erofs_write_photon_file(buffer, 0, SECTOR_SIZE,
+                                                   cache));
+    ASSERT_EQ(SECTOR_SIZE, erofs_write_photon_file(buffer, SECTOR_SIZE,
+                                                   SECTOR_SIZE, cache));
+    memset(buffer, 0x00, SECTOR_SIZE);
+    ASSERT_EQ(SECTOR_SIZE, erofs_write_photon_file(buffer, 0, SECTOR_SIZE,
+                                                   cache));
+    cache->flush();
+    memset(buffer, 0x00, SECTOR_SIZE);
+    ASSERT_EQ(SECTOR_SIZE, img_file->pread(buffer_cmp, SECTOR_SIZE, 0));
+    ASSERT_EQ(0, memcmp(buffer, buffer_cmp, SECTOR_SIZE));
+    memset(buffer, 0xff, SECTOR_SIZE);
+    ASSERT_EQ(SECTOR_SIZE, img_file->pread(buffer_cmp, SECTOR_SIZE,
+                                           SECTOR_SIZE));
+    ASSERT_EQ(0, memcmp(buffer, buffer_cmp, SECTOR_SIZE));
+
+    /*
+     * TC003
+     * write 11 blocks, odd blocks contain
+     * 0xff and even blocks contain 0x00
+     */
+    for (int i = 0; i < 11; i ++) {
+        if (i & 1)
+            memset(buffer, 0xff, SECTOR_SIZE);
+        else
+            memset(buffer, 0x00, SECTOR_SIZE);
+        ASSERT_EQ(SECTOR_SIZE, erofs_write_photon_file(buffer, SECTOR_SIZE * i,
+                                                       SECTOR_SIZE, cache));
+    }
+    cache->flush();
+    for (int i = 0; i < 11; i ++) {
+        if (i & 1)
+            memset(buffer_cmp, 0xff, SECTOR_SIZE);
+        else
+            memset(buffer_cmp, 0x00, SECTOR_SIZE);
+        ASSERT_EQ(SECTOR_SIZE, erofs_read_photon_file(buffer, SECTOR_SIZE * i,
+                                                      SECTOR_SIZE, cache));
+        ASSERT_EQ(0, memcmp(buffer, buffer_cmp, SECTOR_SIZE));
+        ASSERT_EQ(SECTOR_SIZE, img_file->pread(buffer, SECTOR_SIZE,
+                                               SECTOR_SIZE * i));
+        ASSERT_EQ(0, memcmp(buffer, buffer_cmp, SECTOR_SIZE));
+    }
+
+    /*
+     * TC 004
+     * test for non-aligned blocks
+     */
+    for (int i = 0; i < 10; i ++) {
+        if (i & 1)
+            memset(buffer, 0xff, SECTOR_SIZE);
+        else
+            memset(buffer, 0x00, SECTOR_SIZE);
+        ASSERT_EQ(SECTOR_SIZE, erofs_write_photon_file(buffer,
+                HALF_SECTOR +  SECTOR_SIZE * i, SECTOR_SIZE, cache));
+    }
+    cache->flush();
+    for (int i = 0; i < 10; i ++) {
+        if (i & 1)
+            memset(buffer_cmp, 0xff, SECTOR_SIZE);
+        else
+            memset(buffer_cmp, 0x00, SECTOR_SIZE);
+        ASSERT_EQ(SECTOR_SIZE, erofs_read_photon_file(buffer,
+                HALF_SECTOR + SECTOR_SIZE * i, SECTOR_SIZE, cache));
+        ASSERT_EQ(0, memcmp(buffer, buffer_cmp, SECTOR_SIZE));
+        ASSERT_EQ(SECTOR_SIZE, img_file->pread(buffer, SECTOR_SIZE,
+                                               HALF_SECTOR + SECTOR_SIZE * i));
+        ASSERT_EQ(0, memcmp(buffer, buffer_cmp, SECTOR_SIZE));
+    }
+
+    /*
+     * TC 005
+     * test for offset bigger than 2^32 (block-aligned)
+     */
+    for (int i = 0; i < 11; i ++) {
+        if (i & 1)
+            memset(buffer, 0xff, SECTOR_SIZE);
+        else
+            memset(buffer, 0x00, SECTOR_SIZE);
+        ASSERT_EQ(SECTOR_SIZE, erofs_write_photon_file(buffer,
+                round_up_blk(BIG_OFFSET) + SECTOR_SIZE * i, SECTOR_SIZE, cache));
+    }
+    cache->flush();
+    for (int i = 0; i < 11; i ++) {
+        if (i & 1)
+            memset(buffer_cmp, 0xff, SECTOR_SIZE);
+        else
+            memset(buffer_cmp, 0x00, SECTOR_SIZE);
+        ASSERT_EQ(SECTOR_SIZE, erofs_read_photon_file(buffer,
+                round_up_blk(BIG_OFFSET) + SECTOR_SIZE * i, SECTOR_SIZE, cache));
+        ASSERT_EQ(0, memcmp(buffer, buffer_cmp, SECTOR_SIZE));
+        ASSERT_EQ(SECTOR_SIZE, img_file->pread(buffer, SECTOR_SIZE,
+                round_up_blk(BIG_OFFSET) + SECTOR_SIZE * i));
+        ASSERT_EQ(0, memcmp(buffer, buffer_cmp, SECTOR_SIZE));
+    }
+
+    /*
+     * TC 006
+     * test for offset bigger than 2^32 (non-aligned)
+     */
+    for (int i = 0; i < 10; i ++) {
+        if (i & 1)
+            memset(buffer, 0xff, SECTOR_SIZE);
+        else
+            memset(buffer, 0x00, SECTOR_SIZE);
+        ASSERT_EQ(SECTOR_SIZE, erofs_write_photon_file(buffer,
+                BIG_OFFSET + SECTOR_SIZE * i, SECTOR_SIZE, cache));
+    }
+    cache->flush();
+    for (int i = 0; i < 10; i ++) {
+        if (i & 1)
+            memset(buffer_cmp, 0xff, SECTOR_SIZE);
+        else
+            memset(buffer_cmp, 0x00, SECTOR_SIZE);
+        ASSERT_EQ(SECTOR_SIZE, erofs_read_photon_file(buffer,
+                BIG_OFFSET + SECTOR_SIZE * i, SECTOR_SIZE, cache));
+        ASSERT_EQ(0, memcmp(buffer, buffer_cmp, SECTOR_SIZE));
+        ASSERT_EQ(SECTOR_SIZE, img_file->pread(buffer, SECTOR_SIZE,
+                BIG_OFFSET + SECTOR_SIZE * i));
+        ASSERT_EQ(0, memcmp(buffer, buffer_cmp, SECTOR_SIZE));
+    }
+
+#undef SECTOR_SIZE
+#undef HALF_SECTOR
+#undef BIG_OFFSET
+#undef round_down_blk
+#undef round_up_blk
 }
 
 int main(int argc, char **argv) {
