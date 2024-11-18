@@ -583,7 +583,7 @@ static int erofs_write_map_file(photon::fs::IFile *fout, uint64_t blksz, FILE *f
     uint32_t nblocks, zeroedlen;
     char *line = NULL;
     size_t len  = 0;
-    int cnt;
+    int cnt, err = 0;
 
     if (fp == NULL) {
        LOG_ERROR("unable to get upper.map, ignored");
@@ -597,6 +597,7 @@ static int erofs_write_map_file(photon::fs::IFile *fout, uint64_t blksz, FILE *f
         cnt = sscanf(line, "%" PRIx64" %x%" PRIx64 "%u", &blkaddr, &nblocks, &toff, &zeroedlen);
         if (cnt < 3) {
             LOG_ERROR("Bad formatted map file.");
+            err = -EINVAL;
             break;
         }
 
@@ -608,12 +609,15 @@ static int erofs_write_map_file(photon::fs::IFile *fout, uint64_t blksz, FILE *f
 
         int nwrite = fout->ioctl(LSMT::IFileRW::RemoteData, lba);
         if ((unsigned) nwrite != lba.count) {
-            LOG_ERRNO_RETURN(0, -1, "failed to write lba");
+            LOG_ERROR("failed to write lba");
+            err = -EINVAL;
+            break;
         }
     }
-    free(line);
+    if (line)
+        free(line);
 
-    return 0;
+    return err;
 }
 
 static int erofs_close_sbi(struct erofs_sb_info *sbi, ErofsCache *cache)
