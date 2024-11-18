@@ -32,10 +32,11 @@
 #include "../../../gzip/gz.h"
 #include "../../../../tools/sha256file.h"
 #include "../../../../tools/comm_func.h"
-
+#include "../erofs_fs.h"
 
 #define FILE_SIZE (2 * 1024 * 1024)
 #define IMAGE_SIZE 512UL<<20
+
 class ErofsTest : public ::testing::Test {
 public:
     static int inflate(std::string output_file, unsigned char *data, unsigned int size) {
@@ -841,7 +842,6 @@ protected:
         }
         delete host_fs;
     }
-
     int traverse_fs(photon::fs::IFileSystem *fs, photon::fs::IFile *out) {
         std::vector<string> items;
 
