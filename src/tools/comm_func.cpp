@@ -23,7 +23,6 @@
 #include "../overlaybd/registryfs/registryfs.h"
 #include "../image_service.h"
 #include "../image_file.h"
-#include "../overlaybd/tar/erofs/liberofs.h"
 
 
 using namespace std;
@@ -80,6 +79,9 @@ photon::fs::IFileSystem *create_ext4fs(photon::fs::IFile *imgfile, bool mkfs,
     }
     return target;
 }
+
+extern bool erofs_check_fs(const photon::fs::IFile *imgfile);
+extern photon::fs::IFileSystem *erofs_create_fs(photon::fs::IFile *imgfile, uint64_t blksz);
 
 bool is_erofs_fs(const photon::fs::IFile *imgfile)
 {
