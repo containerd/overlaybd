@@ -23,9 +23,11 @@
 #include <map>
 #include <set>
 
+/* block-related definitions */
 #define SECTOR_SIZE 512ULL
 #define SECTOR_BITS 9
 
+/* address alignment operation */
 #define round_down_blk(addr) ((addr) & (~(SECTOR_SIZE - 1)))
 #define round_up_blk(addr) (round_down_blk((addr) + SECTOR_SIZE - 1))
 #define erofs_min(a, b) (a) < (b) ? (a) : (b)
@@ -43,6 +45,10 @@ struct liberofs_inmem_sector {
 	char data[SECTOR_SIZE];
 };
 
+/*
+ * Internal cache of EROFS, used to accelerate
+ * the read and write operations of an IFile.
+ */
 class ErofsCache {
 public:
 	ErofsCache(photon::fs::IFile *file, unsigned long int capacity):
@@ -59,6 +65,10 @@ public:
 	std::set<u64> dirty;
 };
 
+/*
+ * Encapsulation of IFile by liberofs,
+ * including I/O operations and ErofsCache.
+ */
 struct liberofs_file {
 	struct erofs_vfops ops;
 	photon::fs::IFile *file;

@@ -21,14 +21,9 @@
 #include <photon/fs/virtual-file.h>
 #include <photon/common/alog.h>
 #include <vector>
-#include "erofs_common.h"
-#include "erofs/internal.h"
 
 class ErofsFileSystem: public photon::fs::IFileSystem {
 public:
-	struct erofs_sb_info sbi;
-	struct liberofs_file target_file;
-
 	ErofsFileSystem(photon::fs::IFile *imgfile, uint64_t blksize);
 	~ErofsFileSystem();
 	photon::fs::IFile* open(const char *pathname, int flags);
@@ -56,17 +51,26 @@ public:
 	int mknod(const char *path, mode_t mode, dev_t dev);
 	int syncfs();
 	photon::fs::DIR* opendir(const char *name);
+private:
+	struct ErofsFileSystemInt;
+	struct ErofsFileSystemInt *fs_private;
+
+	friend class ErofsFile;
 };
 
 class ErofsFile: public photon::fs::VirtualReadOnlyFile {
 public:
-	ErofsFileSystem *fs;
-	struct erofs_inode inode;
-
 	ErofsFile(ErofsFileSystem *fs);
+	~ErofsFile();
 	photon::fs::IFileSystem *filesystem();
 	int fstat(struct stat *buf);
 	int fiemap(struct photon::fs::fiemap *map);
+private:
+	ErofsFileSystem *fs;
+	struct ErofsFileInt;
+	ErofsFileInt *file_private;
+
+	friend class ErofsFileSystem;
 };
 
 class ErofsDir: public photon::fs::DIR {

@@ -21,11 +21,32 @@
 #include <dirent.h>
 #include <vector>
 
+struct ErofsFileSystem::ErofsFileSystemInt {
+	struct erofs_sb_info sbi;
+	struct liberofs_file target_file;
+};
+struct ErofsFile::ErofsFileInt {
+	struct erofs_inode inode;
+};
+
 // ErofsFile
 ErofsFile::ErofsFile(ErofsFileSystem *fs): fs(fs)
 {
-	memset(&inode, 0, sizeof(struct erofs_inode));
+	ErofsFileSystem::ErofsFileSystemInt *fs_private = fs->fs_private;
+
+	file_private = new ErofsFileInt;
+	if (!file_private)
+		LOG_ERROR("[erofs_fs] fail to prepare for file_private");
+
+	memset(&file_private->inode, 0, sizeof(struct erofs_inode));
+	file_private->inode.sbi = &fs_private->sbi;
 }
+
+ErofsFile::~ErofsFile() {
+	delete file_private;
+	file_private = NULL;
+}
+
 photon::fs::IFileSystem *ErofsFile::filesystem() { return fs; }
 
 struct liberofs_nameidata {
@@ -185,15 +206,16 @@ static int do_erofs_ilookup(const char *path, struct erofs_inode *vi)
 
 int ErofsFile::fstat(struct stat *buf)
 {
-	buf->st_mode = inode.i_mode;
-	buf->st_nlink = inode.i_nlink;
-	buf->st_size = inode.i_size;
-	buf->st_blocks = roundup(inode.i_size, erofs_blksiz(inode.sbi)) >> 9;
-	buf->st_uid = inode.i_uid;
-	buf->st_gid = inode.i_gid;
-	buf->st_ctime = inode.i_mtime;
-	buf->st_mtime = inode.i_mtime;
-	buf->st_atime = inode.i_mtime;
+	buf->st_mode = file_private->inode.i_mode;
+	buf->st_nlink = file_private->inode.i_nlink;
+	buf->st_size = file_private->inode.i_size;
+	buf->st_blocks = roundup(file_private->inode.i_size,
+				 erofs_blksiz(file_private->inode.sbi)) >> 9;
+	buf->st_uid = file_private->inode.i_uid;
+	buf->st_gid = file_private->inode.i_gid;
+	buf->st_ctime = file_private->inode.i_mtime;
+	buf->st_mtime = file_private->inode.i_mtime;
+	buf->st_atime = file_private->inode.i_mtime;
 	return 0;
 }
 
@@ -207,8 +229,8 @@ int ErofsFile::fiemap(struct photon::fs::fiemap *map)
 	erofs_map.index = UINT_MAX;
 	erofs_map.m_la = 0;
 
-	while (erofs_map.m_la < inode.i_size) {
-		err = erofs_map_blocks(&inode, &erofs_map, 0);
+	while (erofs_map.m_la < file_private->inode.i_size) {
+		err = erofs_map_blocks(&file_private->inode, &erofs_map, 0);
 		if (err)
 			LOG_ERROR_RETURN(err, err, "[erofs] Fail to map erofs blocks");
 		ext_buf[map->fm_mapped_extents].fe_physical = erofs_map.m_pa;
@@ -245,30 +267,41 @@ EROFS_UNIMPLEMENTED_FUNC(int, ErofsFileSystem, syncfs(), -EROFS_UNIMPLEMENTED)
 
 ErofsFileSystem::ErofsFileSystem(photon::fs::IFile *imgfile, uint64_t blksize)
 {
-	target_file.ops.pread = erofs_target_pread;
-	target_file.ops.pwrite = erofs_target_pwrite;
-	target_file.ops.pread = erofs_target_pread;
-	target_file.ops.pwrite = erofs_target_pwrite;
-	target_file.ops.fsync = erofs_target_fsync;
-	target_file.ops.fallocate = erofs_target_fallocate;
-	target_file.ops.ftruncate = erofs_target_ftruncate;
-	target_file.ops.read = erofs_target_read;
-	target_file.ops.lseek = erofs_target_lseek;
-	target_file.file = imgfile;
-	target_file.cache = new ErofsCache(target_file.file, 128);
+	fs_private = new ErofsFileSystemInt;
 
-	memset(&sbi, 0, sizeof(struct erofs_sb_info));
-	sbi.blkszbits = ilog2(blksize);
-	sbi.bdev.ops = &target_file.ops;
-	target_file.file->lseek(0,0);
-	sbi.devsz = INT64_MAX;
-	if (erofs_read_superblock(&sbi))
+	if (!fs_private)
+		LOG_ERROR("[erofs] Fail to prepare fs_private: no mem.");
+
+	// init target_file
+	fs_private->target_file.ops.pread = erofs_target_pread;
+	fs_private->target_file.ops.pwrite = erofs_target_pwrite;
+	fs_private->target_file.ops.pread = erofs_target_pread;
+	fs_private->target_file.ops.pwrite = erofs_target_pwrite;
+	fs_private->target_file.ops.fsync = erofs_target_fsync;
+	fs_private->target_file.ops.fallocate = erofs_target_fallocate;
+	fs_private->target_file.ops.ftruncate = erofs_target_ftruncate;
+	fs_private->target_file.ops.read = erofs_target_read;
+	fs_private->target_file.ops.lseek = erofs_target_lseek;
+	fs_private->target_file.file = imgfile;
+	fs_private->target_file.cache = new ErofsCache(imgfile, 128);
+	if (!fs_private->target_file.cache)
+		LOG_ERROR("[erofs] Fail to prepare target_file.cache: no mem.");
+
+	// init sbi
+	memset(&fs_private->sbi, 0, sizeof(struct erofs_sb_info));
+	fs_private->sbi.blkszbits = ilog2(blksize);
+	fs_private->sbi.bdev.ops = &fs_private->target_file.ops;
+	fs_private->target_file.file->lseek(0,0);
+	fs_private->sbi.devsz = INT64_MAX;
+	if (erofs_read_superblock(&fs_private->sbi))
 		LOG_ERROR("[erofs] Fail to read_super_block");
 }
 
 ErofsFileSystem::~ErofsFileSystem()
 {
-	delete target_file.cache;
+	delete fs_private->target_file.cache;
+	delete fs_private;
+	fs_private = NULL;
 }
 
 int ErofsFileSystem::stat(const char *path, struct stat *buf)
@@ -276,7 +309,7 @@ int ErofsFileSystem::stat(const char *path, struct stat *buf)
 	struct erofs_inode vi;
 	int err;
 
-	vi.sbi = &sbi;
+	vi.sbi = &fs_private->sbi;
 	err = do_erofs_ilookup(path, &vi);
 	if (err)
 		LOG_ERRNO_RETURN(err, err, "[erofs] Fail to lookup inode");
@@ -297,8 +330,7 @@ photon::fs::IFile* ErofsFileSystem::open(const char *pathname, int flags)
 	ErofsFile *file = new ErofsFile(this);
 	int err;
 
-	file->inode.sbi = &sbi;
-	err = do_erofs_ilookup(pathname, &file->inode);
+	err = do_erofs_ilookup(pathname, &file->file_private->inode);
 	if (err) {
 		delete file;
 		LOG_ERROR_RETURN(-err, nullptr, "[erofs] Fail to lookup inode by path");
@@ -354,7 +386,7 @@ photon::fs::DIR* ErofsFileSystem::opendir(const char *name)
 {
 	std::vector<::dirent> dirs;
 
-	auto ret = do_erofs_readdir(&sbi, name, &dirs);
+	auto ret = do_erofs_readdir(&fs_private->sbi, name, &dirs);
 	if (ret) {
 		errno = -ret;
 		return nullptr;
