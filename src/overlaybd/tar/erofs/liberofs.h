@@ -16,7 +16,4 @@ private:
     bool ddtaridx;
 };
 
-bool erofs_check_fs(const photon::fs::IFile *imgfile);
-photon::fs::IFileSystem *erofs_create_fs(photon::fs::IFile *imgfile, uint64_t blksz);
-
 #endif

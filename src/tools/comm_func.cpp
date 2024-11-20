@@ -23,7 +23,7 @@
 #include "../overlaybd/registryfs/registryfs.h"
 #include "../image_service.h"
 #include "../image_file.h"
-#include "../overlaybd/tar/erofs/liberofs.h"
+#include "../overlaybd/tar/erofs/erofs_fs.h"
 
 
 using namespace std;
