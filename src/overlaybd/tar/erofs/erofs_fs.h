@@ -65,6 +65,7 @@ public:
 	photon::fs::IFileSystem *filesystem();
 	int fstat(struct stat *buf);
 	int fiemap(struct photon::fs::fiemap *map);
+	ssize_t pread(void *buf, size_t count, off_t offset);
 private:
 	ErofsFileSystem *fs;
 	struct ErofsFileInt;

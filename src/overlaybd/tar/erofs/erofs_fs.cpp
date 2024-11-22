@@ -241,6 +241,50 @@ int ErofsFile::fiemap(struct photon::fs::fiemap *map)
 	return 0;
 }
 
+ssize_t ErofsFile::pread(void *buf, size_t count, off_t offset)
+{
+	struct erofs_inode *inode = &file_private->inode;
+	struct erofs_map_blocks map;
+	erofs_off_t ptr = offset;
+	ssize_t read = 0;
+	int ret;
+
+	map.index = UINT_MAX;
+	while (ptr < offset + count) {
+		char *estart = (char*)buf + ptr - offset;
+		erofs_off_t eend, moff = 0;
+		map.m_la = ptr;
+		ret = erofs_map_blocks(inode, &map, 0);
+		if (ret || map.m_plen != map.m_llen)
+			LOG_ERROR_RETURN(0, -1, "[erofs_fs] fail to map blocks");
+		eend = std::min(offset + count, map.m_la + map.m_llen);
+		if (ptr < map.m_la)
+			LOG_ERROR_RETURN(0, -1, "[erofs_fs] invalid read offset");
+		if (!(map.m_flags & EROFS_MAP_MAPPED)) {
+			if (!map.m_llen) {
+				/* reached EOF */
+				memset((void*)estart, 0, offset + count - ptr);
+				ptr = offset + count;
+				continue;
+			}
+			memset((void*)estart, 0, eend - ptr);
+			ptr = eend;
+			continue;;
+		}
+		if (ptr > map.m_la) {
+			moff = ptr - map.m_la;
+			map.m_la = ptr;
+		}
+		ret = erofs_read_one_data(inode, &map, estart, moff,
+					  eend - map.m_la);
+		if (ret)
+			return ret;
+		read += eend - map.m_la;
+		ptr = eend;
+	}
+	return read;
+}
+
 // ErofsFileSystem
 EROFS_UNIMPLEMENTED_FUNC(photon::fs::IFile*, ErofsFileSystem, open(const char *pathname, int flags, mode_t mode), NULL)
 EROFS_UNIMPLEMENTED_FUNC(photon::fs::IFile*, ErofsFileSystem, creat(const char *pathname, mode_t mode), NULL)
