@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 #include <fcntl.h>
 #include "../../../lsmt/file.h"
+#include "../erofs_fs.h"
 
 #define IMAGE_SIZE 1UL<<30
 #define SECTOR_SIZE 512ULL
