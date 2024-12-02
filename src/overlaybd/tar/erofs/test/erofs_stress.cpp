@@ -19,6 +19,8 @@
 #include <photon/common/alog-stdstring.h>
 #include <random>
 #include <functional>
+#include <sstream>
+#include <iomanip>
 #include "erofs_stress_base.h"
 
 #define EROFS_STRESS_UNIMPLEMENTED_FUNC(ret_type, func, ret) \
@@ -125,6 +127,33 @@ public:
 			std::string str_value = std::string(xattr_value_buffer, value_len);
 			node->xattrs[str_key] = str_value;
 		}
+		return true;
+	}
+
+	/* mode in build phase */
+	bool build_gen_mod(StressNode *node, StressHostFile *file) override {
+		std::string str_mode;
+		mode_t mode;
+
+		for (int i = 0; i < 3; i ++) {
+			str_mode += std::to_string(get_randomint(0, 7));
+		}
+		mode = std::stoi(str_mode, nullptr, 8);
+		if (file->file->fchmod(mode))
+			LOG_ERROR_RETURN(-1, false, "fail to set mode ` for file `", str_mode, file->path);
+		node->mod = str_mode;
+		return true;
+	}
+
+	/* mode in verify phase */
+	bool verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file) override {
+		struct stat st;
+		std::ostringstream oss;
+
+		if (erofs_file->fstat(&st))
+			LOG_ERROR_RETURN(-1, false, "fail to stat erofs file");
+		oss << std::oct << std::setfill('0') << std::setw(3) << (st.st_mode & 0777);
+		node->mod = oss.str();
 		return true;
 	}
 };
@@ -247,6 +276,42 @@ public:
 
 };
 
+/*
+ * TC004
+ *
+ * Create layers, each layer contains 10 dirs,
+ * each dir contains 10 files.
+ *
+ * Testing the mode of files.
+ */
+class StressCase004: public StressBase, public StressInterImpl {
+public:
+	StressCase004(std::string path, int layers): StressBase(path, layers) {}
+
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, build_gen_own(StressNode *node, StressHostFile *file), true)
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, build_gen_xattrs(StressNode *node, StressHostFile *file), true)
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, build_gen_content(StressNode *node, StressHostFile *file), true)
+	bool build_gen_mod(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_mod(node, file);
+	}
+
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_own(StressNode *node, photon::fs::IFile *erofs_file), true)
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_xattrs(StressNode *node, photon::fs::IFile *erofs_file), true)
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file), true)
+	bool verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_mod(node, erofs_file);
+	}
+
+	std::vector<int> layer_dirs(int idx) {
+	    std::vector<int> ret;
+
+	    /* 10 dirs, each dir contains 10 files */
+	    for (int i = 0; i < 10; i ++)
+		ret.emplace_back(10);
+	    return ret;
+	}
+};
+
 TEST(ErofsStressTest, TC001) {
 	std::srand(static_cast<unsigned int>(std::time(0)));
 	StressCase001 *tc001 = new StressCase001("./erofs_stress_001", 20);
@@ -269,6 +334,13 @@ TEST(ErofsStressTest, TC003) {
 
 	ASSERT_EQ(tc003->run(), true);
 	delete tc003;
+}
+TEST(ErofsStressTest, TC004) {
+	std::srand(static_cast<unsigned int>(std::time(0)));
+	StressCase004 *tc004 = new StressCase004("./erofs_stress_004", 10);
+
+	ASSERT_EQ(tc004->run(), true);
+	delete tc004;
 }
 
 int main(int argc, char **argv) {
