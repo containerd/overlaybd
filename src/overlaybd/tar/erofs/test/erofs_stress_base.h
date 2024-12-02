@@ -59,8 +59,17 @@ public:
 	bool equal(StressNode *ano) {
 		if (!ano)
 			LOG_ERROR_RETURN(-1,false, "invalid ano: nullptr");
-		if (xattrs.size() != ano->xattrs.size())
+		if (xattrs.size() != ano->xattrs.size()) {
+			LOG_INFO("current: `", path);
+			for (const auto& pair: xattrs) {
+				LOG_INFO("key: `, value: `", pair.first, pair.second);
+			}
+			LOG_INFO("ano: `", ano->path);
+			for (const auto& pair: ano->xattrs) {
+				LOG_INFO("key: `, value: `", pair.first, pair.second);
+			}
 			LOG_ERROR_RETURN(-1,false, "xattrs size not equal: ` != `", xattrs.size(), ano->xattrs.size());
+		}
 		for (auto it = xattrs.begin(); it != xattrs.end(); it ++) {
 			auto p = ano->xattrs.find(it->first);
 			if (p == ano->xattrs.end())
@@ -227,3 +236,4 @@ private:
 
 /* helper functions */
 std::string get_randomstr(int max_length, bool range);
+#define get_randomint(a, b) ((rand() % (b - a)) + a)

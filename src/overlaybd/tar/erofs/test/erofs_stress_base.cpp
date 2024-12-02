@@ -23,6 +23,8 @@
 #include "../erofs_fs.h"
 #include "../../../../tools/comm_func.h"
 
+#define get_randomint(a, b) ((rand() % (b - a)) + a)
+
 std::string get_randomstr(int max_length, bool range)
 {
 	const char chs[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -113,7 +115,7 @@ bool StressBase::create_layer(int idx) {
 	}
 
 	std::string layer_name = prefix + "/layer" + std::to_string(idx);
-	std::string cmd = std::string(" sudo tar -cf ") + layer_name + ".tar -C "  + prefix + " " + root_dirname;
+	std::string cmd = std::string(" sudo tar  --xattrs --xattrs-include='*' -cf ") + layer_name + ".tar -C "  + prefix + " " + root_dirname;
 	if (system(cmd.c_str()))
 		LOG_ERROR_RETURN(-1, false, "fail to prepare tar file, cmd: `", cmd);
 	return true;

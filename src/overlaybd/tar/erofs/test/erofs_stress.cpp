@@ -28,10 +28,19 @@ ret_type func override { \
 
 class StressInterImpl: public StressGenInter {
 public:
+	/* file content */
 	int max_file_size = SECTOR_SIZE * 128;
 	int min_file_size = SECTOR_SIZE;
 	int block_size = 4096;
 	std::hash<std::string> hash_fn;
+	/* xattrs */
+	int xattrs_max_size = 100;
+	int xattrs_min_size = 2;
+	int xattrs_max_count = 10;
+	int xattrs_min_count = 1;
+	std::vector<std::string> xattrs_prefix = {"user."};
+	char xattr_key_buffer[8192];
+	char xattr_value_buffer[8192];
 
 	/* generate file content in build phase */
 	bool build_gen_content(StressNode *node, StressHostFile *file) override {
@@ -78,6 +87,44 @@ public:
 				offset += len;
 		}
 		node->content = hash_val;
+		return true;
+	}
+
+	/* xattrs in build phase */
+	bool build_gen_xattrs(StressNode *node, StressHostFile *file) override {
+		photon::fs::IFileXAttr *xattr_ops = dynamic_cast<photon::fs::IFileXAttr*>(file->file);
+		if (xattr_ops == nullptr)
+			LOG_ERROR_RETURN(-1, false, "fs does not suppoert xattrs operations!");
+		int xattrs_count = get_randomint(xattrs_min_count, xattrs_max_count + 1);
+		for (int i = 0; i < xattrs_count; i ++) {
+			int idx = get_randomint(0, xattrs_prefix.size());
+			std::string key = xattrs_prefix[idx] + get_randomstr(get_randomint(xattrs_min_size, xattrs_max_size), false);
+			std::string value = get_randomstr(get_randomint(xattrs_min_size, xattrs_max_size), false);
+			if (xattr_ops->fsetxattr(key.c_str(), value.c_str(), value.size(), 0))
+				LOG_ERROR_RETURN(-1, -1, "fail to set xattr (key: `, value: `) for file `", key, value, file->path);
+			node->xattrs[key] = value;
+		}
+		return true;
+	}
+
+	/* xattrs in verify phase */
+	bool verify_gen_xattrs(StressNode *node, photon::fs::IFile *erofs_file) override {
+		photon::fs::IFileXAttr *xattr_ops = dynamic_cast<photon::fs::IFileXAttr*>(erofs_file);
+		char *key;
+
+		if (xattr_ops == nullptr)
+			LOG_ERROR_RETURN(-1, -1, "ErofsFile doest not support xattr operations!");
+		ssize_t kllen = xattr_ops->flistxattr(xattr_key_buffer, sizeof(xattr_key_buffer));
+		if (kllen < 0)
+			LOG_ERROR_RETURN(-1, -1, "fail to list xattrs for erofs file");
+		for (key = xattr_key_buffer; key < xattr_key_buffer + kllen; key += strlen(key) + 1) {
+			ssize_t value_len = xattr_ops->fgetxattr(key, xattr_value_buffer, sizeof(xattr_value_buffer));
+			if (value_len < 0)
+				LOG_ERROR_RETURN(-1, -1, "fail to get value for xattr `", key);
+			std::string str_key = std::string(key, strlen(key));
+			std::string str_value = std::string(xattr_value_buffer, value_len);
+			node->xattrs[str_key] = str_value;
+		}
 		return true;
 	}
 };
@@ -161,6 +208,44 @@ public:
 		return ret;
 	}
 };
+/*
+ * TC003
+ *
+ * Create layers, each layer contains 10 dirs,
+ * each dir contains 10 files.
+ *
+ * Testing the xattrs of files.
+ */
+class StressCase003: public StressBase, public StressInterImpl {
+public:
+	StressCase003(std::string path, int layers): StressBase(path, layers) {}
+
+	/* leave mod/own/content empty */
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, build_gen_mod(StressNode *node, StressHostFile *file), true)
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, build_gen_own(StressNode *node, StressHostFile *file), true)
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, build_gen_content(StressNode *node, StressHostFile *file), true)
+	bool build_gen_xattrs(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_xattrs(node, file);
+	}
+
+	/* leave mod/own/content empty */
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file), true)
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_own(StressNode *node, photon::fs::IFile *erofs_file), true)
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file), true)
+	bool verify_gen_xattrs(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_xattrs(node, erofs_file);
+	}
+
+	std::vector<int> layer_dirs(int idx) {
+	    std::vector<int> ret;
+
+	    /* 10 dirs, each dir contains 10 files */
+	    for (int i = 0; i < 10; i ++)
+		ret.emplace_back(10);
+	    return ret;
+	}
+
+};
 
 TEST(ErofsStressTest, TC001) {
 	std::srand(static_cast<unsigned int>(std::time(0)));
@@ -176,6 +261,14 @@ TEST(ErofsStressTest, TC002) {
 
 	ASSERT_EQ(tc002->run(), true);
 	delete tc002;
+}
+
+TEST(ErofsStressTest, TC003) {
+	std::srand(static_cast<unsigned int>(std::time(0)));
+	StressCase003 *tc003 = new StressCase003("./erofs_stress_003", 20);
+
+	ASSERT_EQ(tc003->run(), true);
+	delete tc003;
 }
 
 int main(int argc, char **argv) {
