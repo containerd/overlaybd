@@ -43,6 +43,9 @@ public:
 	std::vector<std::string> xattrs_prefix = {"user."};
 	char xattr_key_buffer[8192];
 	char xattr_value_buffer[8192];
+	/* own */
+	int own_id_min = 0;
+	int own_id_max = UINT32_MAX / 3;
 
 	/* generate file content in build phase */
 	bool build_gen_content(StressNode *node, StressHostFile *file) override {
@@ -154,6 +157,27 @@ public:
 			LOG_ERROR_RETURN(-1, false, "fail to stat erofs file");
 		oss << std::oct << std::setfill('0') << std::setw(3) << (st.st_mode & 0777);
 		node->mod = oss.str();
+		return true;
+	}
+
+	/* own in build phase */
+	bool build_gen_own(StressNode *node, StressHostFile *file) override {
+		uid_t uid = get_randomint(own_id_min, own_id_max);
+		gid_t gid = get_randomint(own_id_min, own_id_max);
+
+		if (file->file->fchown(uid, gid))
+			LOG_ERROR_RETURN(-1,false, "failt to chown of file `", file->path);
+		node->own = std::to_string(uid) + std::to_string(gid);
+		return true;
+	}
+
+	/* own in verify phase */
+	bool verify_gen_own(StressNode *node, photon::fs::IFile *erofs_file) override {
+		struct stat st;
+
+		if (erofs_file->fstat(&st))
+			LOG_ERROR_RETURN(-1, false, "fail to stat erofs file");
+		node->own = std::to_string(st.st_uid) + std::to_string(st.st_gid);
 		return true;
 	}
 };
@@ -312,6 +336,42 @@ public:
 	}
 };
 
+/*
+ * TC005
+ *
+ * Create layers, each layer contains 10 dirs,
+ * each dir contains 10 files.
+ *
+ * Testing the uid/gid of files.
+ */
+class StressCase005: public StressBase, public StressInterImpl {
+public:
+	StressCase005(std::string path, int layers): StressBase(path, layers) {}
+
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, build_gen_mod(StressNode *node, StressHostFile *file), true)
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, build_gen_xattrs(StressNode *node, StressHostFile *file), true)
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, build_gen_content(StressNode *node, StressHostFile *file), true)
+	bool build_gen_own(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_own(node, file);
+	}
+
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file), true)
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_xattrs(StressNode *node, photon::fs::IFile *erofs_file), true)
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file), true)
+	bool verify_gen_own(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_own(node, erofs_file);
+	}
+
+	std::vector<int> layer_dirs(int idx) {
+		std::vector<int> ret;
+
+		/* 10 dirs, each dir contains 10 files */
+		for (int i = 0; i < 10; i ++)
+			ret.emplace_back(10);
+		return ret;
+	}
+};
+
 TEST(ErofsStressTest, TC001) {
 	std::srand(static_cast<unsigned int>(std::time(0)));
 	StressCase001 *tc001 = new StressCase001("./erofs_stress_001", 20);
@@ -341,6 +401,14 @@ TEST(ErofsStressTest, TC004) {
 
 	ASSERT_EQ(tc004->run(), true);
 	delete tc004;
+}
+
+TEST(ErofsStressTest, TC005) {
+	std::srand(static_cast<unsigned int>(std::time(0)));
+	StressCase005 *tc005 = new StressCase005("./erofs_stress_005", 2);
+
+	ASSERT_EQ(tc005->run(), true);
+	delete tc005;
 }
 
 int main(int argc, char **argv) {
