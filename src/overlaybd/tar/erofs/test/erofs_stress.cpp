@@ -372,6 +372,53 @@ public:
 	}
 };
 
+/*
+ * TC006
+ *
+ * Create layers, each layer contains 10 dirs,
+ * each dir contains 10 files.
+ *
+ * Testing the mode, uid/gid, xattrs, content of files.
+ */
+class StressCase006: public StressBase, public StressInterImpl {
+public:
+	StressCase006(std::string path, int layers): StressBase(path, layers) {}
+
+	bool build_gen_mod(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_mod(node, file);
+	}
+	bool build_gen_own(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_own(node, file);
+	}
+	bool build_gen_xattrs(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_xattrs(node, file);
+	}
+	bool build_gen_content(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_content(node, file);
+	}
+
+	bool verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_mod(node, erofs_file);
+	}
+	bool verify_gen_own(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_own(node, erofs_file);
+	}
+	bool verify_gen_xattrs(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_xattrs(node, erofs_file);
+	}
+	bool verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_content(node, erofs_file);
+	}
+
+	std::vector<int> layer_dirs(int idx) {
+		std::vector<int> ret;
+
+		for (int i = 0; i < 10; i ++)
+			ret.emplace_back(10);
+		return ret;
+	}
+};
+
 TEST(ErofsStressTest, TC001) {
 	std::srand(static_cast<unsigned int>(std::time(0)));
 	StressCase001 *tc001 = new StressCase001("./erofs_stress_001", 20);
@@ -409,6 +456,15 @@ TEST(ErofsStressTest, TC005) {
 
 	ASSERT_EQ(tc005->run(), true);
 	delete tc005;
+}
+
+TEST(ErofsStressTest, TC006) {
+	std::srand(static_cast<unsigned int>(std::time(0)));
+	/* 30 layers */
+	StressCase006 *tc006 = new StressCase006("./erofs_stress_006", 30);
+
+	ASSERT_EQ(tc006->run(), true);
+	delete tc006;
 }
 
 int main(int argc, char **argv) {
