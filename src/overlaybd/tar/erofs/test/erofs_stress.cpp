@@ -58,13 +58,13 @@ public:
 		std::string hash_val;
 
 		while (size > 0) {
-				len = std::min(size, block_size);
-				std::string block_str = get_randomstr(len, false);
-				if (file->file->pwrite(block_str.c_str(), len, offset) != len)
-						LOG_ERROR_RETURN(-1, -1, "fail to write to host file `", file->path);
-				hash_val = std::to_string(hash_fn(hash_val + block_str));
-				size -= len;
-				offset += len;
+			len = std::min(size, block_size);
+			std::string block_str = get_randomstr(len, false);
+			if (file->file->pwrite(block_str.c_str(), len, offset) != len)
+				LOG_ERROR_RETURN(-1, -1, "fail to write to host file `", file->path);
+			hash_val = std::to_string(hash_fn(hash_val + block_str));
+			size -= len;
+			offset += len;
 		}
 		node->content = hash_val;
 		return true;
@@ -82,14 +82,14 @@ public:
 				LOG_ERROR_RETURN(-1, -1, "fail to stat file");
 		left = st.st_size;
 		while (left > 0) {
-				len = std::min((off_t)block_size, left);
-				if (len != erofs_file->pread(buf, len, offset))
-						LOG_ERROR_RETURN(-1, -1, "fail to pread file");
+			len = std::min((off_t)block_size, left);
+			if (len != erofs_file->pread(buf, len, offset))
+				LOG_ERROR_RETURN(-1, -1, "fail to pread file");
 
-				std::string block_str(buf, len);
-				hash_val = std::to_string(hash_fn(hash_val + block_str));
-				left -= len;
-				offset += len;
+			std::string block_str(buf, len);
+			hash_val = std::to_string(hash_fn(hash_val + block_str));
+			left -= len;
+			offset += len;
 		}
 		node->content = hash_val;
 		return true;
@@ -290,12 +290,12 @@ public:
 	}
 
 	std::vector<int> layer_dirs(int idx) {
-	    std::vector<int> ret;
+		std::vector<int> ret;
 
-	    /* 10 dirs, each dir contains 10 files */
-	    for (int i = 0; i < 10; i ++)
-		ret.emplace_back(10);
-	    return ret;
+		/* 10 dirs, each dir contains 10 files */
+		for (int i = 0; i < 10; i ++)
+			ret.emplace_back(10);
+		return ret;
 	}
 
 };
@@ -327,12 +327,12 @@ public:
 	}
 
 	std::vector<int> layer_dirs(int idx) {
-	    std::vector<int> ret;
+		std::vector<int> ret;
 
-	    /* 10 dirs, each dir contains 10 files */
-	    for (int i = 0; i < 10; i ++)
-		ret.emplace_back(10);
-	    return ret;
+		/* 10 dirs, each dir contains 10 files */
+		for (int i = 0; i < 10; i ++)
+			ret.emplace_back(10);
+		return ret;
 	}
 };
 
@@ -405,7 +405,7 @@ TEST(ErofsStressTest, TC004) {
 
 TEST(ErofsStressTest, TC005) {
 	std::srand(static_cast<unsigned int>(std::time(0)));
-	StressCase005 *tc005 = new StressCase005("./erofs_stress_005", 2);
+	StressCase005 *tc005 = new StressCase005("./erofs_stress_005", 10);
 
 	ASSERT_EQ(tc005->run(), true);
 	delete tc005;
