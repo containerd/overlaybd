@@ -25,6 +25,8 @@ struct erofs_mkfs_cfg {
 
 static int rebuild_src_count;
 
+extern void erofs_init_configure(void);
+
 int erofs_mkfs(struct erofs_mkfs_cfg *mkfs_cfg)
 {
     int err;
@@ -280,6 +282,7 @@ int LibErofs::extract_tar(photon::fs::IFile *source, bool meta_only, bool first_
     mkfs_cfg.sbi = &sbi;
     mkfs_cfg.erofstar = &erofstar;
     mkfs_cfg.incremental = !first_layer;
+    erofs_init_configure();
     erofs_cfg = erofs_get_configure();
     erofs_cfg->c_ovlfs_strip = true;
     if (first_layer)
