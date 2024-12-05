@@ -34,8 +34,8 @@
 
 /* in-mem node type */
 enum NODE_TYPE {
-	NODE_REGULAR,
 	NODE_DIR,
+	NODE_REGULAR,
 	NODE_WHITEOUT,
 	NODE_TYPE_MAX
 };
@@ -137,6 +137,13 @@ public:
 	 * how many files are in each directory, etc.
 	 */
 	virtual std::vector<int> layer_dirs(int idx) = 0;
+
+	/*
+	 * generate the name for a dir or a file, to:
+	 * 1. control the overlap between the upper layer and lower layer
+	 * 2. generate .wh.*
+	 */
+	virtual std::string generate_name(int idx, int depth, std::string root_path, NODE_TYPE type) = 0;
 
 	virtual ~StressGenInter() {}
 };

@@ -41,7 +41,7 @@ std::string get_randomstr(int max_length, bool range)
 struct LayerNode {
 	std::string pwd;
 	std::vector<LayerNode*> subdirs;
-	std::vector<std::string> files;
+	int num_files, depth;
 };
 
 static LayerNode *build_layer_tree(std::vector<int> &dirs) {
@@ -49,8 +49,8 @@ static LayerNode *build_layer_tree(std::vector<int> &dirs) {
 
 	for (int i = 0; i < (int)dirs.size(); i ++) {
 		nodes.emplace_back(new LayerNode);
-		for (int j = 0; j < dirs[i]; j ++)
-			nodes[i]->files.emplace_back(get_randomstr(MAX_FILE_NAME, true));
+		nodes[i]->depth = 0;
+		nodes[i]->num_files = dirs[i];
 	}
 
 	while (nodes.size() > 1) {
@@ -69,7 +69,7 @@ bool StressBase::create_layer(int idx) {
 	std::vector<int> dirs = layer_dirs(idx);
 	LayerNode *layer_tree = build_layer_tree(dirs);
 	std::vector<LayerNode*> q;
-	std::string root_dirname = get_randomstr(MAX_DIR_NAME, true);
+	std::string root_dirname = generate_name(idx, layer_tree->depth, "", NODE_DIR);
 	std::string root_path = prefix + "/" + root_dirname;
 	std::string clean_cmd = "rm -rf " + root_path;
 
@@ -90,8 +90,10 @@ bool StressBase::create_layer(int idx) {
 			LOG_ERROR_RETURN(-1, false, "fail to mkdir `", cur->pwd);
 		tree->add_node(node);
 
-		for (int i = 0; i < (int)cur->files.size(); i ++) {
-			std::string filename = cur->pwd.substr(prefix.length()) + "/" + cur->files[i];
+		for (int i = 0; i < (int)cur->num_files; i ++) {
+			std::string name_prefix = cur->pwd.substr(prefix.length());
+			// generate filename for files in the current dir
+			std::string filename = name_prefix + "/" + generate_name(idx, cur->depth, name_prefix, NODE_REGULAR);
 			StressNode *node = new StressNode(filename, NODE_REGULAR);
 			StressHostFile *file_info = new StressHostFile(prefix + filename, host_fs);
 
@@ -108,7 +110,9 @@ bool StressBase::create_layer(int idx) {
 
 		for (int i = 0; i < (int)cur->subdirs.size(); i ++) {
 			LayerNode *next = cur->subdirs[i];
-			next->pwd = cur->pwd + "/" + get_randomstr(MAX_DIR_NAME, true);
+			next->depth = cur->depth + 1;
+			// generate subdir name in the current dir
+			next->pwd = cur->pwd + "/" + generate_name(idx, cur->depth, cur->pwd.substr(prefix.length()), NODE_DIR);
 			q.emplace_back(next);
 		}
 		delete cur;

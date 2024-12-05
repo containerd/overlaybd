@@ -206,6 +206,10 @@ public:
 	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_xattrs(StressNode *node, photon::fs::IFile *erofs_file), true)
 	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file), true)
 
+	/* simplely generate random dir and file names */
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(std::string, generate_name(int idx, int depth, std::string _prefix, NODE_TYPE type), \
+				        get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true))
+
 	/*
 	 * each layer has two dirs:
 	 * dir one contains 50 files,
@@ -248,6 +252,10 @@ public:
 		return StressInterImpl::verify_gen_content(node, erofs_file);
 	}
 
+	/* simplely generate random dir and file names */
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(std::string, generate_name(int idx, int depth, std::string _prefix, NODE_TYPE type), \
+				        get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true))
+
 	/*
 	 * each layer has two dirs:
 	 * dir one contains 10 files,
@@ -289,6 +297,10 @@ public:
 		return StressInterImpl::verify_gen_xattrs(node, erofs_file);
 	}
 
+	/* simplely generate random dir and file names */
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(std::string, generate_name(int idx, int depth, std::string _prefix, NODE_TYPE type), \
+				        get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true))
+
 	std::vector<int> layer_dirs(int idx) {
 		std::vector<int> ret;
 
@@ -326,6 +338,10 @@ public:
 		return StressInterImpl::verify_gen_mod(node, erofs_file);
 	}
 
+	/* simplely generate random dir and file names */
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(std::string, generate_name(int idx, int depth, std::string _prefix, NODE_TYPE type), \
+				        get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true))
+
 	std::vector<int> layer_dirs(int idx) {
 		std::vector<int> ret;
 
@@ -361,6 +377,10 @@ public:
 	bool verify_gen_own(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return StressInterImpl::verify_gen_own(node, erofs_file);
 	}
+
+	/* simplely generate random dir and file names */
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(std::string, generate_name(int idx, int depth, std::string _prefix, NODE_TYPE type), \
+				        get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true))
 
 	std::vector<int> layer_dirs(int idx) {
 		std::vector<int> ret;
@@ -409,6 +429,10 @@ public:
 	bool verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return StressInterImpl::verify_gen_content(node, erofs_file);
 	}
+
+	/* simplely generate random dir and file names */
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(std::string, generate_name(int idx, int depth, std::string _prefix, NODE_TYPE type), \
+				        get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true))
 
 	std::vector<int> layer_dirs(int idx) {
 		std::vector<int> ret;
