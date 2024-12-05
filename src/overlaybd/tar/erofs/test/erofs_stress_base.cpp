@@ -19,6 +19,8 @@
 #include <chrono>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <algorithm>
+#include <random>
 #include "../liberofs.h"
 #include "../erofs_fs.h"
 #include "../../../../tools/comm_func.h"
@@ -36,6 +38,31 @@ std::string get_randomstr(int max_length, bool range)
 		res.push_back(chs[std::rand() % len]);
 	}
 	return res;
+}
+static bool is_substring(const std::string& str, const std::string& substring) {
+    return str.find(substring) != std::string::npos;
+}
+
+std::string StressFsTree::get_same_name(int idx, int depth, std::string root_path, NODE_TYPE type) {
+	std::vector<std::string> vec;
+	for (const auto& pair : tree) {
+		if (pair.first == "/" || pair.second->type != type ||
+		    !is_substring(pair.first, root_path) ||
+		    pair.first.length() == root_path.length())
+			continue;
+		std::string last_component = pair.first.substr(root_path.length() + 1);
+		if (!is_substring(last_component, "/"))
+			vec.emplace_back(last_component);
+	}
+
+	if (vec.empty())
+		return get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true);
+
+	std::random_device rd;
+	std::default_random_engine engine(rd());
+	std::shuffle(vec.begin(), vec.end(), engine);
+
+	return vec[0];
 }
 
 struct LayerNode {
@@ -66,6 +93,15 @@ static LayerNode *build_layer_tree(std::vector<int> &dirs) {
 }
 
 bool StressBase::create_layer(int idx) {
+
+#define MAX_TRY_TIME 10
+
+	std::string origin_prefix = prefix;
+	// add a random prefix to avoid operations in the same dir
+	prefix = prefix + "/" + get_randomstr(20, false);
+	if (host_fs->mkdir(prefix.c_str(), 0755) != 0)
+		LOG_ERROR_RETURN(-1, false, "fail to prepare for the current workdir `", prefix);
+
 	std::vector<int> dirs = layer_dirs(idx);
 	LayerNode *layer_tree = build_layer_tree(dirs);
 	std::vector<LayerNode*> q;
@@ -79,16 +115,16 @@ bool StressBase::create_layer(int idx) {
 	layer_tree->pwd = root_path;
 	q.emplace_back(layer_tree);
 
+	StressNode *node = new StressNode(layer_tree->pwd.substr(prefix.length()), NODE_DIR);
+	if (host_fs->mkdir(layer_tree->pwd.c_str(), 0755) != 0)
+		LOG_ERROR_RETURN(-1, false, "fail to mkdir `", layer_tree->pwd);
+	tree->add_node(node);
+
 	// traverse the layer tree
 	while (q.size()) {
 		bool res;
 		LayerNode *cur = q.front();
 		q.erase(q.begin());
-
-		StressNode *node = new StressNode(cur->pwd.substr(prefix.length()), NODE_DIR);
-		if (host_fs->mkdir(cur->pwd.c_str(), 0755) != 0)
-			LOG_ERROR_RETURN(-1, false, "fail to mkdir `", cur->pwd);
-		tree->add_node(node);
 
 		for (int i = 0; i < (int)cur->num_files; i ++) {
 			std::string name_prefix = cur->pwd.substr(prefix.length());
@@ -106,22 +142,33 @@ bool StressBase::create_layer(int idx) {
 			if (!tree->add_node(node))
 				LOG_ERROR_RETURN(-1, false, "failt to add node `", filename);
 			file_info->file->fsync();
+			delete file_info;
 		}
 
 		for (int i = 0; i < (int)cur->subdirs.size(); i ++) {
 			LayerNode *next = cur->subdirs[i];
 			next->depth = cur->depth + 1;
 			// generate subdir name in the current dir
-			next->pwd = cur->pwd + "/" + generate_name(idx, cur->depth, cur->pwd.substr(prefix.length()), NODE_DIR);
-			q.emplace_back(next);
+			for (int try_times = 0; try_times < MAX_TRY_TIME; try_times++) {
+				next->pwd = cur->pwd + "/" + generate_name(idx, cur->depth, cur->pwd.substr(prefix.length()), NODE_DIR);
+				if (host_fs->mkdir(next->pwd.c_str(), 0755) == 0) {
+					StressNode *dir_node = new StressNode(next->pwd.substr(prefix.length()), NODE_DIR);
+					tree->add_node(dir_node);
+					q.emplace_back(next);
+					break;
+				}
+			}
 		}
 		delete cur;
 	}
 
-	std::string layer_name = prefix + "/layer" + std::to_string(idx);
+#undef MAX_TRY_TIME
+
+	std::string layer_name = origin_prefix + "/layer" + std::to_string(idx);
 	std::string cmd = std::string(" sudo tar  --xattrs --xattrs-include='*' -cf ") + layer_name + ".tar -C "  + prefix + " " + root_dirname;
 	if (system(cmd.c_str()))
 		LOG_ERROR_RETURN(-1, false, "fail to prepare tar file, cmd: `", cmd);
+	prefix = origin_prefix;
 	return true;
 }
 
@@ -220,7 +267,9 @@ bool StressBase::verify(photon::fs::IFileSystem *erofs_fs) {
 			first = false;
 	} while (!items.empty());
 
-	return tree->is_emtry();
+	if (!tree->is_emtry())
+		LOG_ERROR_RETURN(-1, false, "Mismatch: in-mem tree is not empty!");
+	return true;
 }
 
 bool StressBase::run()
@@ -246,9 +295,12 @@ bool StressBase::run()
 
 	bool ret = verify(erofs_fs);
 
-	std::string clear_cmd = std::string("rm -rf ") + prefix;
-	if (system(clear_cmd.c_str()))
-		LOG_ERROR_RETURN(-1, false, "fail to clear tmp workdir, cmd: `", clear_cmd);
+	if (ret) {
+		std::string clear_cmd = std::string("rm -rf ") + prefix;
+		if (system(clear_cmd.c_str()))
+			LOG_ERROR_RETURN(-1, false, "fail to clear tmp workdir, cmd: `", clear_cmd);
+
+	}
 
 	return ret;
 }
