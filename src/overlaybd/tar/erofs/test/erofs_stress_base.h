@@ -166,36 +166,17 @@ public:
 	}
 
 	// build process
-	bool add_node(StressNode *node) {
-		if (!node || !node->path.size() || node->type >= NODE_TYPE_MAX)
-			LOG_ERRNO_RETURN(-1, false, "invalid node");
-
-		if (node->type != NODE_WHITEOUT) {
-			tree[node->path] = node;
-		} else {
-			auto it = tree.find(node->path);
-			if (it == tree.end() || it->second->type == NODE_WHITEOUT)
-				LOG_ERROR_RETURN(-1, false, "whiteout a invalid object");
-			if (it->second->type == NODE_REGULAR)
-				tree.erase(it);
-			else {
-				std::string prefix = it->first;
-				for (auto p = tree.begin(); p != tree.end();) {
-					if (prefix.compare(0, prefix.size(), p->first) == 0)
-						p = tree.erase(p);
-					else
-						p ++;
-				}
-			}
-		}
-		return true;
-	}
+	bool add_node(StressNode *node);
 
 	// verify process
 	bool query_delete_node(StressNode *node) {
 		auto it = tree.find(node->path);
-		if (it == tree.end() || !it->second || !it->second->equal(node))
-			return false;
+		if (it == tree.end())
+				LOG_ERROR_RETURN(-1,false, "path ` does not exist in in-mem tree", node->path);
+		if (!it->second)
+				LOG_ERROR_RETURN(-1, false, "NULL in-mem info (`)", node->path);
+		if (!it->second->equal(node))
+				LOG_ERROR_RETURN(-1, false, "node contents mismatch");
 		tree.erase(it);
 		return true;
 	}

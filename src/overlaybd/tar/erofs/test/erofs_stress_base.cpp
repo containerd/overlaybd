@@ -43,11 +43,57 @@ static bool is_substring(const std::string& str, const std::string& substring) {
     return str.find(substring) != std::string::npos;
 }
 
+static bool str_n_equal(std::string s1, std::string s2, long unsigned int n) {
+	if (s1.length() < n || s2.length() < n)
+			return false;
+	return s1.substr(0, n) == s2.substr(0, n);
+}
+
+bool StressFsTree::add_node(StressNode *node) {
+	if (!node || !node->path.size() || node->type >= NODE_TYPE_MAX)
+		LOG_ERRNO_RETURN(-1, false, "invalid node");
+
+	if (node->type != NODE_WHITEOUT) {
+		/* the upper regular file should remove the lower dir */
+		std::map<std::string, StressNode*>::iterator dir_it;
+		if (node->type == NODE_REGULAR && (dir_it = tree.find(node->path)) != tree.end() &&
+			dir_it->second->type == NODE_DIR)
+		{
+			tree.erase(dir_it);
+			std::string rm_prefix = node->path + "/";
+			for (auto it = tree.begin(); it != tree.end(); ) {
+				if (str_n_equal(rm_prefix, it->first, rm_prefix.length())) {
+					it = tree.erase(it);
+				} else {
+					++it;
+				}
+
+			}
+		}
+		tree[node->path] = node;
+	} else {
+		auto it = tree.find(node->path);
+		if (it == tree.end() || it->second->type == NODE_WHITEOUT)
+			LOG_ERROR_RETURN(-1, false, "whiteout a invalid object");
+		if (it->second->type == NODE_REGULAR)
+			tree.erase(it);
+		else {
+			std::string prefix = it->first;
+			for (auto p = tree.begin(); p != tree.end();) {
+				if (prefix.compare(0, prefix.size(), p->first) == 0)
+					p = tree.erase(p);
+				else
+					p ++;
+			}
+		}
+	}
+	return true;
+}
+
 std::string StressFsTree::get_same_name(int idx, int depth, std::string root_path, NODE_TYPE type) {
 	std::vector<std::string> vec;
 	for (const auto& pair : tree) {
-		if (pair.first == "/" || pair.second->type != type ||
-		    !is_substring(pair.first, root_path) ||
+		if (pair.first == "/" || !is_substring(pair.first, root_path) ||
 		    pair.first.length() == root_path.length())
 			continue;
 		std::string last_component = pair.first.substr(root_path.length() + 1);
