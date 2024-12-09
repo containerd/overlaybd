@@ -32,6 +32,8 @@
 #define MAX_DIR_NAME 100
 #define MAX_FILE_NAME 100
 
+#define EROFS_WHOUT_PREFIX ".wh."
+
 /* in-mem node type */
 enum NODE_TYPE {
 	NODE_DIR,
@@ -170,13 +172,15 @@ public:
 
 	// verify process
 	bool query_delete_node(StressNode *node) {
+		if (!node)
+			LOG_ERROR_RETURN(-1, false, "invalid node: nullptr");
 		auto it = tree.find(node->path);
 		if (it == tree.end())
-				LOG_ERROR_RETURN(-1,false, "path ` does not exist in in-mem tree", node->path);
+			LOG_ERROR_RETURN(-1,false, "path ` does not exist in in-mem tree", node->path);
 		if (!it->second)
-				LOG_ERROR_RETURN(-1, false, "NULL in-mem info (`)", node->path);
+			LOG_ERROR_RETURN(-1, false, "NULL in-mem info (`)", node->path);
 		if (!it->second->equal(node))
-				LOG_ERROR_RETURN(-1, false, "node contents mismatch");
+			LOG_ERROR_RETURN(-1, false, "node contents mismatch");
 		tree.erase(it);
 		return true;
 	}
@@ -185,7 +189,8 @@ public:
 		return tree.empty();
 	}
 
-	std::string get_same_name(int idx, int depth, std::string root_path, NODE_TYPE type);
+	std::string get_same_name(int idx, int depth, std::string root_path, NODE_TYPE type, bool same_type = false);
+	NODE_TYPE get_type(std::string root_path);
 };
 
 class StressBase: public StressGenInter {

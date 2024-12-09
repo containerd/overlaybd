@@ -75,26 +75,32 @@ bool StressFsTree::add_node(StressNode *node) {
 		auto it = tree.find(node->path);
 		if (it == tree.end() || it->second->type == NODE_WHITEOUT)
 			LOG_ERROR_RETURN(-1, false, "whiteout a invalid object");
-		if (it->second->type == NODE_REGULAR)
+		/* whiteout a regular file */
+		if (it->second->type == NODE_REGULAR) {
 			tree.erase(it);
-		else {
-			std::string prefix = it->first;
-			for (auto p = tree.begin(); p != tree.end();) {
-				if (prefix.compare(0, prefix.size(), p->first) == 0)
+		} else if (it->second->type == NODE_DIR) {
+			/* whiteout a dir */
+			std::string rm_prefix = it->first + "/";
+			tree.erase(it);
+			for (auto p = tree.begin(); p != tree.end(); ) {
+				if (str_n_equal(rm_prefix, p->first, rm_prefix.length()))
 					p = tree.erase(p);
 				else
 					p ++;
 			}
-		}
+		} else
+			LOG_ERROR_RETURN(-1, false, "invalid object type: `", it->second->type);
 	}
 	return true;
 }
 
-std::string StressFsTree::get_same_name(int idx, int depth, std::string root_path, NODE_TYPE type) {
+std::string StressFsTree::get_same_name(int idx, int depth, std::string root_path, NODE_TYPE type, bool same_type) {
 	std::vector<std::string> vec;
 	for (const auto& pair : tree) {
 		if (pair.first == "/" || !is_substring(pair.first, root_path) ||
 		    pair.first.length() == root_path.length())
+			continue;
+		if (same_type && pair.second->type != type)
 			continue;
 		std::string last_component = pair.first.substr(root_path.length() + 1);
 		if (!is_substring(last_component, "/"))
@@ -109,6 +115,15 @@ std::string StressFsTree::get_same_name(int idx, int depth, std::string root_pat
 	std::shuffle(vec.begin(), vec.end(), engine);
 
 	return vec[0];
+}
+
+NODE_TYPE StressFsTree::get_type(std::string root_path) {
+	std::map<std::string, StressNode*>::iterator it;
+
+	it = tree.find(root_path);
+	if (it == tree.end())
+		return NODE_TYPE_MAX;
+	return it->second->type;
 }
 
 struct LayerNode {
@@ -175,20 +190,39 @@ bool StressBase::create_layer(int idx) {
 		for (int i = 0; i < (int)cur->num_files; i ++) {
 			std::string name_prefix = cur->pwd.substr(prefix.length());
 			// generate filename for files in the current dir
-			std::string filename = name_prefix + "/" + generate_name(idx, cur->depth, name_prefix, NODE_REGULAR);
-			StressNode *node = new StressNode(filename, NODE_REGULAR);
-			StressHostFile *file_info = new StressHostFile(prefix + filename, host_fs);
+			std::string filename = generate_name(idx, cur->depth, name_prefix, NODE_REGULAR);
+			/* if this is a whout file */
+			if (str_n_equal(filename, std::string(EROFS_WHOUT_PREFIX), strlen(EROFS_WHOUT_PREFIX))) {
+				std::string host_filename = name_prefix + "/" + filename;
+				filename = name_prefix + "/" + filename.substr(strlen(EROFS_WHOUT_PREFIX));
+				if (tree->get_type(filename) != NODE_REGULAR)
+					LOG_ERROR_RETURN(-1, false, "invalid whiteout filename: `", filename);
 
-			res = build_gen_mod(node, file_info) &&
-				  build_gen_own(node, file_info) &&
-				  build_gen_xattrs(node, file_info) &&
-				  build_gen_content(node, file_info);
-			if (!res)
-				LOG_ERROR_RETURN(-1, false, "fail to generate file contents");
-			if (!tree->add_node(node))
-				LOG_ERROR_RETURN(-1, false, "failt to add node `", filename);
-			file_info->file->fsync();
-			delete file_info;
+				StressHostFile *file_info = new StressHostFile(prefix + host_filename, host_fs);
+				if (!file_info->file)
+					LOG_ERROR_RETURN(-1, false, "fail to crate whiteout file in host fs: `", host_filename);
+
+				StressNode *node = new StressNode(filename, NODE_WHITEOUT);
+				if (!tree->add_node(node))
+					LOG_ERROR_RETURN(-1, false, "fail to add WHITEOUT file `", filename);
+				file_info->file->fsync();
+				delete file_info;
+			} else {
+				filename = name_prefix + "/" + filename;
+				StressNode *node = new StressNode(filename, NODE_REGULAR);
+				StressHostFile *file_info = new StressHostFile(prefix + filename, host_fs);
+
+				res = build_gen_mod(node, file_info) &&
+					  build_gen_own(node, file_info) &&
+					  build_gen_xattrs(node, file_info) &&
+					  build_gen_content(node, file_info);
+				if (!res)
+					LOG_ERROR_RETURN(-1, false, "fail to generate file contents");
+				if (!tree->add_node(node))
+					LOG_ERROR_RETURN(-1, false, "failt to add node `", filename);
+				file_info->file->fsync();
+				delete file_info;
+			}
 		}
 
 		for (int i = 0; i < (int)cur->subdirs.size(); i ++) {
@@ -196,12 +230,32 @@ bool StressBase::create_layer(int idx) {
 			next->depth = cur->depth + 1;
 			// generate subdir name in the current dir
 			for (int try_times = 0; try_times < MAX_TRY_TIME; try_times++) {
-				next->pwd = cur->pwd + "/" + generate_name(idx, cur->depth, cur->pwd.substr(prefix.length()), NODE_DIR);
-				if (host_fs->mkdir(next->pwd.c_str(), 0755) == 0) {
-					StressNode *dir_node = new StressNode(next->pwd.substr(prefix.length()), NODE_DIR);
-					tree->add_node(dir_node);
-					q.emplace_back(next);
+				std::string dir_name = generate_name(idx, cur->depth, cur->pwd.substr(prefix.length()), NODE_DIR);
+
+				/* if it is a whout dir */
+				if (str_n_equal(dir_name, std::string(EROFS_WHOUT_PREFIX), strlen(EROFS_WHOUT_PREFIX))) {
+					std::string host_filename = cur->pwd + "/" + dir_name;
+					next->pwd = cur->pwd + "/" + dir_name.substr(strlen(EROFS_WHOUT_PREFIX));
+					if (tree->get_type(next->pwd.substr(prefix.length())) != NODE_DIR)
+						LOG_ERROR_RETURN(-1, false, "invalid whiteout dir name: `", next->pwd.substr(prefix.length()));
+					StressNode *dir_node = new StressNode(next->pwd.substr(prefix.length()), NODE_WHITEOUT);
+					if (!tree->add_node(dir_node))
+						LOG_ERROR_RETURN(-1, false, "fail to add WHITEOUT dir `", next->pwd.substr(prefix.length()));
+					/* create a .wh.dirname in the host fs */
+					StressHostFile *file_info = new StressHostFile(host_filename, host_fs);
+					if (!file_info->file)
+						LOG_ERROR_RETURN(-1, false, "fail to crate whiout dir in host fs: `", host_filename);
+					file_info->file->fsync();
+					delete file_info;
 					break;
+				} else {
+					next->pwd = cur->pwd + "/" + dir_name;
+					if (host_fs->mkdir(next->pwd.c_str(), 0755) == 0) {
+						StressNode *dir_node = new StressNode(next->pwd.substr(prefix.length()), NODE_DIR);
+						tree->add_node(dir_node);
+						q.emplace_back(next);
+						break;
+					}
 				}
 			}
 		}
@@ -277,13 +331,17 @@ bool StressBase::verify(photon::fs::IFileSystem *erofs_fs) {
 		if (S_ISDIR(st.st_mode)) {
 			node = new StressNode(cur, NODE_DIR);
 			auto dir = erofs_fs->opendir(cur.c_str());
-			do {
-				dirent *dent = dir->get();
-				if (first)
-					items.emplace_back(cur + std::string(dent->d_name));
-				else
-					items.emplace_back(cur + "/" + std::string(dent->d_name));
-			} while (dir->next());
+			/* the dir may be empty, so check it first */
+			if (dir->get() != nullptr) {
+				do {
+					dirent *dent = dir->get();
+
+					if (first)
+						items.emplace_back(cur + std::string(dent->d_name));
+					else
+						items.emplace_back(cur + "/" + std::string(dent->d_name));
+				} while (dir->next());
+			}
 			dir->closedir();
 			delete dir;
 		} else if (S_ISREG(st.st_mode)) {

@@ -546,6 +546,92 @@ public:
 	}
 };
 
+/*
+ * TC008
+ *
+ * Create layers, each layer contains 50 dirs,
+ * each dir contains 2 files.
+ *
+ * Test whiteout files.
+ */
+class StressCase008: public StressBase, public StressInterImpl {
+private:
+	std::map<int, std::set<std::string>> mp;
+public:
+	StressCase008(std::string path, int layers): StressBase(path, layers) {}
+
+	bool build_gen_mod(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_mod(node, file);
+	}
+	bool build_gen_own(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_own(node, file);
+	}
+	bool build_gen_xattrs(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_xattrs(node, file);
+	}
+	bool build_gen_content(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_content(node, file);
+	}
+
+	bool verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_mod(node, erofs_file);
+	}
+	bool verify_gen_own(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_own(node, erofs_file);
+	}
+	bool verify_gen_xattrs(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_xattrs(node, erofs_file);
+	}
+	bool verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_content(node, erofs_file);
+	}
+
+	std::string generate_name(int idx, int depth, std::string root_path, NODE_TYPE type) override {
+		std::string res;
+		int cnt = 0;
+
+		if (idx < 1) {
+			res = get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true);
+			goto out;
+		}
+
+		if (idx & 1) {
+			res = get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true);
+			goto verify_str;
+		} else {
+			/* generate whiteout files at even layers */
+			res = tree->get_same_name(idx, depth, root_path, type, true);
+			/* fall back to a random name */
+			if (res.length() == 0)
+				res = get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true);
+		}
+verify_str:
+		if (mp.find(idx) == mp.end())
+			mp[idx] = std::set<std::string>();
+		/* already used in this layer, fall back to a random name */
+		while (mp[idx].find(res) != mp[idx].end()) {
+			res = get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true);
+			cnt ++;
+			if (cnt > 1000)
+				LOG_ERROR_RETURN(-1, "", "fail to gernate name");
+		}
+		mp[idx].insert(res);
+		if (tree->get_type(root_path + "/" + res) == type && depth > 0)
+			res = std::string(EROFS_WHOUT_PREFIX) + res; /* .wh. file */
+	out:
+		return res;
+	}
+
+	std::vector<int> layer_dirs(int idx) {
+		std::vector<int> ret;
+
+		/* 50 dirs, each contains 2 files */
+		for (int i = 0; i < 50; i ++)
+			ret.emplace_back(2);
+		return ret;
+	}
+};
+
 TEST(ErofsStressTest, TC001) {
 	std::srand(static_cast<unsigned int>(std::time(0)));
 	StressCase001 *tc001 = new StressCase001("./erofs_stress_001", 20);
@@ -601,6 +687,15 @@ TEST(ErofsStressTest, TC007) {
 
 	ASSERT_EQ(tc007->run(), true);
 	delete tc007;
+}
+
+TEST(ErofsStressTest, TC008) {
+	std::srand(static_cast<unsigned int>(std::time(0)));
+	/* 100 layers */
+	StressCase008 *tc008 = new StressCase008("./erofs_stress_008", 100);
+
+	ASSERT_EQ(tc008->run(), true);
+	delete tc008;
 }
 
 int main(int argc, char **argv) {
