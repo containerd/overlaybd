@@ -233,3 +233,5 @@ private:
 /* helper functions */
 std::string get_randomstr(int max_length, bool range);
 #define get_randomint(a, b) ((rand() % (b - a)) + a)
+bool is_substring(const std::string& str, const std::string& substring);
+bool str_n_equal(std::string s1, std::string s2, long unsigned int n);

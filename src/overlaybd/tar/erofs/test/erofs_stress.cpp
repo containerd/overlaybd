@@ -632,6 +632,114 @@ verify_str:
 	}
 };
 
+/*
+ * TC009
+ *
+ * Test the scenario of deleting first and then creating files/dirs.
+ */
+class StressCase009: public StressBase, public StressInterImpl {
+private:
+	std::map<int, std::set<std::string>> mp;
+	std::set<std::string> deleted_names;
+public:
+	StressCase009(std::string path, int layers): StressBase(path, layers) {}
+
+	bool build_gen_mod(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_mod(node, file);
+	}
+	bool build_gen_own(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_own(node, file);
+	}
+	bool build_gen_xattrs(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_xattrs(node, file);
+	}
+	bool build_gen_content(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_gen_content(node, file);
+	}
+
+	bool verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_mod(node, erofs_file);
+	}
+	bool verify_gen_own(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_own(node, erofs_file);
+	}
+	bool verify_gen_xattrs(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_xattrs(node, erofs_file);
+	}
+	bool verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_gen_content(node, erofs_file);
+	}
+
+	std::string generate_name(int idx, int depth, std::string root_path, NODE_TYPE type) override {
+		std::string res;
+		int cnt = 0;
+
+		if (mp.find(idx) == mp.end())
+			mp[idx] = std::set<std::string>();
+
+		if (idx == 0)
+			res = get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true);
+		else if (idx == 1) {
+			res = tree->get_same_name(idx, depth, root_path, type, true);
+			if (res.length() == 0)
+				res = get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true);
+			/* if it is already been used, then generate a random name */
+			while (mp[idx].find(res) != mp[idx].end()) {
+				res = get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true);
+				cnt ++;
+				if (cnt > 1000)
+					LOG_ERROR_RETURN(-1, "", "fail to generate name");
+			}
+			mp[idx].insert(res);
+			if (tree->get_type(root_path + "/" + res) == type && depth > 0) {
+				deleted_names.insert(root_path + "/" + res);
+				LOG_INFO("delete file/dir: `, type: `", res, tree->get_type(root_path + "/" + res));
+				res = std::string(EROFS_WHOUT_PREFIX) + res;
+			}
+		} else if (idx == 2) {
+			if (depth == 0)
+				res = tree->get_same_name(idx, depth, root_path, type, true);
+			else {
+				root_path += "/";
+				for (const std::string& name: deleted_names) {
+					if (str_n_equal(name, root_path, root_path.length())) {
+						std::string last_component = name.substr(root_path.length());
+						if (last_component.length() > 0 && !is_substring(last_component, "/")) {
+							if (mp[idx].find(last_component) == mp[idx].end()) {
+								res = last_component;
+								LOG_INFO("find deleted name: `, reuse it", res);
+								break;
+							}
+						}
+					}
+				}
+			}
+			if (res.length() == 0)
+				res = get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true);
+			goto check_res;
+		} else {
+			res = get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true);
+	check_res:	while (mp[idx].find(res) != mp[idx].end()) {
+				res = get_randomstr(type ? MAX_FILE_NAME : MAX_DIR_NAME, true);
+				cnt ++;
+				if (cnt > 1000)
+					LOG_ERROR_RETURN(-1, "", "fail to generate name");
+			}
+			mp[idx].insert(res);
+		}
+		return res;
+	}
+
+	std::vector<int> layer_dirs(int idx) {
+		std::vector<int> ret;
+
+		/* 1000 dirs, each contains 2 files */
+		for (int i = 0; i < 1000; i ++)
+			ret.emplace_back(2);
+		return ret;
+	}
+};
+
 TEST(ErofsStressTest, TC001) {
 	std::srand(static_cast<unsigned int>(std::time(0)));
 	StressCase001 *tc001 = new StressCase001("./erofs_stress_001", 20);
@@ -696,6 +804,14 @@ TEST(ErofsStressTest, TC008) {
 
 	ASSERT_EQ(tc008->run(), true);
 	delete tc008;
+}
+
+TEST(ErofsStressTest, TC009) {
+	std::srand(static_cast<unsigned int>(std::time(0)));
+	StressCase009 *tc009 = new StressCase009("./erofs_stress_009", 3);
+
+	ASSERT_EQ(tc009->run(), true);
+	delete tc009;
 }
 
 int main(int argc, char **argv) {

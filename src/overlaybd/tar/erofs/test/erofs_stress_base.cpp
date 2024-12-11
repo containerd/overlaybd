@@ -39,11 +39,11 @@ std::string get_randomstr(int max_length, bool range)
 	}
 	return res;
 }
-static bool is_substring(const std::string& str, const std::string& substring) {
+bool is_substring(const std::string& str, const std::string& substring) {
     return str.find(substring) != std::string::npos;
 }
 
-static bool str_n_equal(std::string s1, std::string s2, long unsigned int n) {
+bool str_n_equal(std::string s1, std::string s2, long unsigned int n) {
 	if (s1.length() < n || s2.length() < n)
 			return false;
 	return s1.substr(0, n) == s2.substr(0, n);
