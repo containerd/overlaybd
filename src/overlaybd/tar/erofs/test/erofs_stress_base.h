@@ -128,7 +128,13 @@ public:
 	virtual bool build_gen_own(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
 	virtual bool build_gen_xattrs(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
 	virtual bool build_gen_content(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
-	/* generate in-mem inode according to erofs-fs file */
+
+	/* for a single dir (node) */
+	virtual bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) = 0;
+	virtual bool build_dir_own(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) = 0;
+	virtual bool build_dir_xattrs(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) = 0;
+
+	/* generate in-mem inode according to erofs-fs file (for both files and dirs) */
 	virtual bool verify_gen_mod(StressNode *node /* out */, photon::fs::IFile *erofs_file /* in */) = 0;
 	virtual bool verify_gen_own(StressNode *node /* out */, photon::fs::IFile *erofs_file /* in */) = 0;
 	virtual bool verify_gen_xattrs(StressNode *node /* out */, photon::fs::IFile *erofs_file /* in */) = 0;

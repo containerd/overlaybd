@@ -169,6 +169,7 @@ bool StressBase::create_layer(int idx) {
 	std::string root_dirname = generate_name(idx, layer_tree->depth, "", NODE_DIR);
 	std::string root_path = prefix + "/" + root_dirname;
 	std::string clean_cmd = "rm -rf " + root_path;
+	bool res;
 
 	if (system(clean_cmd.c_str()))
 		LOG_ERROR_RETURN(-1, false, "fail to prepare clean dir for `", root_path);
@@ -179,11 +180,17 @@ bool StressBase::create_layer(int idx) {
 	StressNode *node = new StressNode(layer_tree->pwd.substr(prefix.length()), NODE_DIR);
 	if (host_fs->mkdir(layer_tree->pwd.c_str(), 0755) != 0)
 		LOG_ERROR_RETURN(-1, false, "fail to mkdir `", layer_tree->pwd);
-	tree->add_node(node);
+
+	res = build_dir_mod(node, layer_tree->pwd.c_str(), host_fs) &&
+		build_dir_own(node, layer_tree->pwd.c_str(), host_fs) &&
+		build_dir_xattrs(node, layer_tree->pwd.c_str(), host_fs);
+	if (!res)
+		LOG_ERROR_RETURN(-1, false, "fail to generate fields for dir `",layer_tree->pwd);
+	if (!tree->add_node(node))
+		LOG_ERROR_RETURN(-1, false, "fail to add node `",layer_tree->pwd);
 
 	// traverse the layer tree
 	while (q.size()) {
-		bool res;
 		LayerNode *cur = q.front();
 		q.erase(q.begin());
 
@@ -252,7 +259,14 @@ bool StressBase::create_layer(int idx) {
 					next->pwd = cur->pwd + "/" + dir_name;
 					if (host_fs->mkdir(next->pwd.c_str(), 0755) == 0) {
 						StressNode *dir_node = new StressNode(next->pwd.substr(prefix.length()), NODE_DIR);
-						tree->add_node(dir_node);
+
+						res = build_dir_mod(dir_node, next->pwd.c_str(), host_fs) &&
+							build_dir_own(dir_node, next->pwd.c_str(), host_fs) &&
+							build_dir_xattrs(dir_node, next->pwd.c_str(), host_fs);
+						if (!res)
+							LOG_ERROR_RETURN(-1, false, "fail to generate fields for dir `", next->pwd);
+						if (!tree->add_node(dir_node))
+							LOG_ERROR_RETURN(-1, false, "fail to add node `", next->pwd);
 						q.emplace_back(next);
 						break;
 					}
@@ -329,7 +343,6 @@ bool StressBase::verify(photon::fs::IFileSystem *erofs_fs) {
 		if (erofs_fs->stat(cur.c_str(), &st))
 			LOG_ERRNO_RETURN(-1, false, "fail to stat file `", cur);
 		if (S_ISDIR(st.st_mode)) {
-			node = new StressNode(cur, NODE_DIR);
 			auto dir = erofs_fs->opendir(cur.c_str());
 			/* the dir may be empty, so check it first */
 			if (dir->get() != nullptr) {
@@ -344,31 +357,35 @@ bool StressBase::verify(photon::fs::IFileSystem *erofs_fs) {
 			}
 			dir->closedir();
 			delete dir;
-		} else if (S_ISREG(st.st_mode)) {
+		}
+		node = new StressNode(cur, S_ISREG(st.st_mode) ? NODE_REGULAR : NODE_DIR);
+
+		if (!first) {
 			photon::fs::IFile *file;
 			bool ret;
 
 			file = erofs_fs->open(cur.c_str(), O_RDONLY);
-			node = new StressNode(cur, NODE_REGULAR);
 			if (!file || ! node)
 				LOG_ERROR_RETURN(0, false, "fail to open file or node `", cur);
 			ret = verify_gen_mod(node, file) &&
 				  verify_gen_own(node, file) &&
-				  verify_gen_xattrs(node, file) &&
-				  verify_gen_content(node, file);
+				  verify_gen_xattrs(node, file);
+			/* do not generate contents for dirs */
+			if (S_ISREG(st.st_mode))
+				ret += verify_gen_content(node, file);
 			if (!ret)
 				LOG_ERROR_RETURN(0, false, "fail to construct StressNode");
 			file->close();
 			delete file;
+
 		}
 
 		if (!tree->query_delete_node(node)) {
 			delete node;
 			LOG_ERROR_RETURN(-1, false, "file ` in erofs_fs but not in the in-mem tree", cur);
 		}
+		first = false;
 
-		if (first)
-			first = false;
 	} while (!items.empty());
 
 	if (!tree->is_emtry())
