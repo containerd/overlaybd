@@ -46,17 +46,19 @@ class StressNode {
 public:
 	/* meta info for a in-mem node */
 	std::string path;
-	std::string mod;
-	std::string own;
 	std::map<std::string, std::string> xattrs;
 	std::string content;
 	enum NODE_TYPE type;
+	struct stat node_stat;
 
-	StressNode(std::string _path, NODE_TYPE _type): path(_path), type(_type) {}
+	StressNode(std::string _path, NODE_TYPE _type): path(_path), type(_type) {
+		memset(&node_stat, 0, sizeof(node_stat));
+		if (type == NODE_DIR)
+			node_stat.st_nlink = 2;
+	}
 
 	StressNode(StressNode *ano):
-		path(ano->path), mod(ano->mod), own(ano->own), xattrs(ano->xattrs),
-		content(ano->content) { }
+		path(ano->path), xattrs(ano->xattrs), content(ano->content) { }
 
 	bool equal(StressNode *ano) {
 		if (!ano)
@@ -84,14 +86,29 @@ public:
 
 		if (path.compare(ano->path))
 			LOG_ERROR_RETURN(-1, false, " path ` not equal to ` (`)", path, ano->path, path);
-		if (mod.compare(ano->mod))
-			LOG_ERROR_RETURN(-1, false, "mode ` not equal to ` (`)", mod, ano->mod, path);
-		if (own.compare(ano->own))
-			LOG_ERROR_RETURN(-1, false, "uid/gid ` not equal to ` (`)", own, ano->own, path);
 		if (content.compare(ano->content))
 			LOG_ERROR_RETURN(-1, false, "content ` not equal to ` (`)", content, ano->content, path);
 		if (type != ano->type)
 			LOG_ERROR_RETURN(-1, false, "type ` not equal to ` (`)", type, ano->type, path);
+		if (node_stat.st_mode != ano->node_stat.st_mode)
+			LOG_ERROR_RETURN(-1, false, "mode ` not equal to ` (`)", node_stat.st_mode, ano->node_stat.st_mode, path);
+		if (node_stat.st_uid != ano->node_stat.st_uid)
+			LOG_ERROR_RETURN(-1, false, "uid ` not equal to ` (`)", node_stat.st_uid, ano->node_stat.st_uid, path);
+		if (node_stat.st_gid != ano->node_stat.st_gid)
+			LOG_ERROR_RETURN(-1, false, "gid ` not equal to ` (`)", node_stat.st_gid, ano->node_stat.st_gid, path);
+		/*
+		 * We do not compare the directory's nlink because
+		 * different directories are used when creating the layer.
+		 */
+		if (type != NODE_DIR && node_stat.st_nlink != ano->node_stat.st_nlink)
+			LOG_ERROR_RETURN(-1, false, "nlink ` not equal to ` (`)", node_stat.st_nlink, ano->node_stat.st_nlink, path);
+		/*
+		 * The host file system (e.g., ext4) has a different
+		 * directory organization than EROFS, so the directory's
+		 * `st_size` is not compared.
+		 */
+		if (type != NODE_DIR && node_stat.st_size != ano->node_stat.st_size)
+			LOG_ERROR_RETURN(-1, false, "file size ` not equal to ` (`)", node_stat.st_size, ano->node_stat.st_size, path);
 		return true;
 	}
 };
@@ -128,17 +145,18 @@ public:
 	virtual bool build_gen_own(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
 	virtual bool build_gen_xattrs(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
 	virtual bool build_gen_content(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
+	virtual bool build_stat_file(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
 
 	/* for a single dir (node) */
 	virtual bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) = 0;
 	virtual bool build_dir_own(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) = 0;
 	virtual bool build_dir_xattrs(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) = 0;
+	virtual bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) = 0;
 
 	/* generate in-mem inode according to erofs-fs file (for both files and dirs) */
-	virtual bool verify_gen_mod(StressNode *node /* out */, photon::fs::IFile *erofs_file /* in */) = 0;
-	virtual bool verify_gen_own(StressNode *node /* out */, photon::fs::IFile *erofs_file /* in */) = 0;
 	virtual bool verify_gen_xattrs(StressNode *node /* out */, photon::fs::IFile *erofs_file /* in */) = 0;
 	virtual bool verify_gen_content(StressNode *node /* out */, photon::fs::IFile *erofs_file /* in */) = 0;
+	virtual bool verify_stat(StressNode *node /* out */, photon::fs::IFile *erofs_file /* in */) = 0;
 
 	/*
 	 * construct the structure of a layer, such as how many dirs,

@@ -183,7 +183,8 @@ bool StressBase::create_layer(int idx) {
 
 	res = build_dir_mod(node, layer_tree->pwd.c_str(), host_fs) &&
 		build_dir_own(node, layer_tree->pwd.c_str(), host_fs) &&
-		build_dir_xattrs(node, layer_tree->pwd.c_str(), host_fs);
+		build_dir_xattrs(node, layer_tree->pwd.c_str(), host_fs) &&
+		build_stat_dir(node, layer_tree->pwd.c_str(), host_fs);
 	if (!res)
 		LOG_ERROR_RETURN(-1, false, "fail to generate fields for dir `",layer_tree->pwd);
 	if (!tree->add_node(node))
@@ -222,7 +223,8 @@ bool StressBase::create_layer(int idx) {
 				res = build_gen_mod(node, file_info) &&
 					  build_gen_own(node, file_info) &&
 					  build_gen_xattrs(node, file_info) &&
-					  build_gen_content(node, file_info);
+					  build_gen_content(node, file_info) &&
+					  build_stat_file(node, file_info);
 				if (!res)
 					LOG_ERROR_RETURN(-1, false, "fail to generate file contents");
 				if (!tree->add_node(node))
@@ -262,7 +264,8 @@ bool StressBase::create_layer(int idx) {
 
 						res = build_dir_mod(dir_node, next->pwd.c_str(), host_fs) &&
 							build_dir_own(dir_node, next->pwd.c_str(), host_fs) &&
-							build_dir_xattrs(dir_node, next->pwd.c_str(), host_fs);
+							build_dir_xattrs(dir_node, next->pwd.c_str(), host_fs) &&
+							build_stat_dir(dir_node, next->pwd.c_str(), host_fs);
 						if (!res)
 							LOG_ERROR_RETURN(-1, false, "fail to generate fields for dir `", next->pwd);
 						if (!tree->add_node(dir_node))
@@ -367,9 +370,8 @@ bool StressBase::verify(photon::fs::IFileSystem *erofs_fs) {
 			file = erofs_fs->open(cur.c_str(), O_RDONLY);
 			if (!file || ! node)
 				LOG_ERROR_RETURN(0, false, "fail to open file or node `", cur);
-			ret = verify_gen_mod(node, file) &&
-				  verify_gen_own(node, file) &&
-				  verify_gen_xattrs(node, file);
+			ret = verify_gen_xattrs(node, file) &&
+			      verify_stat(node, file);
 			/* do not generate contents for dirs */
 			if (S_ISREG(st.st_mode))
 				ret += verify_gen_content(node, file);
