@@ -53,6 +53,7 @@ int erofs_mkfs(struct erofs_mkfs_cfg *mkfs_cfg)
     if (!mkfs_cfg->incremental) {
         sbi->bmgr = erofs_buffer_init(sbi, 0);
         if (!sbi->bmgr) {
+            LOG_ERROR("[erofs] Fail to init erofs buffer.");
             err = -ENOMEM;
             goto exit;
         }
@@ -70,6 +71,7 @@ int erofs_mkfs(struct erofs_mkfs_cfg *mkfs_cfg)
         }
         sbi->bmgr = erofs_buffer_init(sbi, sbi->primarydevice_blocks);
         if (!sbi->bmgr) {
+            LOG_ERROR("[erofs] Fail to init erofs buffer.");
             err = -ENOMEM;
             goto exit;
         }
@@ -123,8 +125,10 @@ int erofs_mkfs(struct erofs_mkfs_cfg *mkfs_cfg)
 
     /* flush all remaining buffers */
     err = erofs_bflush(sbi->bmgr, NULL);
-    if (err)
+    if (err) {
+        LOG_ERROR("[erofs] Fail to flush remaining buffers.");
         goto exit;
+    }
 
     err = erofs_dev_resize(sbi, nblocks);
 exit:
@@ -165,8 +169,10 @@ static int erofs_init_tar(struct erofs_tarfile *erofstar,
             erofstar->ios.bufsize >>= 1;
     } while (erofstar->ios.bufsize >= 1024);
 
-    if (!erofstar->ios.buffer)
-            return -ENOMEM;
+    if (!erofstar->ios.buffer) {
+        LOG_ERROR("[erofs] fail to init erofstar buffer.");
+        return -ENOMEM;
+    }
 
     erofstar->ios.vf.ops = ops;
 

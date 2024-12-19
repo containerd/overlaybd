@@ -117,4 +117,4 @@ jobs:
     - name: Unit Test
       working-directory: ${{github.workspace}}/build
       shell: bash
-      run: ctest -j8 --output-on-failure -C $BUILD_TYPE
+      run: sudo ctest -j8 --output-on-failure -C $BUILD_TYPE
