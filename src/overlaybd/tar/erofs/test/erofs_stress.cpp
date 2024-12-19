@@ -238,6 +238,24 @@ public:
 		}
 		return true;
 	}
+
+	bool build_stat_file(StressNode *node, StressHostFile *file_info) override {
+		if (file_info->file->fstat(&node->node_stat))
+			LOG_ERRNO_RETURN(-1, false, "fail to stat file `", file_info->path);
+		return true;
+	}
+
+	bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) override {
+		if (host_fs->stat(path, &node->node_stat))
+			LOG_ERROR_RETURN(-1, false, "fail to stat dir `", path);
+		return true;
+	}
+
+	bool verify_stat(StressNode *node,  photon::fs::IFile *erofs_file) override {
+		if (erofs_file->fstat(&node->node_stat))
+			LOG_ERRNO_RETURN(-1, false, "fail to stat erofs_file");
+		return true;
+	}
 };
 
 /*
@@ -257,6 +275,9 @@ public:
 	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, build_gen_own(StressNode *node, StressHostFile *file), true)
 	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, build_gen_xattrs(StressNode *node, StressHostFile *file), true)
 	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, build_gen_content(StressNode *node, StressHostFile *file), true)
+	bool build_stat_file(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_stat_file(node, file);
+	}
 
 	bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_mod(node, path, host_fs);
@@ -266,6 +287,9 @@ public:
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
+	}
+	bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) override {
+		return StressInterImpl::build_stat_dir(node, path, host_fs);
 	}
 
 	/* create empty nodes in verify phase */
@@ -277,6 +301,9 @@ public:
 	}
 	bool verify_gen_xattrs(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return node->type == NODE_DIR ? StressInterImpl::verify_gen_xattrs(node, erofs_file): true;
+	}
+	bool verify_stat(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_stat(node, erofs_file);
 	}
 
 	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file), true)
@@ -319,6 +346,9 @@ public:
 	bool build_gen_content(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_content(node, file);
 	}
+	bool build_stat_file(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_stat_file(node, file);
+	}
 
 	bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_mod(node, path, host_fs);
@@ -328,6 +358,9 @@ public:
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
+	}
+	bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) override {
+		return StressInterImpl::build_stat_dir(node, path, host_fs);
 	}
 
 	/* leave mod/own/xattr empty */
@@ -342,6 +375,9 @@ public:
 	}
 	bool verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return StressInterImpl::verify_gen_content(node, erofs_file);
+	}
+	bool verify_stat(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_stat(node, erofs_file);
 	}
 
 	/* simplely generate random dir and file names */
@@ -381,6 +417,9 @@ public:
 	bool build_gen_xattrs(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_xattrs(node, file);
 	}
+	bool build_stat_file(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_stat_file(node, file);
+	}
 
 	bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_mod(node, path, host_fs);
@@ -391,6 +430,9 @@ public:
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
 	}
+	bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) override {
+		return StressInterImpl::build_stat_dir(node, path, host_fs);
+	}
 
 	/* leave mod/own/content empty */
 	bool verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file) override {
@@ -399,10 +441,13 @@ public:
 	bool verify_gen_own(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return node->type == NODE_DIR ? StressInterImpl::verify_gen_own(node, erofs_file) : true;
 	}
-	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file), true)
 	bool verify_gen_xattrs(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return StressInterImpl::verify_gen_xattrs(node, erofs_file);
 	}
+	bool verify_stat(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_stat(node, erofs_file);
+	}
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file), true)
 
 	/* simplely generate random dir and file names */
 	std::string generate_name(int idx, int depth, std::string root_path, NODE_TYPE type) override {
@@ -438,6 +483,9 @@ public:
 	bool build_gen_mod(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_mod(node, file);
 	}
+	bool build_stat_file(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_stat_file(node, file);
+	}
 
 	bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_mod(node, path, host_fs);
@@ -447,6 +495,9 @@ public:
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
+	}
+	bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) override {
+		return StressInterImpl::build_stat_dir(node, path, host_fs);
 	}
 
 	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file), true)
@@ -458,6 +509,9 @@ public:
 	}
 	bool verify_gen_xattrs(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return node->type == NODE_DIR ? StressInterImpl::verify_gen_xattrs(node, erofs_file): true;
+	}
+	bool verify_stat(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_stat(node, erofs_file);
 	}
 
 	/* simplely generate random dir and file names */
@@ -493,6 +547,9 @@ public:
 	bool build_gen_own(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_own(node, file);
 	}
+	bool build_stat_file(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_stat_file(node, file);
+	}
 
 	bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_mod(node, path, host_fs);
@@ -503,17 +560,23 @@ public:
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
 	}
+	bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) override {
+		return StressInterImpl::build_stat_dir(node, path, host_fs);
+	}
 
 	bool verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return node->type ==NODE_DIR ? StressInterImpl::verify_gen_mod(node, erofs_file) : true;
 	}
-	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file), true)
 	bool verify_gen_own(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return StressInterImpl::verify_gen_own(node, erofs_file);
 	}
 	bool verify_gen_xattrs(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return node->type == NODE_DIR ? StressInterImpl::verify_gen_xattrs(node, erofs_file): true;
 	}
+	bool verify_stat(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_stat(node, erofs_file);
+	}
+	EROFS_STRESS_UNIMPLEMENTED_FUNC(bool, verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file), true)
 
 	/* simplely generate random dir and file names */
 	std::string generate_name(int idx, int depth, std::string root_path, NODE_TYPE type) override {
@@ -554,6 +617,9 @@ public:
 	bool build_gen_content(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_content(node, file);
 	}
+	bool build_stat_file(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_stat_file(node, file);
+	}
 
 	bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_mod(node, path, host_fs);
@@ -563,6 +629,9 @@ public:
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
+	}
+	bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) override {
+		return StressInterImpl::build_stat_dir(node, path, host_fs);
 	}
 
 	bool verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file) override {
@@ -576,6 +645,9 @@ public:
 	}
 	bool verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return StressInterImpl::verify_gen_content(node, erofs_file);
+	}
+	bool verify_stat(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_stat(node, erofs_file);
 	}
 
 	/* simplely generate random dir and file names */
@@ -619,6 +691,9 @@ public:
 	bool build_gen_content(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_content(node, file);
 	}
+	bool build_stat_file(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_stat_file(node, file);
+	}
 
 	bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_mod(node, path, host_fs);
@@ -628,6 +703,9 @@ public:
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
+	}
+	bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) override {
+		return StressInterImpl::build_stat_dir(node, path, host_fs);
 	}
 
 	bool verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file) override {
@@ -641,6 +719,9 @@ public:
 	}
 	bool verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return StressInterImpl::verify_gen_content(node, erofs_file);
+	}
+	bool verify_stat(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_stat(node, erofs_file);
 	}
 
 	std::string generate_name(int idx, int depth, std::string root_path, NODE_TYPE type) override {
@@ -704,6 +785,9 @@ public:
 	bool build_gen_content(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_content(node, file);
 	}
+	bool build_stat_file(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_stat_file(node, file);
+	}
 
 	bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_mod(node, path, host_fs);
@@ -713,6 +797,9 @@ public:
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
+	}
+	bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) override {
+		return StressInterImpl::build_stat_dir(node, path, host_fs);
 	}
 
 	bool verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file) override {
@@ -726,6 +813,9 @@ public:
 	}
 	bool verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return StressInterImpl::verify_gen_content(node, erofs_file);
+	}
+	bool verify_stat(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_stat(node, erofs_file);
 	}
 
 	std::string generate_name(int idx, int depth, std::string root_path, NODE_TYPE type) override {
@@ -798,6 +888,9 @@ public:
 	bool build_gen_content(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_content(node, file);
 	}
+	bool build_stat_file(StressNode *node, StressHostFile *file) override {
+		return StressInterImpl::build_stat_file(node, file);
+	}
 
 	bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_mod(node, path, host_fs);
@@ -807,6 +900,9 @@ public:
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
+	}
+	bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) override {
+		return StressInterImpl::build_stat_dir(node, path, host_fs);
 	}
 
 	bool verify_gen_mod(StressNode *node, photon::fs::IFile *erofs_file) override {
@@ -820,6 +916,9 @@ public:
 	}
 	bool verify_gen_content(StressNode *node, photon::fs::IFile *erofs_file) override {
 		return StressInterImpl::verify_gen_content(node, erofs_file);
+	}
+	bool verify_stat(StressNode *node, photon::fs::IFile *erofs_file) override {
+		return StressInterImpl::verify_stat(node, erofs_file);
 	}
 
 	std::string generate_name(int idx, int depth, std::string root_path, NODE_TYPE type) override {
