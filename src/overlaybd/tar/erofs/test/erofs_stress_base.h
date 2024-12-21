@@ -109,6 +109,11 @@ public:
 		 */
 		if (type != NODE_DIR && node_stat.st_size != ano->node_stat.st_size)
 			LOG_ERROR_RETURN(-1, false, "file size ` not equal to ` (`)", node_stat.st_size, ano->node_stat.st_size, path);
+
+		if (node_stat.st_mtime != ano->node_stat.st_mtime)
+			LOG_ERRNO_RETURN(-1, false, "mtime ` not equal to ` (`)", node_stat.st_mtime,
+										  ano->node_stat.st_mtime,
+										  path);
 		return true;
 	}
 };
@@ -139,6 +144,8 @@ public:
 struct in_mem_meta{
 	uid_t uid;
 	gid_t gid;
+	std::string mtime_date;
+	time_t mtime;
 };
 
 /* interface to generate corresponding values for in-mem nodes and host-fs files */
@@ -148,6 +155,7 @@ public:
 	/* generate content for in-memory inodes and host files (prepare layers phase) */
 	virtual bool build_gen_mod(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
 	virtual bool build_gen_own(StressNode *node /* out */, struct in_mem_meta *meta /* out */) = 0;
+	virtual bool build_gen_mtime(StressNode *node, struct in_mem_meta *meta) = 0;
 	virtual bool build_gen_xattrs(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
 	virtual bool build_gen_content(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
 	virtual bool build_stat_file(StressNode *node /* out */, StressHostFile *file_info /* out */, struct in_mem_meta *meta) = 0;
@@ -155,6 +163,7 @@ public:
 	/* for a single dir (node) */
 	virtual bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) = 0;
 	virtual bool build_dir_own(StressNode *node, struct in_mem_meta *meta) = 0;
+	virtual bool build_dir_mtime(StressNode *node, struct in_mem_meta *meta) = 0;
 	virtual bool build_dir_xattrs(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) = 0;
 	virtual bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs, struct in_mem_meta *meta) = 0;
 

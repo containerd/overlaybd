@@ -160,6 +160,18 @@ public:
 		return true;
 	}
 
+	bool build_gen_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		size_t now = time(nullptr);
+		time_t time_sec = get_randomint(now, now + 24 * 60 * 60);
+		struct tm *time_info = localtime(&time_sec);
+		char buffer[256];
+		strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", time_info);
+		std::ostringstream oss;
+		oss << buffer;
+		meta->mtime_date = oss.str();
+		meta->mtime = time_sec;
+		return true;
+	}
 	/* generate a random dir or file name in the current layer */
 	std::string generate_name(int idx, int depth, std::string root_path, NODE_TYPE type) override {
 		std::string res;
@@ -198,6 +210,10 @@ public:
 		return true;
 	}
 
+	bool build_dir_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return build_gen_mtime(node, meta);
+	}
+
 	bool build_dir_xattrs(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) override {
 		photon::fs::IFileSystemXAttr *xattr_ops = dynamic_cast<photon::fs::IFileSystemXAttr*>(host_fs);
 		if (xattr_ops == nullptr)
@@ -219,6 +235,7 @@ public:
 			LOG_ERRNO_RETURN(-1, false, "fail to stat file `", file_info->path);
 		node->node_stat.st_uid = meta->uid;
 		node->node_stat.st_gid = meta->gid;
+		node->node_stat.st_mtime = meta->mtime;
 
 		return true;
 	}
@@ -228,6 +245,7 @@ public:
 			LOG_ERROR_RETURN(-1, false, "fail to stat dir `", path);
 		node->node_stat.st_uid = meta->uid;
 		node->node_stat.st_gid = meta->gid;
+		node->node_stat.st_mtime = meta->mtime;
 		return true;
 	}
 
@@ -257,6 +275,9 @@ public:
 	bool build_gen_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_gen_own(node, meta);
 	}
+	bool build_gen_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_gen_mtime(node, meta);
+	}
 	bool build_stat_file(StressNode *node, StressHostFile *file, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_stat_file(node, file, meta);
 	}
@@ -266,6 +287,9 @@ public:
 	}
 	bool build_dir_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_dir_own(node, meta);
+	}
+	bool build_dir_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_dir_mtime(node, meta);
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
@@ -296,8 +320,8 @@ public:
 	std::vector<int> layer_dirs(int idx) {
 		std::vector<int> ret;
 
-		ret.emplace_back(50);
-		ret.emplace_back(50);
+		ret.emplace_back(3);
+		ret.emplace_back(3);
 		return ret;
 	}
 };
@@ -320,6 +344,9 @@ public:
 	bool build_gen_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_gen_own(node, meta);
 	}
+	bool build_gen_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_gen_mtime(node, meta);
+	}
 	bool build_gen_content(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_content(node, file);
 	}
@@ -332,6 +359,9 @@ public:
 	}
 	bool build_dir_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_dir_own(node, meta);
+	}
+	bool build_dir_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_dir_mtime(node, meta);
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
@@ -388,6 +418,9 @@ public:
 	bool build_gen_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_gen_own(node, meta);
 	}
+	bool build_gen_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_gen_mtime(node, meta);
+	}
 	bool build_gen_xattrs(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_xattrs(node, file);
 	}
@@ -400,6 +433,9 @@ public:
 	}
 	bool build_dir_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_dir_own(node, meta);
+	}
+	bool build_dir_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_dir_mtime(node, meta);
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
@@ -449,6 +485,9 @@ public:
 	bool build_gen_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_gen_own(node, meta);
 	}
+	bool build_gen_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_gen_mtime(node, meta);
+	}
 	bool build_gen_mod(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_mod(node, file);
 	}
@@ -461,6 +500,9 @@ public:
 	}
 	bool build_dir_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_dir_own(node, meta);
+	}
+	bool build_dir_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_dir_mtime(node, meta);
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
@@ -510,6 +552,9 @@ public:
 	bool build_gen_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_gen_own(node, meta);
 	}
+	bool build_gen_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_gen_mtime(node, meta);
+	}
 	bool build_stat_file(StressNode *node, StressHostFile *file, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_stat_file(node, file, meta);
 	}
@@ -519,6 +564,9 @@ public:
 	}
 	bool build_dir_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_dir_own(node, meta);
+	}
+	bool build_dir_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_dir_mtime(node, meta);
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
@@ -568,6 +616,9 @@ public:
 	bool build_gen_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_gen_own(node, meta);
 	}
+	bool build_gen_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_gen_mtime(node, meta);
+	}
 	bool build_gen_xattrs(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_xattrs(node, file);
 	}
@@ -583,6 +634,9 @@ public:
 	}
 	bool build_dir_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_dir_own(node, meta);
+	}
+	bool build_dir_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_dir_mtime(node, meta);
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
@@ -636,6 +690,9 @@ public:
 	bool build_gen_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_gen_own(node, meta);
 	}
+	bool build_gen_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_gen_mtime(node, meta);
+	}
 	bool build_gen_xattrs(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_xattrs(node, file);
 	}
@@ -651,6 +708,9 @@ public:
 	}
 	bool build_dir_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_dir_own(node, meta);
+	}
+	bool build_dir_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_dir_mtime(node, meta);
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
@@ -724,6 +784,9 @@ public:
 	bool build_gen_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_gen_own(node, meta);
 	}
+	bool build_gen_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_gen_mtime(node, meta);
+	}
 	bool build_gen_xattrs(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_xattrs(node, file);
 	}
@@ -739,6 +802,9 @@ public:
 	}
 	bool build_dir_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_dir_own(node, meta);
+	}
+	bool build_dir_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_dir_mtime(node, meta);
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);
@@ -821,6 +887,9 @@ public:
 	bool build_gen_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_gen_own(node, meta);
 	}
+	bool build_gen_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_gen_mtime(node, meta);
+	}
 	bool build_gen_xattrs(StressNode *node, StressHostFile *file) override {
 		return StressInterImpl::build_gen_xattrs(node, file);
 	}
@@ -836,6 +905,9 @@ public:
 	}
 	bool build_dir_own(StressNode *node, struct in_mem_meta *meta) override {
 		return StressInterImpl::build_dir_own(node, meta);
+	}
+	bool build_dir_mtime(StressNode *node, struct in_mem_meta *meta) override {
+		return StressInterImpl::build_dir_mtime(node, meta);
 	}
 	bool build_dir_xattrs(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) override {
 		return StressInterImpl::build_dir_xattrs(node, path, host_fs);

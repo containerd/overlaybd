@@ -157,7 +157,7 @@ static bool append_tar(bool first, std::string tar_name, std::string tmp_tar, st
 {
 	std::string cmd = std::string("tar --create --file=") + (first ? tar_name : tmp_tar) + " --xattrs --xattrs-include='*'";
 	if (meta)
-		cmd = cmd + " --owner=" + std::to_string(meta->uid) + " --group=" + std::to_string(meta->gid);
+		cmd = cmd + " --owner=" + std::to_string(meta->uid) + " --group=" + std::to_string(meta->gid) + " --mtime=\"" + meta->mtime_date + "\"";
 	cmd = cmd + " -C " + prefix + " " + file_name;
 
 	if (system(cmd.c_str()))
@@ -205,6 +205,7 @@ bool StressBase::create_layer(int idx) {
 	meta_maps[layer_tree->pwd] = new struct in_mem_meta();
 	res = build_dir_mod(node, layer_tree->pwd.c_str(), host_fs) &&
 		build_dir_own(node, meta_maps[layer_tree->pwd]) &&
+		build_dir_mtime(node, meta_maps[layer_tree->pwd]) &&
 		build_dir_xattrs(node, layer_tree->pwd.c_str(), host_fs) &&
 		build_stat_dir(node, layer_tree->pwd.c_str(), host_fs, meta_maps[layer_tree->pwd]);
 	if (!res)
@@ -250,6 +251,7 @@ bool StressBase::create_layer(int idx) {
 				meta_maps[prefix + filename] = new struct in_mem_meta();
 				res = build_gen_mod(node, file_info) &&
 					  build_gen_own(node, meta_maps[prefix + filename]) &&
+					  build_gen_mtime(node, meta_maps[prefix + filename]) &&
 					  build_gen_xattrs(node, file_info) &&
 					  build_gen_content(node, file_info) &&
 					  build_stat_file(node, file_info, meta_maps[prefix + filename]);
@@ -297,6 +299,7 @@ bool StressBase::create_layer(int idx) {
 						meta_maps[next->pwd] = new struct in_mem_meta();
 						res = build_dir_mod(dir_node, next->pwd.c_str(), host_fs) &&
 							build_dir_own(dir_node, meta_maps[next->pwd]) &&
+							build_dir_mtime(dir_node, meta_maps[next->pwd]) &&
 							build_dir_xattrs(dir_node, next->pwd.c_str(), host_fs) &&
 							build_stat_dir(dir_node, next->pwd.c_str(), host_fs, meta_maps[next->pwd]);
 						if (!res)
