@@ -153,6 +153,23 @@ static LayerNode *build_layer_tree(std::vector<int> &dirs) {
 	return nodes[0];
 }
 
+static bool append_tar(bool first, std::string tar_name, std::string tmp_tar, std::string prefix, std::string file_name, struct in_mem_meta *meta)
+{
+	std::string cmd = std::string("tar --create --file=") + (first ? tar_name : tmp_tar) + " --xattrs --xattrs-include='*'";
+	if (meta)
+		cmd = cmd + " --owner=" + std::to_string(meta->uid) + " --group=" + std::to_string(meta->gid);
+	cmd = cmd + " -C " + prefix + " " + file_name;
+
+	if (system(cmd.c_str()))
+		LOG_ERROR_RETURN(-1, false, "fail to create tar file for `, cmd: `", prefix + "/" + file_name, cmd);
+	if (!first) {
+		cmd = std::string("tar --concatenate --file=") + tar_name + " " + tmp_tar;
+		if (system(cmd.c_str()))
+			LOG_ERROR_RETURN(-1, false, "fail to concatenate ` to `, cmd: `", tmp_tar, tar_name, cmd);
+	}
+	return true;
+}
+
 bool StressBase::create_layer(int idx) {
 
 #define MAX_TRY_TIME 10
@@ -170,6 +187,7 @@ bool StressBase::create_layer(int idx) {
 	std::string root_path = prefix + "/" + root_dirname;
 	std::string clean_cmd = "rm -rf " + root_path;
 	bool res;
+	std::map<std::string, struct in_mem_meta *> meta_maps;
 
 	if (system(clean_cmd.c_str()))
 		LOG_ERROR_RETURN(-1, false, "fail to prepare clean dir for `", root_path);
@@ -177,18 +195,25 @@ bool StressBase::create_layer(int idx) {
 	layer_tree->pwd = root_path;
 	q.emplace_back(layer_tree);
 
+	std::string layer_name = origin_prefix + "/layer" + std::to_string(idx) + ".tar";
+	std::string tmp_tar = origin_prefix + "/layer" + std::to_string(idx) + "_tmp.tar";
+
 	StressNode *node = new StressNode(layer_tree->pwd.substr(prefix.length()), NODE_DIR);
 	if (host_fs->mkdir(layer_tree->pwd.c_str(), 0755) != 0)
 		LOG_ERROR_RETURN(-1, false, "fail to mkdir `", layer_tree->pwd);
 
+	meta_maps[layer_tree->pwd] = new struct in_mem_meta();
 	res = build_dir_mod(node, layer_tree->pwd.c_str(), host_fs) &&
-		build_dir_own(node, layer_tree->pwd.c_str(), host_fs) &&
+		build_dir_own(node, meta_maps[layer_tree->pwd]) &&
 		build_dir_xattrs(node, layer_tree->pwd.c_str(), host_fs) &&
-		build_stat_dir(node, layer_tree->pwd.c_str(), host_fs);
+		build_stat_dir(node, layer_tree->pwd.c_str(), host_fs, meta_maps[layer_tree->pwd]);
 	if (!res)
 		LOG_ERROR_RETURN(-1, false, "fail to generate fields for dir `",layer_tree->pwd);
 	if (!tree->add_node(node))
 		LOG_ERROR_RETURN(-1, false, "fail to add node `",layer_tree->pwd);
+
+	if (!append_tar(true, layer_name, tmp_tar, prefix, root_dirname, meta_maps[layer_tree->pwd]))
+		LOG_ERROR_RETURN(-1, false, "fail to crate tar for `", layer_tree->pwd);
 
 	// traverse the layer tree
 	while (q.size()) {
@@ -215,22 +240,27 @@ bool StressBase::create_layer(int idx) {
 					LOG_ERROR_RETURN(-1, false, "fail to add WHITEOUT file `", filename);
 				file_info->file->fsync();
 				delete file_info;
+				if (!append_tar(false, layer_name, tmp_tar, prefix, host_filename.substr(1), nullptr))
+					LOG_ERROR_RETURN(-1, false, "fail to create tar for whiteout file: `", (prefix + host_filename));
 			} else {
 				filename = name_prefix + "/" + filename;
 				StressNode *node = new StressNode(filename, NODE_REGULAR);
 				StressHostFile *file_info = new StressHostFile(prefix + filename, host_fs);
 
+				meta_maps[prefix + filename] = new struct in_mem_meta();
 				res = build_gen_mod(node, file_info) &&
-					  build_gen_own(node, file_info) &&
+					  build_gen_own(node, meta_maps[prefix + filename]) &&
 					  build_gen_xattrs(node, file_info) &&
 					  build_gen_content(node, file_info) &&
-					  build_stat_file(node, file_info);
+					  build_stat_file(node, file_info, meta_maps[prefix + filename]);
 				if (!res)
 					LOG_ERROR_RETURN(-1, false, "fail to generate file contents");
 				if (!tree->add_node(node))
 					LOG_ERROR_RETURN(-1, false, "failt to add node `", filename);
 				file_info->file->fsync();
 				delete file_info;
+				if (!append_tar(false, layer_name, tmp_tar, prefix, filename.substr(1), meta_maps[prefix + filename]))
+					LOG_ERROR_RETURN(-1, false, "fail to create tar for file `", (prefix + filename));
 			}
 		}
 
@@ -256,21 +286,26 @@ bool StressBase::create_layer(int idx) {
 						LOG_ERROR_RETURN(-1, false, "fail to crate whiout dir in host fs: `", host_filename);
 					file_info->file->fsync();
 					delete file_info;
+					if (!append_tar(false, layer_name, tmp_tar, prefix, host_filename.substr(prefix.length() + 1), nullptr))
+						LOG_ERROR_RETURN(-1, false, "fail to create whitout dir for `", host_filename);
 					break;
 				} else {
 					next->pwd = cur->pwd + "/" + dir_name;
 					if (host_fs->mkdir(next->pwd.c_str(), 0755) == 0) {
 						StressNode *dir_node = new StressNode(next->pwd.substr(prefix.length()), NODE_DIR);
 
+						meta_maps[next->pwd] = new struct in_mem_meta();
 						res = build_dir_mod(dir_node, next->pwd.c_str(), host_fs) &&
-							build_dir_own(dir_node, next->pwd.c_str(), host_fs) &&
+							build_dir_own(dir_node, meta_maps[next->pwd]) &&
 							build_dir_xattrs(dir_node, next->pwd.c_str(), host_fs) &&
-							build_stat_dir(dir_node, next->pwd.c_str(), host_fs);
+							build_stat_dir(dir_node, next->pwd.c_str(), host_fs, meta_maps[next->pwd]);
 						if (!res)
 							LOG_ERROR_RETURN(-1, false, "fail to generate fields for dir `", next->pwd);
 						if (!tree->add_node(dir_node))
 							LOG_ERROR_RETURN(-1, false, "fail to add node `", next->pwd);
 						q.emplace_back(next);
+						if (!append_tar(false, layer_name, tmp_tar, prefix, next->pwd.substr(prefix.length() + 1), meta_maps[next->pwd]))
+							LOG_ERROR_RETURN(-1, false, "fail to create tar for dir `", next->pwd);
 						break;
 					}
 				}
@@ -281,10 +316,11 @@ bool StressBase::create_layer(int idx) {
 
 #undef MAX_TRY_TIME
 
-	std::string layer_name = origin_prefix + "/layer" + std::to_string(idx);
-	std::string cmd = std::string(" sudo tar  --xattrs --xattrs-include='*' -cf ") + layer_name + ".tar -C "  + prefix + " " + root_dirname;
-	if (system(cmd.c_str()))
-		LOG_ERROR_RETURN(-1, false, "fail to prepare tar file, cmd: `", cmd);
+	for (auto it = meta_maps.begin(); it != meta_maps.end(); ) {
+		delete it->second;
+		it = meta_maps.erase(it);
+	}
+
 	prefix = origin_prefix;
 	return true;
 }

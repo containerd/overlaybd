@@ -136,22 +136,27 @@ public:
 	}
 };
 
+struct in_mem_meta{
+	uid_t uid;
+	gid_t gid;
+};
+
 /* interface to generate corresponding values for in-mem nodes and host-fs files */
 class StressGenInter {
 public:
 	/* for a single file (node) */
 	/* generate content for in-memory inodes and host files (prepare layers phase) */
 	virtual bool build_gen_mod(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
-	virtual bool build_gen_own(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
+	virtual bool build_gen_own(StressNode *node /* out */, struct in_mem_meta *meta /* out */) = 0;
 	virtual bool build_gen_xattrs(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
 	virtual bool build_gen_content(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
-	virtual bool build_stat_file(StressNode *node /* out */, StressHostFile *file_info /* out */) = 0;
+	virtual bool build_stat_file(StressNode *node /* out */, StressHostFile *file_info /* out */, struct in_mem_meta *meta) = 0;
 
 	/* for a single dir (node) */
 	virtual bool build_dir_mod(StressNode *node,  const char *path, photon::fs::IFileSystem *host_fs) = 0;
-	virtual bool build_dir_own(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) = 0;
+	virtual bool build_dir_own(StressNode *node, struct in_mem_meta *meta) = 0;
 	virtual bool build_dir_xattrs(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) = 0;
-	virtual bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs) = 0;
+	virtual bool build_stat_dir(StressNode *node, const char *path, photon::fs::IFileSystem *host_fs, struct in_mem_meta *meta) = 0;
 
 	/* generate in-mem inode according to erofs-fs file (for both files and dirs) */
 	virtual bool verify_gen_xattrs(StressNode *node /* out */, photon::fs::IFile *erofs_file /* in */) = 0;
