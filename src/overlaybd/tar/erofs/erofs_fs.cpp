@@ -285,6 +285,35 @@ ssize_t ErofsFile::pread(void *buf, size_t count, off_t offset)
 	return read;
 }
 
+ssize_t ErofsFile::fgetxattr(const char *name, void *value, size_t size)
+{
+    ssize_t value_size = 0;
+
+    value_size = erofs_getxattr(&file_private->inode, name, NULL, 0);
+    if (value_size < 0)
+        LOG_ERROR_RETURN(-1, size, "[erofs] fail to get xattr `", name);
+    if ((size_t)value_size > size)
+        LOG_ERROR_RETURN(-1, -1, "[erofs] buffer is too small to put xattr value of `", name);
+    return erofs_getxattr(&file_private->inode, name, (char*)value, value_size);
+}
+
+ssize_t ErofsFile::flistxattr(char *list, size_t size)
+{
+    ssize_t kllen;
+
+    kllen = erofs_listxattr(&file_private->inode, NULL, 0);
+    if (kllen < 0)
+        LOG_ERROR_RETURN(-1, kllen, "[erofs] fail to list xattr");
+    if ((size_t)kllen > size)
+        LOG_ERROR_RETURN(-1, -1, "[erofs buffer size is too small to put xattrs");
+    if (erofs_listxattr(&file_private->inode, list, kllen) != kllen)
+        LOG_ERROR_RETURN(-1, -1, "[erofs] fail to list xattr");
+    return kllen;
+}
+
+EROFS_UNIMPLEMENTED_FUNC(int, ErofsFile, fsetxattr(const char *name, const void *value, size_t size, int flags), -EROFS_UNIMPLEMENTED)
+EROFS_UNIMPLEMENTED_FUNC(int, ErofsFile, fremovexattr(const char *name), -EROFS_UNIMPLEMENTED)
+
 // ErofsFileSystem
 EROFS_UNIMPLEMENTED_FUNC(photon::fs::IFile*, ErofsFileSystem, open(const char *pathname, int flags, mode_t mode), NULL)
 EROFS_UNIMPLEMENTED_FUNC(photon::fs::IFile*, ErofsFileSystem, creat(const char *pathname, mode_t mode), NULL)

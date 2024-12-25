@@ -58,7 +58,7 @@ private:
 	friend class ErofsFile;
 };
 
-class ErofsFile: public photon::fs::VirtualReadOnlyFile {
+class ErofsFile: public photon::fs::VirtualReadOnlyFile, public photon::fs::IFileXAttr {
 public:
 	ErofsFile(ErofsFileSystem *fs);
 	~ErofsFile();
@@ -66,6 +66,10 @@ public:
 	int fstat(struct stat *buf);
 	int fiemap(struct photon::fs::fiemap *map);
 	ssize_t pread(void *buf, size_t count, off_t offset);
+	ssize_t fgetxattr(const char *name, void *value, size_t size);
+	ssize_t flistxattr(char *list, size_t size);
+	int fsetxattr(const char *name, const void *value, size_t size, int flags);
+	int fremovexattr(const char *name);
 private:
 	ErofsFileSystem *fs;
 	struct ErofsFileInt;
