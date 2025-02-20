@@ -28,6 +28,7 @@
 #include "photon/photon.h"
 #include "photon/fs/virtual-file.h"
 #include "photon/common/checksum/crc32c.h"
+#include "photon/thread/thread.h"
 
 namespace FileSystem {
 using namespace photon::fs;
@@ -62,6 +63,7 @@ private:
     struct IndexFileHeader index_header_;
     INDEX index_;
     bool inited_ = false;
+    photon::mutex init_mutex_;
     int init();
     int parse_index();
     IndexEntry *seek_index(INDEX &index, off_t offset);
@@ -142,6 +144,7 @@ int GzFile::parse_index() {
 }
 
 int GzFile::init() {
+    SCOPED_LOCK(init_mutex_);
     if (inited_) {
         return 0;
     }
