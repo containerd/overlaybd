@@ -493,20 +493,30 @@ int ImageFile::init_image_file() {
         LOG_ERROR("open upper layer failed.");
         goto ERROR_EXIT;
     }
-    stack_ret = LSMT::stack_files(upper_file, lower_file, true, false);
+    // We have to maintain the lower_file because prefetcher need the readonly
+    // lower_file but not the writable m_file.
+    //
+    // Otherwise, lower_file and upper_file will lose the ownership of m_files
+    // after stack_files(...), so we could safely delete them.
+    //
+    // upper_file will be deleted immediately since it's useless.
+    // lower_file will be held by ImageFile until deconstruct.
+    stack_ret = LSMT::stack_files(upper_file, lower_file, false, false);
     if (!stack_ret) {
         LOG_ERROR("LSMT::stack_files(`, `)", (uint64_t)upper_file, true);
         goto ERROR_EXIT;
     }
     m_file = stack_ret;
     read_only = false;
+    delete upper_file;
+    m_lower_file = lower_file;
 
 SUCCESS_EXIT:
     if (conf.download().enable() && !record_no_download) {
         start_bk_dl_thread();
     }
     if (m_prefetcher != nullptr) {
-        m_prefetcher->replay(m_file);
+        m_prefetcher->replay(lower_file);
     }
     return 1;
 

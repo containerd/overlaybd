@@ -29,16 +29,18 @@ limitations under the License.
 #include "prefetch.h"
 #include "tools/comm_func.h"
 #include "overlaybd/lsmt/file.h"
+#include "overlaybd/zfile/crc32/crc32c.h"
+
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
 #include <photon/fs/forwardfs.h>
 #include <photon/fs/localfs.h>
 #include <photon/thread/thread11.h>
-#include "overlaybd/zfile/crc32/crc32c.h"
-#include "photon/fs/filesystem.h"
-#include "photon/fs/fiemap.h"
-#include "photon/fs/path.h"
-#include "photon/common/enumerable.h"
+#include <photon/fs/filesystem.h>
+#include <photon/fs/fiemap.h>
+#include <photon/fs/path.h>
+#include <photon/common/enumerable.h>
+#include <photon/fs/extfs/extfs.h>
 
 
 using namespace std;
@@ -370,7 +372,7 @@ public:
         while (start <= end && str[start] == c) {
             ++start;
         }
-        while (end >= start && str[start] == c) {
+        while (end >= start && str[end] == c) {
             --end;
         }
         return str.substr(start, end - start + 1);
@@ -394,7 +396,7 @@ public:
         file.seekg(0, ios::beg);
         std::string line;
         while (std::getline(file, line)) {
-            line = trim(trim(line, ' '), '/');
+            line = trim(line, ' ');
             if (line.empty() || !invalid_abs_path(line)) {
                 continue;
             }
@@ -470,7 +472,7 @@ public:
         if (fstype == "erofs")
             fs = create_erofs_fs(const_cast<IFile*>(imagefile), 4096);
         else
-            fs = create_ext4fs(const_cast<IFile*>(imagefile), false, true, "/");
+            fs = new_extfs(const_cast<IFile*>(imagefile), true);
 
         if (fs == nullptr) {
             LOG_ERROR_RETURN(0, -1, "unrecognized filesystem in dynamic prefetcher");
