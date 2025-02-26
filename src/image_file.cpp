@@ -481,6 +481,7 @@ int ImageFile::init_image_file() {
         goto ERROR_EXIT;
     }
 
+    // have only RO layers
     if (upper.index() == "" || upper.data() == "") {
         LOG_INFO("RW layer path not set. return RO layers.");
         m_file = lower_file;
@@ -493,14 +494,21 @@ int ImageFile::init_image_file() {
         LOG_ERROR("open upper layer failed.");
         goto ERROR_EXIT;
     }
-    // We have to maintain the lower_file because prefetcher need the readonly
-    // lower_file but not the writable m_file.
+
+    // have only one RW layer
+    if (!lower_file) {
+        LOG_INFO("RO layers path not set. return RW layer.");
+        m_file = upper_file;
+        read_only = false;
+        goto SUCCESS_EXIT;
+    }
+
+    // stack_files(..., ownership=true) will destruct lower_file and upper_file
+    // immediately, but the read-only lower_file is needed by prefetcher, so we
+    // have to use stack_files(..., ownership=false) instead.
     //
-    // Otherwise, lower_file and upper_file will lose the ownership of m_files
-    // after stack_files(...), so we could safely delete them.
-    //
-    // upper_file will be deleted immediately since it's useless.
-    // lower_file will be held by ImageFile until deconstruct.
+    // For this reason, lower_file and upper_file must be maintained until m_file
+    // is deconstructed.
     stack_ret = LSMT::stack_files(upper_file, lower_file, false, false);
     if (!stack_ret) {
         LOG_ERROR("LSMT::stack_files(`, `)", (uint64_t)upper_file, true);
@@ -508,14 +516,14 @@ int ImageFile::init_image_file() {
     }
     m_file = stack_ret;
     read_only = false;
-    delete upper_file;
     m_lower_file = lower_file;
+    m_upper_file = upper_file;
 
 SUCCESS_EXIT:
     if (conf.download().enable() && !record_no_download) {
         start_bk_dl_thread();
     }
-    if (m_prefetcher != nullptr) {
+    if (m_prefetcher && lower_file) {
         m_prefetcher->replay(lower_file);
     }
     return 1;
