@@ -352,7 +352,7 @@ LSMT::IFileRW *StressBase::mkfs()
 
 		LSMT::IFileRW *img_file = nullptr;
 		if (i > 0)
-			img_file = LSMT::stack_files(current_layer, lowers, false, false);
+			img_file = LSMT::stack_files(current_layer, lowers, true, false);
 		else
 			img_file = current_layer;
 
@@ -362,7 +362,6 @@ LSMT::IFileRW *StressBase::mkfs()
 			delete img_file;
 			LOG_ERROR_RETURN(-1, nullptr, "fail to extract tar");
 		}
-		delete lowers;
 		delete tar;
 		lowers = img_file;
 	}

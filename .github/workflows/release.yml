@@ -84,10 +84,17 @@ jobs:
         ls -l releases/
       env:
         IMAGE: ${{ matrix.images }}
+    - id: upload_name
+      name: Upload name
+      run: |
+        image=${{ matrix.images }}
+        platform=${{ matrix.platforms }}
+        name="releases-${image//\//_}-${platform/\//_}"
+        echo "name=${name}" >> "$GITHUB_OUTPUT"
     - name: Upload
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: releases
+        name: ${{ steps.upload_name.outputs.name }}
         path: releases/overlaybd-*.*
 
   dev-release:
@@ -97,7 +104,7 @@ jobs:
     needs: [build]
     steps:
       - name: Download builds and release notes
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
       - name: Display downloaded files
         shell: bash
         run: ls -l releases
@@ -118,7 +125,7 @@ jobs:
     needs: [build]
     steps:
       - name: Download builds and release notes
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
       - name: Display downloaded files
         shell: bash
         run: ls -l releases

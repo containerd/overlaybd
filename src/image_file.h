@@ -62,9 +62,8 @@ public:
             m_file->close();
             delete m_file;
         }
-        if (m_lower_file) {
-            delete m_lower_file;
-        }
+        if (m_lower_file) delete m_lower_file;
+        if (m_upper_file) delete m_upper_file;
     }
 
     int fstat(struct stat *buf) override {
@@ -121,6 +120,7 @@ private:
     photon::join_handle *dl_thread_jh = nullptr;
     ImageService &image_service;
     photon::fs::IFile *m_lower_file = nullptr;
+    photon::fs::IFile *m_upper_file = nullptr;
 
     int init_image_file();
     template<typename...Ts> void set_failed(const Ts&...xs);
