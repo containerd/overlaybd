@@ -53,6 +53,8 @@ struct Segment {          // 48 + 18 == 64
 
 struct SegmentMapping : public Segment { // 64 + 55 + 9 == 128
     uint64_t moffset : 55;               // mapped offset (2^64 B if in sector)
+    // (4K align(12bit) + 32 bit) = 16T
+    //  24 bit = 16M items
     uint32_t zeroed : 1;                 // indicating a zero-filled segment
     uint8_t tag;
     const static uint64_t MAX_MOFFSET = (1UL << 55) - 1;
@@ -78,6 +80,15 @@ struct SegmentMapping : public Segment { // 64 + 55 + 9 == 128
     SegmentMapping &discard() {
         zeroed = 1;
         return *this;
+    }
+
+    // ELink: get internal offset of the target object
+    off_t inner_offest() {
+        return moffset >> 24;
+    }
+    // ELink: get target idx in referenceTable
+    off_t reference_index() {
+        return moffset & 0xffffff;
     }
     static SegmentMapping invalid_mapping() {
         return SegmentMapping(INVALID_OFFSET, 0, 0);
