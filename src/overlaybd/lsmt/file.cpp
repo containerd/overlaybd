@@ -1807,7 +1807,7 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
         rst = new LSMTWarpFile;
         delta++;
     }
-    idx = create_combo_index((IMemoryIndex0 *)u->m_index, l->m_index, l->m_files.size(), true);
+    idx = create_combo_index((IMemoryIndex0 *)u->m_index, l->m_index, l->m_files.size(), ownership);
     rst->m_index = idx;
     rst->m_findex = u->m_findex;
     rst->m_vsize = u->m_vsize;
@@ -1830,9 +1830,9 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
     }
     rst->m_uuid.push_back(u->m_uuid[0]);
     rst->m_rw_tag = rst->m_files.size() - delta;
-    u->m_index = l->m_index = nullptr;
-    l->m_file_ownership = u->m_file_ownership = false;
     if (ownership) {
+        u->m_index = l->m_index = nullptr;
+        l->m_file_ownership = u->m_file_ownership = false;
         delete u;
         delete l;
     }
