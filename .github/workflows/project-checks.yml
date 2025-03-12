@@ -25,7 +25,50 @@ jobs:
           path: src/github.com/containerd/overlaybd
           fetch-depth: 100
 
-      - name: Project checks
-        uses: containerd/project-checks@v1.1.0
-        with:
-          working-directory: src/github.com/containerd/overlaybd
+      - name: set env
+        shell: bash
+        run: |
+          echo "GOPATH=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        shell: bash
+        env:
+          GO111MODULE: on
+        run: |
+          echo "::group::🚧 Get dependencies"
+          go install -v github.com/vbatts/git-validation@latest
+          go install -v github.com/containerd/ltag@latest
+          echo "::endgroup::"
+
+      - name: DCO Checks
+        shell: bash
+        working-directory: src/github.com/containerd/overlaybd
+        env:
+          GITHUB_COMMIT_URL: ${{ github.event.pull_request.commits_url }}
+          REPO_ACCESS_TOKEN: ""
+          DCO_VERBOSITY: "-v"
+          DCO_RANGE: ""
+        run: |
+          echo "::group::👮 DCO checks"
+          set -x
+          if [[ ! -z "${REPO_ACCESS_TOKEN}" ]]; then
+          HEADERS=(-H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${REPO_ACCESS_TOKEN}")
+          else
+          HEADERS=(-H "Accept: application/vnd.github+json")
+          fi
+          if [ -z "${GITHUB_COMMIT_URL}" ]; then
+          DCO_RANGE=$(jq -r '.after + "..HEAD"' ${GITHUB_EVENT_PATH})
+          else
+          DCO_RANGE=$(curl "${HEADERS[@]}" ${GITHUB_COMMIT_URL} | jq -r '.[0].parents[0].sha + "..HEAD"')
+          fi
+          git-validation ${DCO_VERBOSITY} ${DCO_RANGE} -run DCO,short-subject,dangling-whitespace
+          echo "::endgroup::"
+
+      - name: Validate file headers
+        shell: bash
+        working-directory: src/github.com/containerd/overlaybd
+        run: |
+          echo "::group::📚 File headers"
+          ltag -t "script/validate/template" --excludes "vendor contrib" --check -v
+          echo "::endgroup::"
