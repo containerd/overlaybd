@@ -107,7 +107,7 @@ jobs:
         uses: actions/download-artifact@v4
       - name: Display downloaded files
         shell: bash
-        run: ls -l releases
+        run: ls -l releases*/
       - name: Create Release
         uses: "marvinpinto/action-automatic-releases@latest"
         with:
@@ -116,7 +116,7 @@ jobs:
           prerelease: true
           title: "Development Build"
           files: |
-            releases/overlaybd-*.*
+            releases*/overlaybd-*.*
 
   release:
     name: "Tagged Release"
@@ -128,11 +128,11 @@ jobs:
         uses: actions/download-artifact@v4
       - name: Display downloaded files
         shell: bash
-        run: ls -l releases
+        run: ls -l releases*/
       - name: Create Release
         uses: "marvinpinto/action-automatic-releases@latest"
         with:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
           prerelease: false
           files: |
-            releases/overlaybd-*.*
+            releases*/overlaybd-*.*

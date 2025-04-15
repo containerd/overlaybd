@@ -4,7 +4,7 @@ if(NOT ORIGIN_EXT2FS)
     FetchContent_Declare(
         e2fsprogs
         GIT_REPOSITORY https://github.com/data-accelerator/e2fsprogs.git
-        GIT_TAG f8664ddfd662b1664104e0bbd5ac202a6e3b1da6
+        GIT_TAG b4cf6c751196a12b1df9a269d8e0b516b99fe6a7
     )
     FetchContent_GetProperties(e2fsprogs)
 
