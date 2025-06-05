@@ -81,6 +81,13 @@ elif [[ ${OS} =~ "mariner" ]]; then
 
     DISTRO=${OS/:/.}
     PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.${DISTRO}"
+elif [[ ${OS} =~ "azurelinux" ]]; then
+    tdnf update -y
+    tdnf install -y libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel glibc-devel libzstd-devel binutils ca-certificates-microsoft build-essential
+    tdnf install -y rpm-build make git wget sudo tar gcc gcc-c++ autoconf automake libtool
+
+    DISTRO=${OS/:/.}
+    PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.${DISTRO}"
 fi
 
 if [[ ${ARCH} == "x86_64" ]]; then
