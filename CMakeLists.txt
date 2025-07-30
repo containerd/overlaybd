@@ -47,14 +47,14 @@ option(BUILD_CURL_FROM_SOURCE "Compile static libcurl" off)
 option(ORIGIN_EXT2FS "Use original libext2fs" off)
 find_package(photon REQUIRED)
 find_package(tcmu REQUIRED)
-find_package(yamlcpp)
-if (NOT yamlcpp_FOUND)
+find_package(yaml-cpp)
+if (NOT yaml-cpp_FOUND)
   FetchContent_Declare(
-    yamlcpp
+    yaml-cpp
     GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
     GIT_TAG 0.8.0
   )
-  FetchContent_MakeAvailable(yamlcpp)
+  FetchContent_MakeAvailable(yaml-cpp)
 endif()
 
 
