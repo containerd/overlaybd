@@ -16,6 +16,7 @@
 #include "image_service.h"
 #include "config.h"
 #include "image_file.h"
+#include "telemetry.h"
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
 #include <photon/common/io-alloc.h>

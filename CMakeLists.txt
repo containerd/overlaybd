@@ -4,6 +4,8 @@ project(
   overlaybd
   LANGUAGES C CXX
 )
+
+include(FetchContent)
 enable_language(C)
 
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
@@ -50,6 +52,23 @@ option(ORIGIN_EXT2FS "Use original libext2fs" off)
 find_package(photon REQUIRED)
 find_package(tcmu REQUIRED)
 find_package(yamlcpp)
+
+# OpenTelemetry
+find_package(opentelemetry-cpp REQUIRED)
+if (NOT opentelemetry-cpp_FOUND)
+  FetchContent_Declare(
+    opentelemetry-cpp
+    GIT_REPOSITORY https://github.com/open-telemetry/opentelemetry-cpp.git
+    GIT_TAG v1.14.2
+  )
+  set(WITH_OTLP_HTTP ON)
+  set(WITH_OTLP_GRPC ON)
+  set(WITH_JAEGER ON)
+  set(WITH_ZIPKIN ON)
+  set(BUILD_TESTING OFF)
+  set(OTELCPP_PROTO_PATH ${CMAKE_CURRENT_BINARY_DIR}/_deps/opentelemetry-cpp-src/third_party/opentelemetry-proto)
+  FetchContent_MakeAvailable(opentelemetry-cpp)
+endif()
 if (NOT yamlcpp_FOUND)
   FetchContent_Declare(
     yamlcpp

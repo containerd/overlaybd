@@ -76,16 +76,8 @@ public:
         return ret;
     }
 
-    ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override {
-        if (read_only) {
-            LOG_ERROR_RETURN(EROFS, -1, "writing read only file");
-        }
-        return m_file->pwritev(iov, iovcnt, offset);
-    }
-
-    ssize_t preadv(const struct iovec *iov, int iovcnt, off_t offset) override {
-        return m_file->preadv(iov, iovcnt, offset);
-    }
+    ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override;
+    ssize_t preadv(const struct iovec *iov, int iovcnt, off_t offset) override;
 
     int fdatasync() override {
         return m_file->fdatasync();

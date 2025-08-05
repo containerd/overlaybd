@@ -13,6 +13,7 @@ add_library(overlaybd_image_lib
   switch_file.cpp
   bk_download.cpp
   prefetch.cpp
+  telemetry.cpp
   tools/sha256file.cpp
   tools/comm_func.cpp
 )
@@ -30,6 +31,9 @@ target_link_libraries(overlaybd_image_lib
   ${OPENSSL_SSL_LIBRARY}
   ${OPENSSL_CRYPTO_LIBRARY}
   ${AIO_LIBRARIES}
+  opentelemetry-cpp::trace
+  opentelemetry-cpp::otlp_http_exporter
+  opentelemetry-cpp::jaeger_trace_exporter
 )
 
 add_executable(overlaybd-tcmu

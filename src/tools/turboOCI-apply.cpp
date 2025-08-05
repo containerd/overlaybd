@@ -38,6 +38,7 @@
 #include <unistd.h>
 #include "../image_service.h"
 #include "../image_file.h"
+#include "../telemetry.h"
 #include "CLI11.hpp"
 #include "comm_func.h"
 
@@ -61,6 +62,16 @@ int dump_tar_headers(IFile *src_file, const string &out) {
 }
 
 int main(int argc, char **argv) {
+    OTEL_TRACE_SPAN("turboOCI_apply_main");
+    
+    // Initialize OpenTelemetry
+    const char* otlp_endpoint = getenv("OTEL_EXPORTER_OTLP_ENDPOINT");
+    if (!otlp_endpoint) {
+        otlp_endpoint = "http://localhost:4318/v1/traces";
+    }
+    overlaybd::telemetry::TelemetryManager::instance().initialize(
+        "turboOCI-apply", "1.0.0", otlp_endpoint);
+    
     std::string image_config_path, input_path, gz_index_path, config_path, fstype;
     bool raw = false, mkfs = false, verbose = false;
     bool export_tar_headers = false, import_tar_headers = false;

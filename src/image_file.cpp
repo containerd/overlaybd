@@ -36,6 +36,7 @@
 #include "overlaybd/gzip/gz.h"
 #include "overlaybd/gzindex/gzfile.h"
 #include "overlaybd/tar/tar_file.h"
+#include "telemetry.h"
 
 #define PARALLEL_LOAD_INDEX 32
 using namespace photon::fs;
@@ -44,6 +45,8 @@ using namespace photon::fs;
 #define SET_SIZE 119
 
 IFile *ImageFile::__open_ro_file(const std::string &path) {
+    OTEL_TRACE_SPAN_WITH_ATTRS("image_file_open_ro", {{"file_path", path}});
+    
     int flags = O_RDONLY;
 
     LOG_INFO("open ro file: `", path);
@@ -553,4 +556,58 @@ void ImageFile::set_failed(const Ts &...xs) {
         m_status = -1;
         m_exception = estring().appends(xs...);
     }
+}
+
+ssize_t ImageFile::preadv(const struct iovec *iov, int iovcnt, off_t offset) {
+    size_t total_bytes = 0;
+    for (int i = 0; i < iovcnt; i++) {
+        total_bytes += iov[i].iov_len;
+    }
+    
+    overlaybd::telemetry::ScopedSpan span("image_file_preadv", {
+        {"offset", std::to_string(offset)},
+        {"iovcnt", std::to_string(iovcnt)},
+        {"bytes_requested", std::to_string(total_bytes)}
+    });
+    
+    ssize_t result = m_file->preadv(iov, iovcnt, offset);
+    
+    if (result >= 0) {
+        span.add_attribute("bytes_read", result);
+        span.set_status(opentelemetry::trace::StatusCode::kOk);
+    } else {
+        span.add_attribute("error_code", errno);
+        span.set_status(opentelemetry::trace::StatusCode::kError, "preadv failed");
+    }
+    
+    return result;
+}
+
+ssize_t ImageFile::pwritev(const struct iovec *iov, int iovcnt, off_t offset) {
+    if (read_only) {
+        LOG_ERROR_RETURN(EROFS, -1, "writing read only file");
+    }
+    
+    size_t total_bytes = 0;
+    for (int i = 0; i < iovcnt; i++) {
+        total_bytes += iov[i].iov_len;
+    }
+    
+    overlaybd::telemetry::ScopedSpan span("image_file_pwritev", {
+        {"offset", std::to_string(offset)},
+        {"iovcnt", std::to_string(iovcnt)},
+        {"bytes_requested", std::to_string(total_bytes)}
+    });
+    
+    ssize_t result = m_file->pwritev(iov, iovcnt, offset);
+    
+    if (result >= 0) {
+        span.add_attribute("bytes_written", result);
+        span.set_status(opentelemetry::trace::StatusCode::kOk);
+    } else {
+        span.add_attribute("error_code", errno);
+        span.set_status(opentelemetry::trace::StatusCode::kError, "pwritev failed");
+    }
+    
+    return result;
 }

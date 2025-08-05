@@ -16,6 +16,7 @@
 #include "version.h"
 #include "image_file.h"
 #include "image_service.h"
+#include "telemetry.h"
 #include <photon/common/alog.h>
 #include <photon/common/event-loop.h>
 #include <photon/fs/filesystem.h>
@@ -120,6 +121,22 @@ again:
 }
 
 void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
+    const char* cmd_name = nullptr;
+    switch (cmd->cdb[0]) {
+        case INQUIRY: cmd_name = "scsi_inquiry"; break;
+        case TEST_UNIT_READY: cmd_name = "scsi_test_unit_ready"; break;
+        case SERVICE_ACTION_IN_16: cmd_name = "scsi_service_action_in_16"; break;
+        case MODE_SENSE: case MODE_SENSE_10: cmd_name = "scsi_mode_sense"; break;
+        case MODE_SELECT: case MODE_SELECT_10: cmd_name = "scsi_mode_select"; break;
+        case READ_6: case READ_10: case READ_12: case READ_16: cmd_name = "scsi_read"; break;
+        case WRITE_6: case WRITE_10: case WRITE_12: case WRITE_16: cmd_name = "scsi_write"; break;
+        case SYNCHRONIZE_CACHE: case SYNCHRONIZE_CACHE_16: cmd_name = "scsi_sync_cache"; break;
+        case WRITE_SAME: case WRITE_SAME_16: cmd_name = "scsi_write_same"; break;
+        default: cmd_name = "scsi_unknown"; break;
+    }
+    
+    OTEL_TRACE_SPAN(cmd_name);
+    
     obd_dev *odev = (obd_dev *)tcmu_dev_get_private(dev);
     ImageFile *file = odev->file;
     size_t ret = -1;
@@ -314,6 +331,8 @@ static char *tcmu_get_path(struct tcmu_device *dev) {
 }
 
 static int dev_open(struct tcmu_device *dev) {
+    OTEL_TRACE_SPAN("tcmu_dev_open");
+    
     char *config = tcmu_get_path(dev);
     LOG_INFO("dev open `", config);
     if (!config) {
@@ -372,6 +391,8 @@ static int dev_open(struct tcmu_device *dev) {
 
 static int close_cnt = 0;
 static void dev_close(struct tcmu_device *dev) {
+    OTEL_TRACE_SPAN("tcmu_dev_close");
+    
     obd_dev *odev = (obd_dev *)tcmu_dev_get_private(dev);
     if (imgservice->global_conf.enableThread()) {
         odev->end.signal(1);
@@ -402,8 +423,18 @@ void sigint_handler(int signal = SIGINT) {
 }
 
 int main(int argc, char **argv) {
+    OTEL_TRACE_SPAN("overlaybd_main");
+    
     mallopt(M_TRIM_THRESHOLD, 128 * 1024);
     prctl(PR_SET_THP_DISABLE, 1);
+
+    // Initialize OpenTelemetry
+    const char* otlp_endpoint = getenv("OTEL_EXPORTER_OTLP_ENDPOINT");
+    if (!otlp_endpoint) {
+        otlp_endpoint = "http://localhost:4318/v1/traces";
+    }
+    overlaybd::telemetry::TelemetryManager::instance().initialize(
+        "overlaybd-tcmu", OVERLAYBD_VERSION, otlp_endpoint);
 
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     photon::block_all_signal();
@@ -492,5 +523,9 @@ int main(int argc, char **argv) {
     LOG_INFO("tcmulib closed");
 
     delete imgservice;
+    
+    // Shutdown OpenTelemetry
+    overlaybd::telemetry::TelemetryManager::instance().shutdown();
+    
     return 0;
 }
