@@ -25,6 +25,7 @@
 #include "../overlaybd/tar/libtar.h"
 #include "../overlaybd/gzindex/gzfile.h"
 #include "../overlaybd/gzip/gz.h"
+#include "../overlaybd/zstd/zstdfile.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -100,7 +101,6 @@ int main(int argc, char **argv) {
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     DEFER({photon::fini();});
 
-
     ImageService *imgservice = nullptr;
     photon::fs::IFile *imgfile = nullptr;
     if (raw) {
@@ -141,6 +141,8 @@ int main(int argc, char **argv) {
             tarf->lseek(0, 0);
         }
         src_file = open_gzfile_adaptor(input_path.c_str());
+    } else if (is_zstdfile(tarf)) {
+        src_file = open_zstdfile_adaptor(tarf);
     } else {
         src_file = tarf;
     }
