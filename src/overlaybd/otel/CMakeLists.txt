@@ -7,6 +7,11 @@ FetchContent_Declare(
     opentelemetry-cpp
     GIT_REPOSITORY https://github.com/open-telemetry/opentelemetry-cpp.git
     GIT_TAG v1.22.0
+    CMAKE_ARGS
+        -DBUILD_TESTING=OFF
+        -DWITH_EXAMPLES=OFF
+        -DWITH_METRICS_PREVIEW=OFF
+        -DWITH_LOGS_PREVIEW=OFF
 )
 FetchContent_MakeAvailable(opentelemetry-cpp)
 
@@ -23,4 +28,11 @@ target_include_directories(otel_lib PUBLIC
     ${opentelemetry-cpp_SOURCE_DIR}/exporters/ostream/include
 )
 
-target_link_libraries(otel_lib PUBLIC opentelemetry-cpp)
+# Link against specific OpenTelemetry targets
+target_link_libraries(otel_lib PUBLIC
+    opentelemetry_api
+    opentelemetry_common
+    opentelemetry_resources
+    opentelemetry_trace
+    opentelemetry_exporter_ostream_span
+)
