@@ -7,6 +7,7 @@ add_subdirectory(tar)
 add_subdirectory(gzip)
 add_subdirectory(gzindex)
 add_subdirectory(stream_convertor)
+add_subdirectory(otel)
 
 add_library(overlaybd_lib INTERFACE)
 target_include_directories(overlaybd_lib INTERFACE
@@ -22,4 +23,5 @@ target_link_libraries(overlaybd_lib INTERFACE
     tar_lib
     gzip_lib
     gzindex_lib
+    otel_lib
 )
