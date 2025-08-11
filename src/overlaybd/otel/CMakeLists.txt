@@ -1,4 +1,4 @@
-file(GLOB SOURCE_OTEL "*.h")
+file(GLOB SOURCE_OTEL "*.cpp")
 
 add_library(otel_lib STATIC ${SOURCE_OTEL})
 
@@ -9,4 +9,6 @@ FetchContent_Declare(
     GIT_TAG v1.22.0
 )
 FetchContent_MakeAvailable(opentelemetry-cpp)
-target_link_libraries(otel_lib opentelemetry-cpp)
+
+target_link_libraries(otel_lib PUBLIC opentelemetry-cpp)
+target_link_libraries(otel_lib PUBLIC gRPC::grpc++)
