@@ -5,4 +5,4 @@ FetchContent_Declare(
     GIT_TAG v1.22.0
 )
 FetchContent_MakeAvailable(opentelemetry-cpp)
-target_link_libraries(otel_lib photon_static opentelemetry-cpp)
+target_link_libraries(otel_lib opentelemetry-cpp)
