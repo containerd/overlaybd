@@ -1,4 +1,4 @@
-file(GLOB SOURCE_OTEL "*.cpp")
+file(GLOB SOURCE_OTEL "*.h")
 
 add_library(otel_lib STATIC ${SOURCE_OTEL})
 
