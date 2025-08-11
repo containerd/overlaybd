@@ -2,9 +2,6 @@ set(SOURCE_OTEL
     tracer_common.cpp
 )
 
-add_library(otel_lib STATIC ${SOURCE_OTEL})
-set_target_properties(otel_lib PROPERTIES LINKER_LANGUAGE CXX)
-
 include(FetchContent)
 FetchContent_Declare(
     opentelemetry-cpp
@@ -13,5 +10,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(opentelemetry-cpp)
 
-target_include_directories(otel_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# Get the OpenTelemetry source directory after fetching
+FetchContent_GetProperties(opentelemetry-cpp)
+
+add_library(otel_lib STATIC ${SOURCE_OTEL})
+set_target_properties(otel_lib PROPERTIES LINKER_LANGUAGE CXX)
+
+target_include_directories(otel_lib PUBLIC 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${opentelemetry-cpp_SOURCE_DIR}/api/include
+    ${opentelemetry-cpp_SOURCE_DIR}/sdk/include
+    ${opentelemetry-cpp_SOURCE_DIR}/exporters/ostream/include
+)
+
 target_link_libraries(otel_lib PUBLIC opentelemetry-cpp)
