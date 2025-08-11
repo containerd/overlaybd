@@ -15,4 +15,3 @@ FetchContent_MakeAvailable(opentelemetry-cpp)
 
 target_include_directories(otel_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(otel_lib PUBLIC opentelemetry-cpp)
-target_link_libraries(otel_lib PUBLIC gRPC::grpc++)
