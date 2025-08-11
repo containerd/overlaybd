@@ -1,3 +1,5 @@
+file(GLOB SOURCE_OTEL "*.{cpp,h}")
+
 add_library(otel_lib STATIC)
 
 include(FetchContent)
