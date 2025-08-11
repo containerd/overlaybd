@@ -1,6 +1,6 @@
 file(GLOB SOURCE_OTEL "*.{cpp,h}")
 
-add_library(otel_lib STATIC)
+add_library(otel_lib STATIC ${SOURCE_OTEL})
 
 include(FetchContent)
 FetchContent_Declare(
