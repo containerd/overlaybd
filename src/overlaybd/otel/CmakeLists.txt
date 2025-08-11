@@ -1,3 +1,5 @@
+add_library(otel_lib STATIC)
+
 include(FetchContent)
 FetchContent_Declare(
     opentelemetry-cpp
