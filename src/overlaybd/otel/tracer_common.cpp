@@ -2,36 +2,6 @@
 
 namespace {
 
-opentelemetry::nostd::string_view GrpcClientCarrier::Get(
-    opentelemetry::nostd::string_view /* key */) const noexcept
-{
-    return "";
-}
-
-void GrpcClientCarrier::Set(opentelemetry::nostd::string_view key,
-                opentelemetry::nostd::string_view value) noexcept
-{
-    std::cout << " Client ::: Adding " << key << " " << value << "\n";
-    context_->AddMetadata(std::string(key), std::string(value));
-}
-
-opentelemetry::nostd::string_view GrpcServerCarrier::Get(
-    opentelemetry::nostd::string_view key) const noexcept
-{
-    auto it = context_->client_metadata().find({key.data(), key.size()});
-    if (it != context_->client_metadata().end())
-    {
-        return opentelemetry::nostd::string_view(it->second.data(), it->second.size());
-    }
-    return "";
-}
-
-void GrpcServerCarrier::Set(opentelemetry::nostd::string_view /* key */,
-                opentelemetry::nostd::string_view /* value */) noexcept
-{
-    // Not required for server
-}
-
 void InitTracer()
 {
     auto exporter = opentelemetry::exporter::trace::OStreamSpanExporterFactory::Create();
