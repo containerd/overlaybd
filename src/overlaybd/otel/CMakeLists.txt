@@ -1,6 +1,9 @@
-file(GLOB SOURCE_OTEL "*.cpp")
+set(SOURCE_OTEL
+    tracer_common.cpp
+)
 
 add_library(otel_lib STATIC ${SOURCE_OTEL})
+set_target_properties(otel_lib PROPERTIES LINKER_LANGUAGE CXX)
 
 include(FetchContent)
 FetchContent_Declare(
@@ -10,5 +13,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(opentelemetry-cpp)
 
+target_include_directories(otel_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(otel_lib PUBLIC opentelemetry-cpp)
 target_link_libraries(otel_lib PUBLIC gRPC::grpc++)
