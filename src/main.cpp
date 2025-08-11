@@ -16,6 +16,7 @@
 #include "version.h"
 #include "image_file.h"
 #include "image_service.h"
+#include "overlaybd/otel/tracer_common.h"
 #include <photon/common/alog.h>
 #include <photon/common/event-loop.h>
 #include <photon/fs/filesystem.h>
@@ -120,10 +121,16 @@ again:
 }
 
 void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
+    auto tracer = get_tracer("overlaybd");
+    auto span = tracer->StartSpan("cmd_handler");
+    auto scope = tracer->WithActiveSpan(span);
+    
     obd_dev *odev = (obd_dev *)tcmu_dev_get_private(dev);
     ImageFile *file = odev->file;
     size_t ret = -1;
     size_t length;
+    
+    span->SetAttribute("command", cmd->cdb[0]);
 
     switch (cmd->cdb[0]) {
     case INQUIRY:
@@ -165,43 +172,88 @@ void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
     case READ_6:
     case READ_10:
     case READ_12:
-    case READ_16:
+    case READ_16: {
+        auto read_span = tracer->StartSpan("read_operation");
+        auto read_scope = tracer->WithActiveSpan(read_span);
+        
         length = tcmu_iovec_length(cmd->iovec, cmd->iov_cnt);
-        ret = sure({file, &ImageFile::preadv}, cmd->iovec, cmd->iov_cnt,
-                   tcmu_cdb_to_byte(dev, cmd->cdb));
+        off_t offset = tcmu_cdb_to_byte(dev, cmd->cdb);
+        
+        read_span->SetAttribute("operation", "read");
+        read_span->SetAttribute("length", length);
+        read_span->SetAttribute("offset", offset);
+        
+        ret = sure({file, &ImageFile::preadv}, cmd->iovec, cmd->iov_cnt, offset);
+        
+        read_span->SetAttribute("result_length", ret);
+        read_span->SetAttribute("success", ret == length);
+        
         if (ret == length) {
             tcmulib_command_complete(dev, cmd, TCMU_STS_OK);
         } else {
+            read_span->SetAttribute("error", "read_error");
             tcmulib_command_complete(dev, cmd, TCMU_STS_RD_ERR);
         }
+        read_span->End();
         break;
+    }
 
     case WRITE_6:
     case WRITE_10:
     case WRITE_12:
-    case WRITE_16:
+    case WRITE_16: {
+        auto write_span = tracer->StartSpan("write_operation");
+        auto write_scope = tracer->WithActiveSpan(write_span);
+        
         length = tcmu_iovec_length(cmd->iovec, cmd->iov_cnt);
-        ret = file->pwritev(cmd->iovec, cmd->iov_cnt, tcmu_cdb_to_byte(dev, cmd->cdb));
+        off_t offset = tcmu_cdb_to_byte(dev, cmd->cdb);
+        
+        write_span->SetAttribute("operation", "write");
+        write_span->SetAttribute("length", length);
+        write_span->SetAttribute("offset", offset);
+        
+        ret = file->pwritev(cmd->iovec, cmd->iov_cnt, offset);
+        
+        write_span->SetAttribute("result_length", ret);
+        write_span->SetAttribute("success", ret == length);
+        
         if (ret == length) {
             tcmulib_command_complete(dev, cmd, TCMU_STS_OK);
         } else {
             if (errno == EROFS) {
+                write_span->SetAttribute("error", "read_only_filesystem");
                 tcmulib_command_complete(dev, cmd, TCMU_STS_WR_ERR_INCOMPAT_FRMT);
             } else {
+                write_span->SetAttribute("error", "write_error");
+                write_span->SetAttribute("errno", errno);
                 tcmulib_command_complete(dev, cmd, TCMU_STS_WR_ERR);
             }
         }
+        write_span->End();
         break;
+    }
 
     case SYNCHRONIZE_CACHE:
-    case SYNCHRONIZE_CACHE_16:
+    case SYNCHRONIZE_CACHE_16: {
+        auto sync_span = tracer->StartSpan("sync_operation");
+        auto sync_scope = tracer->WithActiveSpan(sync_span);
+        
+        sync_span->SetAttribute("operation", "sync");
+        
         ret = file->fdatasync();
+        
+        sync_span->SetAttribute("success", ret == 0);
+        
         if (ret == 0) {
             tcmulib_command_complete(dev, cmd, TCMU_STS_OK);
         } else {
+            sync_span->SetAttribute("error", "sync_error");
+            sync_span->SetAttribute("errno", errno);
             tcmulib_command_complete(dev, cmd, TCMU_STS_WR_ERR);
         }
+        sync_span->End();
         break;
+    }
 
     case WRITE_SAME:
     case WRITE_SAME_16:
@@ -226,9 +278,12 @@ void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
 
     default:
         LOG_ERROR("unknown command `", cmd->cdb[0]);
+        span->SetAttribute("error", "unknown_command");
         tcmulib_command_complete(dev, cmd, TCMU_STS_NOT_HANDLED);
         break;
     }
+
+    span->End();
 
     // call tcmulib_processing_complete(dev) if needed
     ++odev->aio_pending_wakeups;
@@ -314,9 +369,18 @@ static char *tcmu_get_path(struct tcmu_device *dev) {
 }
 
 static int dev_open(struct tcmu_device *dev) {
+    auto tracer = get_tracer("overlaybd");
+    auto span = tracer->StartSpan("dev_open");
+    auto scope = tracer->WithActiveSpan(span);
+    
     char *config = tcmu_get_path(dev);
     LOG_INFO("dev open `", config);
+    
+    span->SetAttribute("config_path", config ? config : "null");
+    
     if (!config) {
+        span->SetAttribute("error", "no_config_path");
+        span->End();
         LOG_ERROR_RETURN(0, -EPERM, "get image config path failed");
     }
 
@@ -325,6 +389,8 @@ static int dev_open(struct tcmu_device *dev) {
 
     ImageFile *file = imgservice->create_image_file(config);
     if (file == nullptr) {
+        span->SetAttribute("error", "create_image_file_failed");
+        span->End();
         LOG_ERROR_RETURN(0, -EPERM, "create image file failed");
     }
 
@@ -367,11 +433,23 @@ static int dev_open(struct tcmu_device *dev) {
 
     uint64_t elapsed = 1000000UL * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
     LOG_INFO("dev opened `, time cost ` ms", config, elapsed / 1000);
+    
+    span->SetAttribute("elapsed_ms", elapsed / 1000);
+    span->SetAttribute("success", true);
+    span->End();
+    
     return 0;
 }
 
 static int close_cnt = 0;
 static void dev_close(struct tcmu_device *dev) {
+    auto tracer = get_tracer("overlaybd");
+    auto span = tracer->StartSpan("dev_close");
+    auto scope = tracer->WithActiveSpan(span);
+    
+    char *config = tcmu_get_path(dev);
+    span->SetAttribute("config_path", config ? config : "null");
+    
     obd_dev *odev = (obd_dev *)tcmu_dev_get_private(dev);
     if (imgservice->global_conf.enableThread()) {
         odev->end.signal(1);
@@ -385,11 +463,17 @@ static void dev_close(struct tcmu_device *dev) {
     delete odev->file;
     delete odev;
     LOG_INFO("dev closed `", tcmu_get_path(dev));
+    
     close_cnt++;
+    span->SetAttribute("close_count", close_cnt);
+    
     if (close_cnt == 500) {
         malloc_trim(128 * 1024);
         close_cnt = 0;
+        span->SetAttribute("memory_trimmed", true);
     }
+    
+    span->End();
     return;
 }
 
@@ -402,6 +486,8 @@ void sigint_handler(int signal = SIGINT) {
 }
 
 int main(int argc, char **argv) {
+    InitTracer();
+    
     mallopt(M_TRIM_THRESHOLD, 128 * 1024);
     prctl(PR_SET_THP_DISABLE, 1);
 
@@ -492,5 +578,7 @@ int main(int argc, char **argv) {
     LOG_INFO("tcmulib closed");
 
     delete imgservice;
+    
+    CleanupTracer();
     return 0;
 }
