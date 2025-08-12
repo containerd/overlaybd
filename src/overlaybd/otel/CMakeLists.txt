@@ -40,5 +40,4 @@ target_link_libraries(otel_lib PUBLIC
     opentelemetry_trace
     opentelemetry_exporter_otlp_grpc
     opentelemetry_proto
-    gRPC::grpc++
 )
