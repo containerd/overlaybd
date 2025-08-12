@@ -163,8 +163,8 @@ bool BkDownload::download() {
     if (download_blob()) {
         opentelemetry::trace::StartSpanOptions verify_options;
         verify_options.parent = opentelemetry::trace::Tracer::GetCurrentSpan()->GetContext();
-        auto verify_scope = tracer->StartActiveSpan("overlaybd.download.verify", verify_options);
-        auto verify_span = opentelemetry::trace::Tracer::GetCurrentSpan();
+        auto verify_span = tracer->StartSpan("overlaybd.download.verify", {}, {}, verify_options);
+        auto verify_scope = tracer->WithActiveSpan(verify_span);
         if (!download_done()) {
             verify_span->SetAttribute("success", false);
             span->SetAttribute("success", false);
