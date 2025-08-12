@@ -37,10 +37,10 @@ void InitTracer(const TracerConfig &config) {
     // Set the global trace provider
     opentelemetry::sdk::trace::Provider::SetTracerProvider(provider);
 
-    // set global propagator
-    opentelemetry::context::propagation::GlobalTextMapPropagator::SetGlobalPropagator(
-        opentelemetry::nostd::shared_ptr<opentelemetry::context::propagation::TextMapPropagator>(
-            new opentelemetry::trace::propagation::HttpTraceContext()));
+    // // set global propagator
+    // opentelemetry::context::propagation::GlobalTextMapPropagator::SetGlobalPropagator(
+    //     opentelemetry::nostd::shared_ptr<opentelemetry::context::propagation::TextMapPropagator>(
+    //         new opentelemetry::trace::propagation::HttpTraceContext()));
 }
 
 void CleanupTracer() {
