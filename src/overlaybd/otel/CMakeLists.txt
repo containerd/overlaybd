@@ -18,6 +18,7 @@ FetchContent_Declare(
         -DWITH_OTLP_HTTP_SSL=ON
         -DWITH_CURL=ON
         -DWITH_NLOHMANN_JSON=ON
+        -DJSON_Install=ON
 )
 FetchContent_MakeAvailable(opentelemetry-cpp)
 
@@ -42,6 +43,7 @@ target_link_libraries(otel_lib PUBLIC
     opentelemetry_common
     opentelemetry_resources
     opentelemetry_trace
-    opentelemetry_exporter_otlp_http
+    opentelemetry_exporter_otlp_http_client
     CURL::libcurl
+    nlohmann_json::nlohmann_json
 )
