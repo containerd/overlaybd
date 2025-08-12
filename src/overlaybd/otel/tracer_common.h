@@ -5,7 +5,7 @@
 
 #include "opentelemetry/context/propagation/global_propagator.h"
 #include "opentelemetry/context/propagation/text_map_propagator.h"
-#include "opentelemetry/exporters/otlp/otlp_http_exporter.h"
+#include "opentelemetry/exporters/otlp/otlp_http_exporter_factory.h"
 #include "opentelemetry/nostd/shared_ptr.h"
 #include "opentelemetry/sdk/trace/exporter.h"
 #include "opentelemetry/sdk/trace/processor.h"

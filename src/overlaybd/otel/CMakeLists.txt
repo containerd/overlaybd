@@ -16,6 +16,8 @@ FetchContent_Declare(
         -DWITH_OTLP_GRPC=OFF
         -DWITH_OTLP_HTTP=ON
         -DWITH_ABSEIL=ON
+        -DWITH_CURL=ON
+        -DWITH_NLOHMANN_JSON=ON
 )
 FetchContent_MakeAvailable(opentelemetry-cpp)
 
