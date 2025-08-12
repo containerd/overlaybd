@@ -19,11 +19,8 @@ void InitTracer(const TracerConfig& config)
     // Create OTLP/HTTP exporter using the factory
     auto exporter = opentelemetry::exporter::otlp::OtlpHttpExporterFactory::Create(opts);
     
-    // Create a batch processor for better performance (instead of simple processor)
-    opentelemetry::sdk::trace::BatchSpanProcessorOptions options{};
-    auto processor = std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>(
-        new opentelemetry::sdk::trace::BatchSpanProcessor(std::move(exporter), options));
-    
+    // Create a simple processor (we'll use simple instead of batch for now)
+    auto processor = opentelemetry::sdk::trace::SimpleSpanProcessorFactory::Create(std::move(exporter));
     std::vector<std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>> processors;
     processors.push_back(std::move(processor));
     
