@@ -20,6 +20,5 @@ target_include_directories(otel_lib PUBLIC
 target_link_libraries(otel_lib PUBLIC
     opentelemetry-cpp::sdk
     opentelemetry-cpp::otlp_http_exporter
-    opentelemetry-cpp::http_client_curl
     CURL::libcurl
 )
