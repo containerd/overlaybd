@@ -18,6 +18,7 @@
 #include <string>
 #include <cstdint>
 #include <photon/fs/filesystem.h>
+#include "overlaybd/otel/tracer_common.h"
 
 class ImageFile;
 class ISwitchFile;
