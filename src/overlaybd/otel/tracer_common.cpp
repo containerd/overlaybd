@@ -12,11 +12,6 @@ void InitTracer(const TracerConfig& config)
         opts.ssl_ca_cert_path = config.ssl_cert_path;
     }
     
-    // Add any custom headers
-    for (const auto& header : config.headers) {
-        opts.headers[header.first] = header.second;
-    }
-    
     if (config.debug) {
         opts.console_debug = true;
     }
