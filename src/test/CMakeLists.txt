@@ -1,15 +1,12 @@
 include_directories($ENV{GFLAGS}/include)
 link_directories($ENV{GFLAGS}/lib)
 
-include_directories($ENV{GTEST}/googletest/include)
-link_directories($ENV{GTEST}/lib)
-
 add_executable(image_service_test image_service_test.cpp)
 target_include_directories(image_service_test PUBLIC
     ${PHOTON_INCLUDE_DIR}
     ${rapidjson_SOURCE_DIR}/include
 )
-target_link_libraries(image_service_test gtest gtest_main gflags pthread photon_static overlaybd_lib overlaybd_image_lib)
+target_link_libraries(image_service_test GTest::gtest GTest::gtest_main gflags pthread photon_static overlaybd_lib overlaybd_image_lib)
 
 add_test(
     NAME image_service_test
@@ -29,13 +26,12 @@ rt
 resolv
 aio
 pthread
-gtest
+GTest::gtest
 )
 
 target_include_directories(simple_credsrv_test PUBLIC
     ${PHOTON_INCLUDE_DIR}
     ${rapidjson_SOURCE_DIR}/include
-    $ENV{GTEST}/googletest/include
 )
 
 add_executable(trace_test trace_test.cpp ../tools/comm_func.cpp)
@@ -43,7 +39,7 @@ target_include_directories(trace_test PUBLIC
     ${PHOTON_INCLUDE_DIR}
     ${rapidjson_SOURCE_DIR}/include
 )
-target_link_libraries(trace_test gtest gtest_main gflags pthread photon_static overlaybd_lib overlaybd_image_lib)
+target_link_libraries(trace_test GTest::gtest GTest::gtest_main gflags pthread photon_static overlaybd_lib overlaybd_image_lib)
 
 add_test(
     NAME trace_test
