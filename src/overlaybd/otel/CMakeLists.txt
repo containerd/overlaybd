@@ -45,5 +45,4 @@ target_link_libraries(otel_lib PUBLIC
     opentelemetry_trace
     opentelemetry_exporter_otlp_http_client
     CURL::libcurl
-    nlohmann_json::nlohmann_json
 )
