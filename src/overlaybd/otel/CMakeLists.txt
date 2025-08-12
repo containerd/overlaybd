@@ -43,6 +43,5 @@ target_link_libraries(otel_lib PUBLIC
     opentelemetry_resources
     opentelemetry_trace
     opentelemetry_exporter_otlp_http
-    opentelemetry_proto
     CURL::libcurl
 )
