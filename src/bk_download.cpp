@@ -176,8 +176,8 @@ bool BkDownload::download() {
 
         opentelemetry::trace::StartSpanOptions switch_options;
         switch_options.parent = opentelemetry::trace::Tracer::GetCurrentSpan()->GetContext();
-        auto switch_scope = tracer->StartActiveSpan("overlaybd.download.switch_to_local", switch_options);
-        auto switch_span = opentelemetry::trace::Tracer::GetCurrentSpan();
+        auto switch_span = tracer->StartSpan("overlaybd.download.switch_to_local", {}, {}, switch_options);
+        auto switch_scope = tracer->WithActiveSpan(switch_span);
         switch_to_local_file();
         success = true;
     }
@@ -205,8 +205,8 @@ bool BkDownload::download_blob() {
     auto parent_span = opentelemetry::trace::Tracer::GetCurrentSpan();
     opentelemetry::trace::StartSpanOptions options;
     options.parent = parent_span->GetContext();
-    auto scope = tracer->StartActiveSpan("overlaybd.download.blob", options);
-    auto span = opentelemetry::trace::Tracer::GetCurrentSpan();
+    auto span = tracer->StartSpan("overlaybd.download.blob", {}, {}, options);
+    auto scope = tracer->WithActiveSpan(span);
 
     std::string dl_file_path = dir + "/" + DOWNLOAD_TMP_NAME;
     span->SetAttribute("download_path", dl_file_path);
