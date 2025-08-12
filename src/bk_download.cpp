@@ -64,9 +64,10 @@ void BkDownload::switch_to_local_file() {
 bool BkDownload::download_done() {
     auto tracer = overlaybd_otel::get_tracer("overlaybd");
     auto parent_span = opentelemetry::trace::Tracer::GetCurrentSpan();
-    auto span = tracer->StartSpan("overlaybd.download.verify_and_commit", 
-        {parent_span->GetContext()});
-    auto scope = tracer->WithActiveSpan(span);
+    opentelemetry::trace::StartSpanOptions options;
+    options.parent = parent_span->GetContext();
+    auto scope = tracer->StartActiveSpan("overlaybd.download.verify_and_commit", options);
+    auto span = opentelemetry::trace::Tracer::GetCurrentSpan();
 
     auto lfs = new_localfs_adaptor();
     if (!lfs) {
@@ -86,7 +87,10 @@ bool BkDownload::download_done() {
     // verify sha256
     photon::semaphore done;
     std::string shares;
-    auto verify_span = tracer->StartSpan("sha256_verification");
+    opentelemetry::trace::StartSpanOptions verify_options;
+    verify_options.parent = opentelemetry::trace::Tracer::GetCurrentSpan()->GetContext();
+    auto verify_scope = tracer->StartActiveSpan("sha256_verification", verify_options);
+    auto verify_span = opentelemetry::trace::Tracer::GetCurrentSpan();
     verify_span->SetAttribute("expected_digest", digest);
 
     std::thread sha256_thread([&]() {
@@ -111,10 +115,12 @@ bool BkDownload::download_done() {
         return false;
     }
 
-    auto rename_span = tracer->StartSpan("rename_to_commit");
+    opentelemetry::trace::StartSpanOptions rename_options;
+    rename_options.parent = opentelemetry::trace::Tracer::GetCurrentSpan()->GetContext();
+    auto rename_scope = tracer->StartActiveSpan("rename_to_commit", rename_options);
+    auto rename_span = opentelemetry::trace::Tracer::GetCurrentSpan();
     int ret = lfs->rename(old_name.c_str(), new_name.c_str());
     rename_span->SetAttribute("success", ret == 0);
-    rename_span->End();
 
     if (ret != 0) {
         span->SetAttribute("error", "rename_failed");
@@ -132,19 +138,21 @@ bool BkDownload::download() {
     auto tracer = overlaybd_otel::get_tracer("overlaybd");
     // Get current span context from parent if it exists
     auto parent_span = opentelemetry::trace::Tracer::GetCurrentSpan();
-    auto span = tracer->StartSpan("overlaybd.download.lifecycle", 
-        {parent_span->GetContext()});
-    auto scope = tracer->WithActiveSpan(span);
+    opentelemetry::trace::StartSpanOptions options;
+    options.parent = parent_span->GetContext();
+    auto scope = tracer->StartActiveSpan("overlaybd.download.lifecycle", options);
+    auto span = opentelemetry::trace::Tracer::GetCurrentSpan();
 
     span->SetAttribute("url", url);
     span->SetAttribute("dir", dir);
     span->SetAttribute("file_size", file_size);
 
     if (check_downloaded(dir)) {
-        auto local_span = tracer->StartSpan("overlaybd.download.switch_to_local", 
-            {span->GetContext()});
+        opentelemetry::trace::StartSpanOptions local_options;
+        local_options.parent = opentelemetry::trace::Tracer::GetCurrentSpan()->GetContext();
+        auto local_scope = tracer->StartActiveSpan("overlaybd.download.switch_to_local", local_options);
+        auto local_span = opentelemetry::trace::Tracer::GetCurrentSpan();
         switch_to_local_file();
-        local_span->End();
         span->SetAttribute("from_cache", true);
         span->End();
         return true;
@@ -153,11 +161,12 @@ bool BkDownload::download() {
     span->SetAttribute("from_cache", false);
     bool success = false;
     if (download_blob()) {
-        auto verify_span = tracer->StartSpan("overlaybd.download.verify", 
-            {span->GetContext()});
+        opentelemetry::trace::StartSpanOptions verify_options;
+        verify_options.parent = opentelemetry::trace::Tracer::GetCurrentSpan()->GetContext();
+        auto verify_scope = tracer->StartActiveSpan("overlaybd.download.verify", verify_options);
+        auto verify_span = opentelemetry::trace::Tracer::GetCurrentSpan();
         if (!download_done()) {
             verify_span->SetAttribute("success", false);
-            verify_span->End();
             span->SetAttribute("success", false);
             span->End();
             return false;
@@ -165,10 +174,11 @@ bool BkDownload::download() {
         verify_span->SetAttribute("success", true);
         verify_span->End();
 
-        auto switch_span = tracer->StartSpan("overlaybd.download.switch_to_local", 
-            {span->GetContext()});
+        opentelemetry::trace::StartSpanOptions switch_options;
+        switch_options.parent = opentelemetry::trace::Tracer::GetCurrentSpan()->GetContext();
+        auto switch_scope = tracer->StartActiveSpan("overlaybd.download.switch_to_local", switch_options);
+        auto switch_span = opentelemetry::trace::Tracer::GetCurrentSpan();
         switch_to_local_file();
-        switch_span->End();
         success = true;
     }
 
@@ -193,9 +203,10 @@ void BkDownload::unlock_file() {
 bool BkDownload::download_blob() {
     auto tracer = overlaybd_otel::get_tracer("overlaybd");
     auto parent_span = opentelemetry::trace::Tracer::GetCurrentSpan();
-    auto span = tracer->StartSpan("overlaybd.download.blob", 
-        {parent_span->GetContext()});
-    auto scope = tracer->WithActiveSpan(span);
+    opentelemetry::trace::StartSpanOptions options;
+    options.parent = parent_span->GetContext();
+    auto scope = tracer->StartActiveSpan("overlaybd.download.blob", options);
+    auto span = opentelemetry::trace::Tracer::GetCurrentSpan();
 
     std::string dl_file_path = dir + "/" + DOWNLOAD_TMP_NAME;
     span->SetAttribute("download_path", dl_file_path);
@@ -273,8 +284,8 @@ bool BkDownload::download_blob() {
         }
         ssize_t rlen;
         {
-            auto read_span = tracer->StartSpan("overlaybd.download.read_block", 
-                {span->GetContext()});
+            auto read_scope = tracer->StartActiveSpan("overlaybd.download.read_block");
+            auto read_span = opentelemetry::trace::Tracer::GetCurrentSpan();
             read_span->SetAttribute("offset", offset);
             read_span->SetAttribute("size", count);
             SCOPE_AUDIT("bk_download", AU_FILEOP(url, offset, rlen));
@@ -298,8 +309,8 @@ bool BkDownload::download_blob() {
             span->End();
             LOG_ERROR_RETURN(EIO, false, "failed to write at ", VALUE(offset), VALUE(count));
         }
-        auto write_span = tracer->StartSpan("overlaybd.download.write_block", 
-            {span->GetContext()});
+        auto write_scope = tracer->StartActiveSpan("overlaybd.download.write_block");
+        auto write_span = opentelemetry::trace::Tracer::GetCurrentSpan();
         write_span->SetAttribute("offset", offset);
         write_span->SetAttribute("size", count);
         auto wlen = dst->pwrite(buff, count, offset);
@@ -328,8 +339,8 @@ bool BkDownload::download_blob() {
 
 void bk_download_proc(std::list<BKDL::BkDownload *> &dl_list, uint64_t delay_sec, int &running) {
     auto tracer = overlaybd_otel::get_tracer("overlaybd");
-    auto span = tracer->StartSpan("background_download_process");
-    auto scope = tracer->WithActiveSpan(span);
+    auto scope = tracer->StartActiveSpan("background_download_process");
+    auto span = opentelemetry::trace::Tracer::GetCurrentSpan();
     
     span->SetAttribute("delay_seconds", delay_sec);
     span->SetAttribute("initial_queue_size", dl_list.size());
@@ -355,8 +366,8 @@ void bk_download_proc(std::list<BKDL::BkDownload *> &dl_list, uint64_t delay_sec
         BKDL::BkDownload *dl_item = dl_list.front();
         dl_list.pop_front();
 
-        auto dl_span = tracer->StartSpan("download_item");
-        auto dl_scope = tracer->WithActiveSpan(dl_span);
+        auto dl_scope = tracer->StartActiveSpan("download_item");
+        auto dl_span = opentelemetry::trace::Tracer::GetCurrentSpan();
         dl_span->SetAttribute("directory", dl_item->dir);
         dl_span->SetAttribute("retry_count", dl_item->try_cnt);
 
