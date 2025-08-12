@@ -18,5 +18,11 @@ target_include_directories(otel_lib PUBLIC
 
 # Link against specific OpenTelemetry targets
 target_link_libraries(otel_lib PUBLIC
+    opentelemetry_api
+    opentelemetry_sdk
+    opentelemetry_trace
+    opentelemetry_exporter_otlp_http
+    opentelemetry_common
+    opentelemetry_resources
     CURL::libcurl
 )
