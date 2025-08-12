@@ -15,9 +15,7 @@ FetchContent_Declare(
         -DWITH_OTLP=ON
         -DWITH_OTLP_GRPC=OFF
         -DWITH_OTLP_HTTP=ON
-        -DWITH_PROTOBUF=ON
         -DWITH_ABSEIL=ON
-        -DWITH_GRPC=OFF
 )
 FetchContent_MakeAvailable(opentelemetry-cpp)
 
@@ -32,8 +30,8 @@ target_include_directories(otel_lib PUBLIC
     ${opentelemetry-cpp_SOURCE_DIR}/api/include
     ${opentelemetry-cpp_SOURCE_DIR}/sdk/include
     ${opentelemetry-cpp_SOURCE_DIR}/exporters/otlp/include
-    ${opentelemetry-cpp_BINARY_DIR}/generated/third_party/opentelemetry-proto
     ${opentelemetry-cpp_SOURCE_DIR}/ext/include
+    ${opentelemetry-cpp_SOURCE_DIR}/exporters/otlp/include/opentelemetry/exporters/otlp/otlp_http_exporter
 )
 
 # Link against specific OpenTelemetry targets
