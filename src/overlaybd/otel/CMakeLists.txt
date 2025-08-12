@@ -15,9 +15,8 @@ FetchContent_Declare(
         -DWITH_OTLP=ON
         -DWITH_OTLP_GRPC=OFF
         -DWITH_OTLP_HTTP=ON
-        -DWITH_ABSEIL=ON
+        -DWITH_OTLP_HTTP_SSL=ON
         -DWITH_CURL=ON
-        -DWITH_HTTP_CLIENT_CURL=ON
         -DWITH_NLOHMANN_JSON=ON
 )
 FetchContent_MakeAvailable(opentelemetry-cpp)
@@ -43,8 +42,6 @@ target_link_libraries(otel_lib PUBLIC
     opentelemetry_common
     opentelemetry_resources
     opentelemetry_trace
-    opentelemetry_http_client_curl
-    opentelemetry_otlp_recordable
-    opentelemetry_exporter_otlp_http_client
+    opentelemetry_exporter_otlp_http
     CURL::libcurl
 )
