@@ -2,9 +2,6 @@ set(SOURCE_OTEL
     tracer_common.cpp
 )
 
-find_package(opentelemetry-cpp CONFIG REQUIRED)
-find_package(CURL REQUIRED)
-
 add_library(otel_lib STATIC ${SOURCE_OTEL})
 set_target_properties(otel_lib PROPERTIES LINKER_LANGUAGE CXX)
 
