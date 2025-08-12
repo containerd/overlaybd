@@ -14,7 +14,10 @@ FetchContent_Declare(
         -DWITH_LOGS_PREVIEW=OFF
         -DWITH_OTLP=ON
         -DWITH_OTLP_GRPC=ON
-        -DWITH_OTLP_HTTP=OFF
+        -DWITH_OTLP_HTTP=ON
+        -DWITH_PROTOBUF=ON
+        -DWITH_ABSEIL=ON
+        -DWITH_GRPC=ON
 )
 FetchContent_MakeAvailable(opentelemetry-cpp)
 
@@ -29,6 +32,8 @@ target_include_directories(otel_lib PUBLIC
     ${opentelemetry-cpp_SOURCE_DIR}/api/include
     ${opentelemetry-cpp_SOURCE_DIR}/sdk/include
     ${opentelemetry-cpp_SOURCE_DIR}/exporters/otlp/include
+    ${opentelemetry-cpp_BINARY_DIR}/generated/third_party/opentelemetry-proto
+    ${opentelemetry-cpp_SOURCE_DIR}/ext/include
     ${opentelemetry-cpp_SOURCE_DIR}/exporters/otlp/include/opentelemetry/exporters/otlp/otlp_grpc_exporter
 )
 
@@ -40,4 +45,5 @@ target_link_libraries(otel_lib PUBLIC
     opentelemetry_trace
     opentelemetry_exporter_otlp_grpc
     opentelemetry_proto
+    protobuf::libprotobuf
 )
