@@ -32,6 +32,6 @@ target_include_directories(otel_lib PUBLIC
 # Link against specific OpenTelemetry targets
 target_link_libraries(otel_lib PRIVATE
     opentelemetry-cpp::api
-    opentelemetry-cpp::otlp_http_exporter
     opentelemetry-cpp::trace
+    opentelemetry-cpp::otlp_http_exporter
 )
