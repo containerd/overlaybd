@@ -12,6 +12,9 @@ FetchContent_Declare(
         -DWITH_EXAMPLES=OFF
         -DWITH_METRICS_PREVIEW=OFF
         -DWITH_LOGS_PREVIEW=OFF
+        -DWITH_OTLP=ON
+        -DWITH_OTLP_GRPC=ON
+        -DWITH_OTLP_HTTP=OFF
 )
 FetchContent_MakeAvailable(opentelemetry-cpp)
 
@@ -25,7 +28,8 @@ target_include_directories(otel_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${opentelemetry-cpp_SOURCE_DIR}/api/include
     ${opentelemetry-cpp_SOURCE_DIR}/sdk/include
-    ${opentelemetry-cpp_SOURCE_DIR}/exporters/ostream/include
+    ${opentelemetry-cpp_SOURCE_DIR}/exporters/otlp/include
+    ${opentelemetry-cpp_SOURCE_DIR}/exporters/otlp/include/opentelemetry/exporters/otlp/otlp_grpc_exporter
 )
 
 # Link against specific OpenTelemetry targets
@@ -34,5 +38,7 @@ target_link_libraries(otel_lib PUBLIC
     opentelemetry_common
     opentelemetry_resources
     opentelemetry_trace
-    opentelemetry_exporter_ostream_span
+    opentelemetry_exporter_otlp_grpc
+    opentelemetry_proto
+    gRPC::grpc++
 )

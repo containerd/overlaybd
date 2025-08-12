@@ -2,18 +2,45 @@
 
 namespace overlaybd_otel {
 
-void InitTracer()
+void InitTracer(const TracerConfig& config)
 {
-    auto exporter = opentelemetry::exporter::trace::OStreamSpanExporterFactory::Create();
-    auto processor =
-        opentelemetry::sdk::trace::SimpleSpanProcessorFactory::Create(std::move(exporter));
+    // Create OTLP exporter configuration
+    opentelemetry::exporter::otlp::OtlpGrpcExporterOptions opts;
+    opts.endpoint = config.endpoint;
+    
+    if (config.use_ssl) {
+        opts.use_ssl = true;
+        if (!config.ssl_cert_path.empty()) {
+            opts.ssl_credentials = grpc::SslCredentials(
+                grpc::SslCredentialsOptions{
+                    .pem_root_certs = config.ssl_cert_path
+                }
+            );
+        }
+    }
+    
+    if (config.debug) {
+        opts.console_debug = true;
+    }
+    
+    // Create OTLP/gRPC exporter
+    auto exporter = std::unique_ptr<opentelemetry::sdk::trace::SpanExporter>(
+        new opentelemetry::exporter::otlp::OtlpGrpcExporter(opts));
+    
+    // Create a batch processor for better performance (instead of simple processor)
+    opentelemetry::sdk::trace::BatchSpanProcessorOptions options{};
+    auto processor = std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>(
+        new opentelemetry::sdk::trace::BatchSpanProcessor(std::move(exporter), options));
+    
     std::vector<std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>> processors;
     processors.push_back(std::move(processor));
-    // Default is an always-on sampler.
+    
+    // Default is an always-on sampler
     std::unique_ptr<opentelemetry::sdk::trace::TracerContext> context =
         opentelemetry::sdk::trace::TracerContextFactory::Create(std::move(processors));
     std::shared_ptr<opentelemetry::trace::TracerProvider> provider =
         opentelemetry::sdk::trace::TracerProviderFactory::Create(std::move(context));
+    
     // Set the global trace provider
     opentelemetry::sdk::trace::Provider::SetTracerProvider(provider);
 
