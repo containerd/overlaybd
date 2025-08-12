@@ -12,10 +12,8 @@ FetchContent_Declare(
         -DWITH_EXAMPLES=OFF
         -DWITH_METRICS_PREVIEW=OFF
         -DWITH_LOGS_PREVIEW=OFF
-        -DWITH_OTLP=ON
         -DWITH_OTLP_GRPC=OFF
         -DWITH_OTLP_HTTP=ON
-        -DWITH_OTLP_HTTP_SSL=ON
         -DWITH_CURL=ON
         -DWITH_NLOHMANN_JSON=ON
 )
@@ -29,23 +27,10 @@ set_target_properties(otel_lib PROPERTIES LINKER_LANGUAGE CXX)
 
 target_include_directories(otel_lib PUBLIC 
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${opentelemetry-cpp_SOURCE_DIR}/api/include
-    ${opentelemetry-cpp_SOURCE_DIR}/sdk/include
-    ${opentelemetry-cpp_SOURCE_DIR}/exporters/otlp/include
-    ${opentelemetry-cpp_SOURCE_DIR}/ext/include
-    ${opentelemetry-cpp_SOURCE_DIR}/exporters/otlp/include/opentelemetry/exporters/otlp/otlp_http_exporter
-    ${opentelemetry-cpp_SOURCE_DIR}/sdk/include/opentelemetry/sdk/trace
-    ${opentelemetry-cpp_SOURCE_DIR}/exporters/otlp/include/opentelemetry/exporters/otlp
 )
 
 # Link against specific OpenTelemetry targets
-target_link_libraries(otel_lib PUBLIC
-    opentelemetry_api
-    opentelemetry_sdk
-    opentelemetry_trace
-    opentelemetry_exporter_otlp_http
-    opentelemetry_common
-    opentelemetry_resources
-    opentelemetry_http_client_curl
-    CURL::libcurl
+target_link_libraries(otel_lib PRIVATE
+    opentelemetry-cpp::api
+    opentelemetry-cpp::otlp_http_exporter
 )
