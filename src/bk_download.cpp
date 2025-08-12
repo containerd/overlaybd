@@ -117,8 +117,8 @@ bool BkDownload::download_done() {
 
     opentelemetry::trace::StartSpanOptions rename_options;
     rename_options.parent = opentelemetry::trace::Tracer::GetCurrentSpan()->GetContext();
-    auto rename_scope = tracer->StartActiveSpan("rename_to_commit", rename_options);
-    auto rename_span = opentelemetry::trace::Tracer::GetCurrentSpan();
+    auto rename_span = tracer->StartSpan("rename_to_commit", {}, {}, rename_options);
+    auto rename_scope = tracer->WithActiveSpan(rename_span);
     int ret = lfs->rename(old_name.c_str(), new_name.c_str());
     rename_span->SetAttribute("success", ret == 0);
 
