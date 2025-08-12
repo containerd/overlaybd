@@ -7,17 +7,19 @@ FetchContent_Declare(
     opentelemetry-cpp
     GIT_REPOSITORY https://github.com/open-telemetry/opentelemetry-cpp.git
     GIT_TAG v1.22.0
-    CMAKE_ARGS
-        -DBUILD_TESTING=OFF
-        -DWITH_EXAMPLES=OFF
-        -DOPENTELEMETRY_INSTALL=ON
-        -DWITH_METRICS_PREVIEW=OFF
-        -DWITH_LOGS_PREVIEW=OFF
-        -DWITH_OTLP_GRPC=OFF
-        -DWITH_OTLP_HTTP=ON
-        -DWITH_CURL=ON
-        -DWITH_NLOHMANN_JSON=ON
 )
+
+# Set OpenTelemetry build options before making it available
+set(BUILD_TESTING OFF CACHE BOOL "Build tests" FORCE)
+set(WITH_EXAMPLES OFF CACHE BOOL "Build examples" FORCE)
+set(OPENTELEMETRY_INSTALL ON CACHE BOOL "Install OpenTelemetry" FORCE)
+set(WITH_METRICS_PREVIEW OFF CACHE BOOL "Build metrics preview" FORCE)
+set(WITH_LOGS_PREVIEW OFF CACHE BOOL "Build logs preview" FORCE)
+set(WITH_OTLP_GRPC OFF CACHE BOOL "Build with OTLP GRPC" FORCE)
+set(WITH_OTLP_HTTP ON CACHE BOOL "Build with OTLP HTTP" FORCE)
+set(WITH_CURL ON CACHE BOOL "Build with CURL" FORCE)
+set(WITH_NLOHMANN_JSON ON CACHE BOOL "Build with nlohmann_json" FORCE)
+
 FetchContent_MakeAvailable(opentelemetry-cpp)
 
 # Get the OpenTelemetry source directory after fetching
