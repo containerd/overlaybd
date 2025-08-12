@@ -4,28 +4,26 @@ namespace overlaybd_otel {
 
 void InitTracer(const TracerConfig& config)
 {
-    // Create OTLP exporter configuration
-    opentelemetry::exporter::otlp::OtlpGrpcExporterOptions opts;
-    opts.endpoint = config.endpoint;
+    // Create OTLP HTTP exporter configuration
+    opentelemetry::exporter::otlp::OtlpHttpExporterOptions opts;
+    opts.url = config.endpoint;
     
-    if (config.use_ssl) {
-        opts.use_ssl = true;
-        if (!config.ssl_cert_path.empty()) {
-            opts.ssl_credentials = grpc::SslCredentials(
-                grpc::SslCredentialsOptions{
-                    .pem_root_certs = config.ssl_cert_path
-                }
-            );
-        }
+    if (config.use_ssl && !config.ssl_cert_path.empty()) {
+        opts.ssl_ca_cert_path = config.ssl_cert_path;
+    }
+    
+    // Add any custom headers
+    for (const auto& header : config.headers) {
+        opts.headers[header.first] = header.second;
     }
     
     if (config.debug) {
         opts.console_debug = true;
     }
     
-    // Create OTLP/gRPC exporter
+    // Create OTLP/HTTP exporter
     auto exporter = std::unique_ptr<opentelemetry::sdk::trace::SpanExporter>(
-        new opentelemetry::exporter::otlp::OtlpGrpcExporter(opts));
+        new opentelemetry::exporter::otlp::OtlpHttpExporter(opts));
     
     // Create a batch processor for better performance (instead of simple processor)
     opentelemetry::sdk::trace::BatchSpanProcessorOptions options{};

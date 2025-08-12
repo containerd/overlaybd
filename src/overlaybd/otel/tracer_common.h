@@ -5,7 +5,7 @@
 
 #include "opentelemetry/context/propagation/global_propagator.h"
 #include "opentelemetry/context/propagation/text_map_propagator.h"
-#include "opentelemetry/exporters/otlp/otlp_grpc_exporter.h"
+#include "opentelemetry/exporters/otlp/otlp_http_exporter.h"
 #include "opentelemetry/nostd/shared_ptr.h"
 #include "opentelemetry/sdk/trace/exporter.h"
 #include "opentelemetry/sdk/trace/processor.h"
@@ -24,10 +24,11 @@
 namespace overlaybd_otel {
 
 struct TracerConfig {
-    std::string endpoint = "localhost:4317";  // OTLP GRPC endpoint
-    bool use_ssl = false;                     // Whether to use SSL/TLS
-    std::string ssl_cert_path = "";           // Path to SSL certificate (if use_ssl is true)
-    bool debug = false;                       // Enable debug logging
+    std::string endpoint = "http://localhost:4318/v1/traces";  // OTLP HTTP endpoint
+    bool use_ssl = false;                                      // Whether to use SSL/TLS
+    std::string ssl_cert_path = "";                           // Path to SSL certificate (if use_ssl is true)
+    bool debug = false;                                       // Enable debug logging
+    std::map<std::string, std::string> headers;              // Custom HTTP headers
 };
 
 void InitTracer(const TracerConfig& config = TracerConfig());
