@@ -121,7 +121,7 @@ again:
 }
 
 void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
-    auto tracer = get_tracer("overlaybd");
+    auto tracer = overlaybd_otel::get_tracer("overlaybd");
     auto span = tracer->StartSpan("cmd_handler");
     auto scope = tracer->WithActiveSpan(span);
     
@@ -369,7 +369,7 @@ static char *tcmu_get_path(struct tcmu_device *dev) {
 }
 
 static int dev_open(struct tcmu_device *dev) {
-    auto tracer = get_tracer("overlaybd");
+    auto tracer = overlaybd_otel::get_tracer("overlaybd");
     auto span = tracer->StartSpan("dev_open");
     auto scope = tracer->WithActiveSpan(span);
     
@@ -443,7 +443,7 @@ static int dev_open(struct tcmu_device *dev) {
 
 static int close_cnt = 0;
 static void dev_close(struct tcmu_device *dev) {
-    auto tracer = get_tracer("overlaybd");
+    auto tracer = overlaybd_otel::get_tracer("overlaybd");
     auto span = tracer->StartSpan("dev_close");
     auto scope = tracer->WithActiveSpan(span);
     
@@ -486,7 +486,7 @@ void sigint_handler(int signal = SIGINT) {
 }
 
 int main(int argc, char **argv) {
-    InitTracer();
+    overlaybd_otel::InitTracer();
     
     mallopt(M_TRIM_THRESHOLD, 128 * 1024);
     prctl(PR_SET_THP_DISABLE, 1);
@@ -579,6 +579,6 @@ int main(int argc, char **argv) {
 
     delete imgservice;
     
-    CleanupTracer();
+    overlaybd_otel::CleanupTracer();
     return 0;
 }

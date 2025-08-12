@@ -21,10 +21,10 @@
 #include <iostream>
 #include <vector>
 
-namespace {
+namespace overlaybd_otel {
 
 void InitTracer();
 void CleanupTracer();
 opentelemetry::nostd::shared_ptr<opentelemetry::trace::Tracer> get_tracer(std::string tracer_name);
 
-} // namespace
+} // namespace overlaybd_otel

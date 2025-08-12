@@ -1,6 +1,6 @@
 #include "tracer_common.h"
 
-namespace {
+namespace overlaybd_otel {
 
 void InitTracer()
 {
@@ -35,4 +35,4 @@ opentelemetry::nostd::shared_ptr<opentelemetry::trace::Tracer> get_tracer(std::s
     return provider->GetTracer(tracer_name);
 }
 
-} // namespace
+} // namespace overlaybd_otel
