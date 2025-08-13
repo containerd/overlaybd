@@ -4,7 +4,7 @@ set(FETCHCONTENT_QUIET false)
 FetchContent_Declare(
   tcmu
   GIT_REPOSITORY https://github.com/data-accelerator/photon-libtcmu.git
-  GIT_TAG main
+  GIT_TAG 813fd65361bb2f348726b9c41478a44211847614
 )
 
 if(BUILD_TESTING)
