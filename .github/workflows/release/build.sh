@@ -32,7 +32,7 @@ if [[ ${OS} =~ "ubuntu" ]]; then
     export DEBIAN_FRONTEND="noninteractive"
     export TZ="Etc/UTC"
     apt-get update -y
-    apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev rpm wget make g++ git dpkg-dev sudo pkg-config
+    apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev rpm wget make g++ git dpkg-dev sudo pkg-config protobuf-compiler
     apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm libzstd-dev libext2fs-dev zlib1g-dev
 
     DISTRO=${OS/:/1~}

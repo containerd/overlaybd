@@ -24,7 +24,7 @@ jobs:
         sudo apt-get update -y
         sudo apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libzstd-dev
         sudo apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm
-        sudo apt-get install -y libext2fs-dev
+        sudo apt-get install -y libext2fs-dev protobuf-compiler
         wget https://github.com/google/googletest/archive/refs/tags/release-1.11.0.tar.gz
         tar -zxvf release-1.11.0.tar.gz
         cd googletest-release-1.11.0/
@@ -118,3 +118,10 @@ jobs:
       working-directory: ${{github.workspace}}/build
       shell: bash
       run: ctest -j8 --output-on-failure -C $BUILD_TYPE
+
+    - name: Breakpoint if tests failed
+      if: failure()
+      uses: namespacelabs/breakpoint-action@v0
+      with:
+        duration: 30m
+        authorized-users: dines-rl
