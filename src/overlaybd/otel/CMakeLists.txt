@@ -23,9 +23,9 @@ set(WITH_OTLP_HTTP ON CACHE BOOL "Build with OTLP HTTP" FORCE)
 FetchContent_MakeAvailable(opentelemetry-cpp)
 
 # Get the OpenTelemetry source directory after fetching
-FetchContent_GetProperties(opentelemetry-cpp)
+#FetchContent_GetProperties(opentelemetry-cpp)
 
-find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api sdk exporters_otlp_http)
+#find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api sdk exporters_otlp_http)
 add_library(otel_lib STATIC ${SOURCE_OTEL})
 set_target_properties(otel_lib PROPERTIES LINKER_LANGUAGE CXX)
 
