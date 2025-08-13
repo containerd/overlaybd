@@ -2,25 +2,14 @@
 
 namespace overlaybd_otel {
 
-void InitTracer(const TracerConfig &config) {
+void InitTracer() {
     // Create OTLP HTTP exporter configuration
-    opentelemetry::exporter::otlp::OtlpHttpExporterOptions opts;
-    opts.url = config.endpoint;
-
-    if (config.use_ssl && !config.ssl_cert_path.empty()) {
-        opts.ssl_ca_cert_path = config.ssl_cert_path;
-    }
-
-    if (config.debug) {
-        opts.console_debug = true;
-    }
-
+    
     // Create OTLP/HTTP exporter using the factory
-    auto exporter = opentelemetry::exporter::otlp::OtlpHttpExporterFactory::Create(opts);
+    auto exporter = opentelemetry::exporter::otlp::OtlpHttpExporterFactory::Create();
 
-    opentelemetry::sdk::trace::BatchSpanProcessorOptions bspOpts{};
     auto processor =
-        opentelemetry::sdk::trace::BatchSpanProcessorFactory::Create(std::move(exporter), bspOpts);
+        opentelemetry::sdk::trace::BatchSpanProcessorFactory::Create(std::move(exporter));
 
     // Create a simple processor (we'll use simple instead of batch for now)
     // auto processor =

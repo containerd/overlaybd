@@ -22,15 +22,8 @@
 
 namespace overlaybd_otel {
 
-struct TracerConfig {
-    std::string endpoint = "http://localhost:4318/v1/traces"; // OTLP HTTP endpoint
-    bool use_ssl = false;                                     // Whether to use SSL/TLS
-    std::string ssl_cert_path = "";             // Path to SSL certificate (if use_ssl is true)
-    bool debug = false;                         // Enable debug logging
-    std::map<std::string, std::string> headers; // Custom HTTP headers
-};
 
-void InitTracer(const TracerConfig &config = TracerConfig());
+void InitTracer();
 void CleanupTracer();
 opentelemetry::nostd::shared_ptr<opentelemetry::trace::Tracer> get_tracer(std::string tracer_name);
 
