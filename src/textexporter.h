@@ -118,7 +118,10 @@ struct PrometheusMetric {
                 buf += view.size();
                 space -= view.size();
             }
+            _render<typename Split::Next>(buf, space, val);
+            return;
         }
+
         auto v = std::to_string(val);
         auto ts = std::to_string(photon::now / 1000);
         if (v.size() < space) {
