@@ -103,7 +103,7 @@ string sha256sum(const char *fn) {
         }
     }
     SHA256_Final(sha, &ctx);
-    char res[SHA256_DIGEST_LENGTH * 2];
+    char res[SHA256_DIGEST_LENGTH * 2 + 1];
     for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
         sprintf(res + (i * 2), "%02x", sha[i]);
     return "sha256:" + std::string(res, SHA256_DIGEST_LENGTH * 2);
