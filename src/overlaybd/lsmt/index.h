@@ -29,9 +29,9 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 #include <sys/types.h>
 
 namespace LSMT {
-struct Segment {          // 48 + 18 == 64
-    uint64_t offset : 50; // offset (0.5 PB if in sector)
-    uint32_t length : 14; // length (8MB if in sector)
+struct Segment {          
+    uint64_t offset : 50;
+    uint32_t length : 14;
     const static uint64_t MAX_OFFSET = (1UL << 50) - 1;
     const static uint32_t MAX_LENGTH = (1 << 14) - 1;
     const static uint64_t INVALID_OFFSET = MAX_OFFSET;

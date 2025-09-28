@@ -51,6 +51,7 @@ jobs:
       working-directory: ${{github.workspace}}/build
       shell: bash
       run: |
+        lscpu
         sudo make install
         sudo cp ${{github.workspace}}/src/example_config/overlaybd-registryv2.json /etc/overlaybd/overlaybd.json
         sudo systemctl enable /opt/overlaybd/overlaybd-tcmu.service
@@ -87,6 +88,7 @@ jobs:
         ls obd_mp
         sudo diff -r --exclude "lost+found" test_data obd_mp
         sudo umount obd_mp
+        cat /var/log/overlaybd.log
     - name: E2E Test turboOCIv1
       working-directory: ${{github.workspace}}/build
       shell: bash

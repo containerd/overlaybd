@@ -22,6 +22,9 @@
 #include <photon/common/alog.h>
 #include <photon/fs/filesystem.h>
 #include <photon/common/utility.h>
+#ifdef __x86_64__
+#include <immintrin.h>
+#endif
 using namespace std;
 
 namespace LSMT {
@@ -53,6 +56,132 @@ static inline size_t copy_n(IT begin, IT end, uint64_t end_offset, SegmentMappin
 }
 
 static bool verify_mapping_order(const SegmentMapping *pmappings, size_t n);
+
+bool is_avx512f_supported() {
+#if defined(__x86_64__)
+    __builtin_cpu_init();
+    return __builtin_cpu_supports("avx512f");
+#else
+    return false;
+#endif
+}
+
+const static uint32_t ORDER = 8;
+const static uint32_t MAX_LEVEL = 10;
+static constexpr uint32_t NODES_PER_LEVEL[MAX_LEVEL] = {8, 72, 648, 5832, 52488, 472392, 4251528, 38263752, 344373768, 3099363912};
+static constexpr uint32_t LEVEL_START_ID[MAX_LEVEL] =  {0,  8,  80,  728,  6560,  59048,  531440,  4782968,  43046720,  387420488};
+
+
+struct DefaultInnerSearch {
+    static uint32_t inner_search(const uint64_t *base, uint64_t x) {
+        return std::upper_bound(base, base + 8, x) - base;
+    }
+};
+
+#ifdef __x86_64__
+struct Avx512InnerSearch {
+#ifdef __clang__
+#pragma clang attribute push (__attribute__((target("avx512f"))), apply_to=function)
+#else // __GNUC__
+#pragma GCC push_options
+#pragma GCC target ("avx512f")
+#endif
+
+    static uint32_t inner_search(const uint64_t *base, uint64_t x) {
+        __m512i vx = _mm512_set1_epi64(x);
+        __m512i data = _mm512_load_si512(base);
+        uint8_t mask = _mm512_cmp_epu64_mask(vx, data, _MM_CMPINT_GE);
+        return __builtin_popcount(mask);
+    }
+
+#ifdef __clang__
+#pragma clang attribute pop
+#else // __GNUC__
+#pragma GCC pop_options
+#endif
+};
+#else  // __x86_64__
+using Avx512InnerSearch = DefaultInnerSearch;
+#endif
+
+class LinearizedBptree {
+public:
+    uint64_t N;
+    uint64_t *node = nullptr;
+    int32_t DEPTH = -1;
+
+    LinearizedBptree() {}
+
+    ~LinearizedBptree() {
+        free(node);
+    }
+
+    int build(const vector<SegmentMapping> &mapping) {
+        if (mapping.empty()) {
+            LOG_ERROR_RETURN(EINVAL, -1, "linearized bptree not used: empty mapping");
+        }
+        if (mapping[0].offset != 0) {
+            // In a real file system, mapping offset starts from 0. skip for some ut.
+            LOG_ERROR_RETURN(EINVAL, -1, "linearized bptree not used: invalid start offset");
+        }
+        size_t mapping_size = mapping.size();
+        for (uint32_t i = 0; i < MAX_LEVEL; i++)
+            if (NODES_PER_LEVEL[i] >= mapping_size) {
+                DEPTH = i+1;
+                break;
+            }
+        if (DEPTH == -1) {
+            LOG_ERROR_RETURN(EINVAL, -1, "linearized bptree not used: too many mappings");
+        }
+
+        N = (LEVEL_START_ID[DEPTH-1] + mapping_size + ORDER - 1) / ORDER * ORDER;
+        LOG_INFO("building Linearized B+tree ", VALUE(DEPTH), VALUE(mapping_size), VALUE(N));
+        auto ret = posix_memalign((void**)&node, 64, N*sizeof(uint64_t));
+        if (ret != 0) {
+            LOG_ERRNO_RETURN(ENOBUFS, -1, "linearized bptree not used: failed to alloc memory");
+        }
+
+        uint32_t leaf_start = LEVEL_START_ID[DEPTH - 1];
+        uint32_t leaf_size = NODES_PER_LEVEL[DEPTH - 1];
+
+        uint32_t p = leaf_start;
+
+        for (auto &mp : mapping)
+            node[p++] = mp.offset;
+
+        while (p < N)
+            node[p++] = -1;
+
+        auto G = ORDER;
+        for (auto level = DEPTH-1; level > 0; level--) {
+            auto pos = LEVEL_START_ID[level - 1];
+            for (uint32_t i = 0; i < leaf_size; i += G * (ORDER + 1)) {
+                for (uint32_t j = 1; j <= ORDER; j++) {
+                    uint32_t lower_id = leaf_start + i + G * j;
+                    node[pos++] = (lower_id < N) ? node[lower_id] : -1;
+                }
+            }
+            G *= (ORDER + 1);
+        }
+        LOG_INFO("building Linearized B+tree done");
+        return 0;
+    }
+
+    template<typename InnerSearchImpl>
+    uint32_t search(const uint64_t x) const {
+        uint32_t res = 0;
+#pragma GCC unroll 20
+        for (int i = DEPTH; i > 1; --i) {
+            auto node_base = node + res;
+            uint32_t c = InnerSearchImpl::inner_search(node_base, x);
+            res = (ORDER+1)*res + (c+1)*ORDER;
+        }
+        auto node_base = node + res;
+        res += InnerSearchImpl::inner_search(node_base, x);
+        res = res - 1 - LEVEL_START_ID[DEPTH-1];
+        return res;
+    }
+};
 
 class Index : public IMemoryIndex {
 public:
@@ -156,6 +285,64 @@ public:
 
     UNIMPLEMENTED_POINTER(IMemoryIndex  *make_read_only_index() const override);
 };
+
+class IndexLBPT : public Index {
+public:
+    LinearizedBptree *lbpt = nullptr;
+
+    ~IndexLBPT() {
+        safe_delete(lbpt);
+    }
+
+    IndexLBPT(vector<SegmentMapping> &&m, uint64_t vsize, LinearizedBptree *lbpt)
+        : Index(std::move(m), vsize), lbpt(lbpt) {
+    }
+
+    size_t lookup(Segment s, SegmentMapping *pm, size_t n) const override {
+        if (s.length == 0)
+            return 0;
+        auto lb = pbegin + lbpt->search<DefaultInnerSearch>(s.offset);;
+        if (lb->end() <= s.offset)
+            lb++;
+
+        auto m = copy_n(lb, pend, s.end(), pm, n);
+        trim_edge_mappings(pm, m, s);
+        return m;
+    }
+};
+
+class IndexLBPTAcc : public IndexLBPT {
+public:
+    IndexLBPTAcc(vector<SegmentMapping> &&m, uint64_t vsize, LinearizedBptree *lbpt)
+        : IndexLBPT(std::move(m), vsize, lbpt) {
+    }
+
+    size_t lookup(Segment s, SegmentMapping *pm, size_t n) const override {
+        if (s.length == 0)
+            return 0;
+        auto lb = pbegin + lbpt->search<Avx512InnerSearch>(s.offset);
+        if (lb->end() <= s.offset)
+            lb++;
+        auto m = copy_n(lb, pend, s.end(), pm, n);
+        trim_edge_mappings(pm, m, s);
+        return m;
+    }
+};
+
+static inline Index* new_index_with_lineriazed_bptree(vector<SegmentMapping> &&m, uint64_t vsize = 0) {
+    auto tree = new LinearizedBptree();
+    if (tree->build(m) < 0) {
+        delete tree;
+        LOG_WARN("failed to build linearized b+tree, failover to binary search");
+        return new Index(std::move(m), vsize);
+    }
+
+    if (is_avx512f_supported()) {
+        LOG_INFO("using accelerated search for linearized b+tree");
+        return new IndexLBPTAcc(std::move(m), vsize, tree);
+    }
+    return new IndexLBPT(std::move(m), vsize, tree);
+}
 
 class LevelIndex : public Index {
 public:
@@ -694,6 +881,7 @@ IMemoryIndex *merge_memory_indexes(const IMemoryIndex **pindexes, size_t n) {
     auto pi = (const Index **)pindexes;
     mapping.reserve(pi[0]->size());
     merge_indexes(0, mapping, pi, n, 0, UINT64_MAX);
-    return new Index(std::move(mapping), pindexes[0]->vsize());
+
+    return new_index_with_lineriazed_bptree(std::move(mapping), pindexes[0]->vsize());
 }
 } // namespace LSMT
