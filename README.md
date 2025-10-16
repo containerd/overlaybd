@@ -12,7 +12,7 @@ Overlaybd is based on [PhotonLibOS](https://github.com/alibaba/PhotonLibOS), whi
 
 Overlaybd has 2 core component:
 * **Overlaybd**
-  is a block-device based image format, provideing a merged view of a sequence of block-based layers as a virtual block device.
+  is a block-device based image format, provideing a merged view of a sequence of block-based layers as a virtual block device. The LBA lookup algorithm employs a linearized B+ tree and AVX-512 to optimize performance, significantly accelerating search speed up to 10X. [Lookup Performance](https://github.com/containerd/overlaybd/blob/main/docs/lsmt_lookup.md)
 
 * **Zfile**
   is a compression file format which support seekalbe online decompression.

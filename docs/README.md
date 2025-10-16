@@ -28,6 +28,8 @@ Now this service contains an implementation of overlaybd based on [TCMU](https:/
 
 This service is based on [PhotonLibOS](https://github.com/alibaba/PhotonLibOS), which is a high-efficiency LibOS framework.
 
+The LBA lookup algorithm employs a linearized B+ tree and AVX-512 to optimize performance, significantly accelerating search speed up to 10X. [Lookup Performance](https://github.com/containerd/overlaybd/blob/main/docs/lsmt_lookup.md)
+
 ## Accelerated container image
 
 [GitHub](https://github.com/containerd/accelerated-container-image)

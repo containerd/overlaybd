@@ -74,7 +74,12 @@ static constexpr uint32_t LEVEL_START_ID[MAX_LEVEL] =  {0,  8,  80,  728,  6560,
 
 struct DefaultInnerSearch {
     static uint32_t inner_search(const uint64_t *base, uint64_t x) {
-        return std::upper_bound(base, base + 8, x) - base;
+        uint8_t mask = 0;
+    #pragma GCC unroll 20
+        for (uint32_t i = 0; i < ORDER; i++) {
+            mask |= ( (base[i] <= x) << i );
+        }
+        return __builtin_popcount(mask);
     }
 };
 
