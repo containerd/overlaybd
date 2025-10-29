@@ -15,6 +15,7 @@
 */
 
 #include "index.h"
+#include "file.h"
 #include <vector>
 #include <set>
 #include <algorithm>
@@ -66,17 +67,27 @@ bool is_avx512f_supported() {
 #endif
 }
 
-const static uint32_t ORDER = 8;
-const static uint32_t MAX_LEVEL = 10;
-static constexpr uint32_t NODES_PER_LEVEL[MAX_LEVEL] = {8, 72, 648, 5832, 52488, 472392, 4251528, 38263752, 344373768, 3099363912};
-static constexpr uint32_t LEVEL_START_ID[MAX_LEVEL] =  {0,  8,  80,  728,  6560,  59048,  531440,  4782968,  43046720,  387420488};
+const static uint32_t KEYS_PER_NODE_64 = 8;
+const static uint32_t MAX_LEVEL_64 = 10;
+static constexpr uint32_t NODES_PER_LEVEL_64[MAX_LEVEL_64] = {8, 72, 648, 5832, 52488, 472392, 4251528, 38263752, 344373768, 3099363912};
+static constexpr uint32_t LEVEL_START_ID_64[MAX_LEVEL_64] =  {0,  8,  80,  728,  6560,  59048,  531440,  4782968,  43046720,  387420488};
 
+const static uint32_t KEYS_PER_NODE_32 = 16;
+const static uint32_t MAX_LEVEL_32 = 7;
+static constexpr uint32_t NODES_PER_LEVEL_32[MAX_LEVEL_32] = {16, 272, 4624, 78608, 1336336, 22717712, 386200304};
+static constexpr uint32_t LEVEL_START_ID_32[MAX_LEVEL_32] =  { 0,  16,  288,  4912,   83520,  1419856,  24137568};
 
+template<typename KeyType>
 struct DefaultInnerSearch {
-    static uint32_t inner_search(const uint64_t *base, uint64_t x) {
-        uint8_t mask = 0;
+    static_assert(std::is_same<KeyType, uint32_t>::value || std::is_same<KeyType, uint64_t>::value,
+                  "KeyType must be uint32_t or uint64_t");
+
+    static constexpr uint32_t KEYS = std::is_same<KeyType, uint64_t>::value ? KEYS_PER_NODE_64 : KEYS_PER_NODE_32;
+
+    static uint32_t inner_search(const KeyType *base, KeyType x) {
+        uint32_t mask = 0;
     #pragma GCC unroll 20
-        for (uint32_t i = 0; i < ORDER; i++) {
+        for (uint32_t i = 0; i < KEYS; i++) {
             mask |= ( (base[i] <= x) << i );
         }
         return __builtin_popcount(mask);
@@ -84,7 +95,11 @@ struct DefaultInnerSearch {
 };
 
 #ifdef __x86_64__
+template<typename KeyType>
 struct Avx512InnerSearch {
+    static_assert(std::is_same<KeyType, uint32_t>::value || std::is_same<KeyType, uint64_t>::value,
+                  "KeyType must be uint32_t or uint64_t");
+
 #ifdef __clang__
 #pragma clang attribute push (__attribute__((target("avx512f"))), apply_to=function)
 #else // __GNUC__
@@ -92,10 +107,21 @@ struct Avx512InnerSearch {
 #pragma GCC target ("avx512f")
 #endif
 
-    static uint32_t inner_search(const uint64_t *base, uint64_t x) {
+    template<typename T = KeyType>
+    static typename std::enable_if<std::is_same<T, uint64_t>::value, uint32_t>::type
+    inner_search(const KeyType *base, KeyType x) {
         __m512i vx = _mm512_set1_epi64(x);
         __m512i data = _mm512_load_si512(base);
         uint8_t mask = _mm512_cmp_epu64_mask(vx, data, _MM_CMPINT_GE);
+        return __builtin_popcount(mask);
+    }
+
+    template<typename T = KeyType>
+    static typename std::enable_if<std::is_same<T, uint32_t>::value, uint32_t>::type
+    inner_search(const KeyType *base, KeyType x) {
+        __m512i vx = _mm512_set1_epi32(x);
+        __m512i data = _mm512_load_si512(base);
+        __mmask16 mask = _mm512_cmp_epu32_mask(vx, data, _MM_CMPINT_GE);
         return __builtin_popcount(mask);
     }
 
@@ -106,13 +132,22 @@ struct Avx512InnerSearch {
 #endif
 };
 #else  // __x86_64__
-using Avx512InnerSearch = DefaultInnerSearch;
+template<typename KeyType>
+using Avx512InnerSearch = DefaultInnerSearch<KeyType>;
 #endif
 
+template<typename KeyType>
 class LinearizedBptree {
+    static_assert(std::is_same<KeyType, uint32_t>::value || std::is_same<KeyType, uint64_t>::value,
+                  "KeyType must be uint32_t or uint64_t");
 public:
+    static constexpr const uint32_t KEYS_PER_NODE =    std::is_same<KeyType, uint64_t>::value ? KEYS_PER_NODE_64 : KEYS_PER_NODE_32;
+    static constexpr const uint32_t MAX_LEVEL =        std::is_same<KeyType, uint64_t>::value ? MAX_LEVEL_64 : MAX_LEVEL_32;
+    static constexpr const uint32_t *NODES_PER_LEVEL = std::is_same<KeyType, uint64_t>::value ? NODES_PER_LEVEL_64 : NODES_PER_LEVEL_32;
+    static constexpr const uint32_t *LEVEL_START_ID =  std::is_same<KeyType, uint64_t>::value ? LEVEL_START_ID_64 : LEVEL_START_ID_32;
+
     uint64_t N;
-    uint64_t *node = nullptr;
+    KeyType *node = nullptr;
     int32_t DEPTH = -1;
 
     LinearizedBptree() {}
@@ -139,9 +174,9 @@ public:
             LOG_ERROR_RETURN(EINVAL, -1, "linearized bptree not used: too many mappings");
         }
 
-        N = (LEVEL_START_ID[DEPTH-1] + mapping_size + ORDER - 1) / ORDER * ORDER;
-        LOG_INFO("building Linearized B+tree ", VALUE(DEPTH), VALUE(mapping_size), VALUE(N));
-        auto ret = posix_memalign((void**)&node, 64, N*sizeof(uint64_t));
+        N = (LEVEL_START_ID[DEPTH-1] + mapping_size + KEYS_PER_NODE - 1) / KEYS_PER_NODE * KEYS_PER_NODE;
+        LOG_INFO("building Linearized B+tree ", VALUE(DEPTH), VALUE(mapping_size), VALUE(N), VALUE(sizeof(KeyType)));
+        auto ret = posix_memalign((void**)&node, 64, N*sizeof(KeyType));
         if (ret != 0) {
             LOG_ERRNO_RETURN(ENOBUFS, -1, "linearized bptree not used: failed to alloc memory");
         }
@@ -157,29 +192,29 @@ public:
         while (p < N)
             node[p++] = -1;
 
-        auto G = ORDER;
+        auto G = KEYS_PER_NODE;
         for (auto level = DEPTH-1; level > 0; level--) {
             auto pos = LEVEL_START_ID[level - 1];
-            for (uint32_t i = 0; i < leaf_size; i += G * (ORDER + 1)) {
-                for (uint32_t j = 1; j <= ORDER; j++) {
+            for (uint32_t i = 0; i < leaf_size; i += G * (KEYS_PER_NODE + 1)) {
+                for (uint32_t j = 1; j <= KEYS_PER_NODE; j++) {
                     uint32_t lower_id = leaf_start + i + G * j;
                     node[pos++] = (lower_id < N) ? node[lower_id] : -1;
                 }
             }
-            G *= (ORDER + 1);
+            G *= (KEYS_PER_NODE + 1);
         }
         LOG_INFO("building Linearized B+tree done");
         return 0;
     }
 
     template<typename InnerSearchImpl>
-    uint32_t search(const uint64_t x) const {
+    uint32_t search(const KeyType x) const {
         uint32_t res = 0;
 #pragma GCC unroll 20
         for (int i = DEPTH; i > 1; --i) {
             auto node_base = node + res;
             uint32_t c = InnerSearchImpl::inner_search(node_base, x);
-            res = (ORDER+1)*res + (c+1)*ORDER;
+            res = (KEYS_PER_NODE+1)*res + (c+1)*KEYS_PER_NODE;
         }
         auto node_base = node + res;
         res += InnerSearchImpl::inner_search(node_base, x);
@@ -291,51 +326,44 @@ public:
     UNIMPLEMENTED_POINTER(IMemoryIndex  *make_read_only_index() const override);
 };
 
+template<typename KeyType, template<typename> class SearchPolicy = DefaultInnerSearch>
 class IndexLBPT : public Index {
+    static_assert(std::is_same<KeyType, uint32_t>::value || std::is_same<KeyType, uint64_t>::value,
+                  "KeyType must be uint32_t or uint64_t");
 public:
-    LinearizedBptree *lbpt = nullptr;
+    using LBPTree = LinearizedBptree<KeyType>;
+    LBPTree *lbpt = nullptr;
 
     ~IndexLBPT() {
         safe_delete(lbpt);
     }
 
-    IndexLBPT(vector<SegmentMapping> &&m, uint64_t vsize, LinearizedBptree *lbpt)
+    IndexLBPT(vector<SegmentMapping> &&m, uint64_t vsize, LBPTree *lbpt)
         : Index(std::move(m), vsize), lbpt(lbpt) {
     }
 
     size_t lookup(Segment s, SegmentMapping *pm, size_t n) const override {
         if (s.length == 0)
             return 0;
-        auto lb = pbegin + lbpt->search<DefaultInnerSearch>(s.offset);;
+
+        auto lb = this->pbegin + this->lbpt->template search<SearchPolicy<KeyType>>(static_cast<KeyType>(s.offset));
         if (lb->end() <= s.offset)
             lb++;
 
-        auto m = copy_n(lb, pend, s.end(), pm, n);
+        auto m = copy_n(lb, this->pend, s.end(), pm, n);
         trim_edge_mappings(pm, m, s);
         return m;
     }
 };
 
-class IndexLBPTAcc : public IndexLBPT {
-public:
-    IndexLBPTAcc(vector<SegmentMapping> &&m, uint64_t vsize, LinearizedBptree *lbpt)
-        : IndexLBPT(std::move(m), vsize, lbpt) {
-    }
+template<typename KeyType>
+using IndexLBPTAcc = IndexLBPT<KeyType, Avx512InnerSearch>;
 
-    size_t lookup(Segment s, SegmentMapping *pm, size_t n) const override {
-        if (s.length == 0)
-            return 0;
-        auto lb = pbegin + lbpt->search<Avx512InnerSearch>(s.offset);
-        if (lb->end() <= s.offset)
-            lb++;
-        auto m = copy_n(lb, pend, s.end(), pm, n);
-        trim_edge_mappings(pm, m, s);
-        return m;
-    }
-};
-
+template <typename KeyType>
 static inline Index* new_index_with_lineriazed_bptree(vector<SegmentMapping> &&m, uint64_t vsize = 0) {
-    auto tree = new LinearizedBptree();
+    static_assert(std::is_same<KeyType, uint32_t>::value || std::is_same<KeyType, uint64_t>::value,
+                  "KeyType must be uint32_t or uint64_t");
+    auto tree = new LinearizedBptree<KeyType>();
     if (tree->build(m) < 0) {
         delete tree;
         LOG_WARN("failed to build linearized b+tree, failover to binary search");
@@ -344,9 +372,9 @@ static inline Index* new_index_with_lineriazed_bptree(vector<SegmentMapping> &&m
 
     if (is_avx512f_supported()) {
         LOG_INFO("using accelerated search for linearized b+tree");
-        return new IndexLBPTAcc(std::move(m), vsize, tree);
+        return new IndexLBPTAcc<KeyType>(std::move(m), vsize, tree);
     }
-    return new IndexLBPT(std::move(m), vsize, tree);
+    return new IndexLBPT<KeyType>(std::move(m), vsize, tree);
 }
 
 class LevelIndex : public Index {
@@ -887,6 +915,11 @@ IMemoryIndex *merge_memory_indexes(const IMemoryIndex **pindexes, size_t n) {
     mapping.reserve(pi[0]->size());
     merge_indexes(0, mapping, pi, n, 0, UINT64_MAX);
 
-    return new_index_with_lineriazed_bptree(std::move(mapping), pindexes[0]->vsize());
+    if (pindexes[0]->vsize() < static_cast<uint64_t>(UINT32_MAX) * ALIGNMENT
+        && mapping.size() < NODES_PER_LEVEL_32[MAX_LEVEL_32-1]) {
+        return new_index_with_lineriazed_bptree<uint32_t>(std::move(mapping), pindexes[0]->vsize());
+    }
+
+    return new_index_with_lineriazed_bptree<uint64_t>(std::move(mapping), pindexes[0]->vsize());
 }
 } // namespace LSMT
