@@ -440,6 +440,20 @@ int ImageService::init() {
                 10000000, (uint64_t)1048576 * 4096, global_fs.io_alloc);
         }
     }
+    if (global_conf.serviceConfig().enable()) {
+        auto sock_path = global_conf.serviceConfig().domainSocket();
+        if (access(sock_path.c_str(), 0) == 0) {
+            if (unlink(sock_path.c_str()) != 0) {
+                LOG_ERRNO_RETURN(0, -1, "failed to remove old socket file");
+            }
+        }
+        // listen the domainSocket and create a HTTP SERVER
+        /*
+          handler definition:
+            - create a live snapshot for a imageFile
+                /snapshot?dev_id=${devID}&config=${config}
+        */
+    }
     return 0;
 }
 

@@ -36,5 +36,9 @@
     },
     "enableAudit": true,
     "auditPath": "/var/log/overlaybd-audit.log",
-    "registryFsVersion": "v2"
+    "registryFsVersion": "v2",
+    "serviceConfig": {
+        "enable": false,
+        "domainSocket": "/var/run/overlaybd.sock"
+    }
 }

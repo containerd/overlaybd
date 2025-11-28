@@ -101,6 +101,8 @@ public:
     };
     virtual DataStat data_stat() const = 0;
 
+    // close_seal current RW layer (change it to RO layer) and re-stack with upper layer
+    virtual int restack(IFileRW *upper) = 0;
 };
 
 // create a new writable LSMT file constitued by a data file and an index file,
