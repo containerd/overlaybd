@@ -155,8 +155,11 @@ public:
     // and then clear the original index0.
     // virtual IMemoryIndex0* gc_index() = 0;
     virtual IMemoryIndex *load_range_index(int, int) const = 0;
-
-
+    
+    // commit index0 (upper index) to backing index (lower index)
+    // rebuild backing index before async-compact.
+    // merge the image's backing_index and gc_idx( dump from original index0 ) for pread()
+    virtual int commit_index0() = 0;
 };
 
 // create writable level 0 memory index from an array of mappings;

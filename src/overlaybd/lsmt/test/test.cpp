@@ -758,6 +758,65 @@ TEST_F(FileTest3, stack_files_with_zfile_checksum) {
     delete file;
 }
 
+TEST_F(FileTest3, restack_simple) {
+    CleanUp();
+    auto lower = create_image(1);
+    auto upper = create_a_layer();
+    auto file = stack_files(upper, lower, 0, true);
+    randwrite(file, FLAGS_nwrites);
+    auto upper1 = create_file_rw();
+    EXPECT_EQ(0, file->restack(upper1));
+    cout << "restack top layer & verify" <<endl;
+    verify_file(file);
+    randwrite(file, FLAGS_nwrites);
+    cout << "verify file after randwrite" <<endl;
+    verify_file(file);
+    delete file;
+}
+
+TEST_F(FileTest3, restack) {
+    CleanUp();
+    cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
+    auto lowers = create_image(FLAGS_layers);
+    auto upper = create_a_layer();
+    cout<<"stack files"<<endl;
+    auto file = stack_files(upper, lowers, 0, true);
+    randwrite(file, FLAGS_nwrites);
+    verify_file(file);
+    cout << "restack top layer 0" <<endl;
+    auto upper1 = create_file_rw();
+    EXPECT_EQ(0, file->restack(upper1));
+    randwrite(file, FLAGS_nwrites);
+    cout << "restack top layer 2 & verify" <<endl;
+    auto upper2 = create_file_rw();
+    EXPECT_EQ(0, file->restack(upper2));
+    randwrite(file, FLAGS_nwrites);
+    verify_file(file);
+    delete file;
+}
+
+
+TEST_F(FileTest3, restack_sparse) {
+    CleanUp();
+    cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
+    auto lowers = create_image(FLAGS_layers);
+    auto upper = create_a_layer(true);
+    cout<<"stack files"<<endl;
+    auto file = stack_files(upper, lowers, 0, true);
+    randwrite(file, FLAGS_nwrites);
+    verify_file(file);
+    cout << "restack top layer 0" <<endl;
+    auto upper1 = create_file_rw(true);
+    EXPECT_EQ(0, file->restack(upper1));
+    randwrite(file, FLAGS_nwrites);
+    cout << "restack top layer 2 & verify" <<endl;
+    auto upper2 = create_file_rw(true);
+    EXPECT_EQ(0, file->restack(upper2));
+    randwrite(file, FLAGS_nwrites);
+    verify_file(file);
+    delete file;
+}
+
 TEST_F(FileTest3, photon_verify) {
     reset_verify_file();
     printf("create image..\n");

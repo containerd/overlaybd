@@ -580,6 +580,7 @@ public:
 
     virtual IMemoryIndex *make_read_only_index() const override {
         auto rst = new Index();
+        rst->ownership = false; // set false to avoid free *pbegin & vector::mapping
         rst->mapping.reserve(size());
         rst->assign(mapping.begin(), mapping.end());
         return rst;
@@ -617,6 +618,7 @@ public:
         return this;
     }
     UNIMPLEMENTED(size_t vsize() const override);
+    UNIMPLEMENTED(int commit_index0() override);
 };
 
 static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const Index **pindexes,
@@ -743,6 +745,29 @@ public:
         delete ro_idx0;
         return new Index(std::move(mappings));
     }
+
+    virtual int commit_index0() override {
+        // Merge index0 (mapping) and backing_index
+        m_backing_index->increase_tag(1);
+        auto merged_index = create_memory_index0(m_backing_index->buffer(), m_backing_index->size(), 0, UINT64_MAX);
+        vector<SegmentMapping> dumped;
+        dumped.assign(mapping.begin(), mapping.end());
+        auto idx_size = compress_raw_index(&dumped[0], dumped.size());
+        // for (auto it : mapping) {
+        for (size_t i = 0; i < idx_size; i++) {
+            auto p = dumped[i];
+            p.tag = 0;
+            merged_index->insert(p);
+        }
+        delete m_backing_index;
+        m_backing_index = (Index*)(merged_index->make_read_only_index()); // set ownership=false
+        delete merged_index;
+        LOG_INFO("rebuild backing index done. {count: `}", m_backing_index->size());
+        // Clear original index0
+        mapping.clear();
+        return 0;
+    }
+
 
 };
 
