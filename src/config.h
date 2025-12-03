@@ -21,7 +21,7 @@
 #include "overlaybd/config_util.h"
 
 namespace ImageConfigNS {
-const int MAX_LAYER_CNT = 256;
+const int MAX_LAYER_CNT = 65536;
 
 struct LayerConfig : public ConfigUtils::Config {
     APPCFG_CLASS;
