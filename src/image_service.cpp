@@ -470,7 +470,7 @@ bool ImageService::enable_acceleration() {
     }
 }
 
-ImageFile *ImageService::create_image_file(const char *config_path) {
+ImageFile *ImageService::create_image_file(const char *config_path, const std::string &dev_id) {
     ImageConfigNS::GlobalConfig defaultDlCfg;
     if (!defaultDlCfg.ParseJSON(m_config_path)) {
         LOG_WARN("default download config parse failed, ignore");
@@ -493,7 +493,7 @@ ImageFile *ImageService::create_image_file(const char *config_path) {
     }
 
     auto resFile = cfg.resultFile();
-    ImageFile *ret = new ImageFile(cfg, *this);
+    ImageFile *ret = new ImageFile(cfg, *this, dev_id);
     if (ret->m_status <= 0) {
         std::string data = "failed:" + ret->m_exception;
         set_result_file(resFile, data);
@@ -503,6 +503,29 @@ ImageFile *ImageService::create_image_file(const char *config_path) {
     std::string data = "success";
     set_result_file(resFile, data);
     return ret;
+}
+
+int ImageService::register_image_file(const std::string& dev_id, ImageFile* file) {
+    if (dev_id.empty())
+        return 0;
+    if(find_image_file(dev_id) != nullptr)
+        LOG_ERROR_RETURN(0, -1, "dev id exists: `", dev_id);
+    m_image_files[dev_id] = file;
+    LOG_INFO("Registered image file for dev_id: `", dev_id);
+    return 0;
+}
+
+int ImageService::unregister_image_file(const std::string& dev_id) {
+    if (dev_id.empty())
+        return 0;
+    m_image_files.erase(dev_id);
+    LOG_INFO("Unregistered image file for dev_id: `", dev_id);
+    return 0;
+}
+
+ImageFile* ImageService::find_image_file(const std::string& dev_id) {
+    auto it = m_image_files.find(dev_id);
+    return (it != m_image_files.end()) ? it->second : nullptr;
 }
 
 ImageService::ImageService(const char *config_path) {

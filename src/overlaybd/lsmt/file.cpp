@@ -948,7 +948,7 @@ public:
             }
             auto p = new LSMTReadOnlyFile;
             p->m_index = new_index;
-            p->m_files = {nullptr, m_files.back()};
+            p->m_files = {m_files.back()};//p->m_files = {nullptr, m_files.back()};
             p->m_vsize = m_vsize;
             p->m_file_ownership = m_file_ownership;
             m_file_ownership = false;
@@ -1025,8 +1025,8 @@ public:
         auto u = top_layer;
 
         LOG_INFO("m_files.insert new layer: file ptr: 0x`", u->m_files[0]);
-        // m_files[m_rw_tag] = ((LSMTReadOnlyFile*)gc_layer)->m_files[1];
-        m_files.insert(m_files.begin(), ((LSMTReadOnlyFile*)gc_layer)->m_files[1]);
+        // m_files[m_rw_tag] = ((LSMTReadOnlyFile*)gc_layer)->m_files[0];
+        m_files.insert(m_files.begin(), ((LSMTReadOnlyFile*)gc_layer)->m_files[0]);
         m_rw_tag++;
         m_files[m_rw_tag] = u->m_files[0]; // fnew_layer;
         if (m_file_ownership){
