@@ -26,11 +26,15 @@
 #include "photon/net/curl.h"
 #include "../version.h"
 #include <photon/net/http/client.h>
+#include <photon/fs/localfs.h>
 
-
+#include <unistd.h>
 #include <fcntl.h>
 
 #include "../image_service.cpp"
+#include "../image_service.h"
+#include "../image_file.h"
+#include "../tools/comm_func.h"
 
 char *test_ua = nullptr;
 
@@ -160,7 +164,98 @@ TEST(http_client, user_agent) {
     EXPECT_EQ(true, buf == "success");
 }
 
+class DevIDTest : public ::testing::Test {
+public:
+    ImageService *imgservice;
+    const std::string test_dir = "/tmp/overlaybd";
+    const std::string global_config_path = test_dir + "/global_config.json";
+    const std::string image_config_path = test_dir + "/image_config.json";
+    const std::string global_config_content = R"delimiter({
+  "enableAudit": false,
+  "logPath": "",
+  "p2pConfig": {
+    "enable": false,
+    "address": "localhost:64210"
+  }
+})delimiter";
+    const std::string image_config_content = R"delimiter({
+    "lowers" : [
+        {
+            "file" : "/opt/overlaybd/baselayers/ext4_64"
+        }
+    ]
+})delimiter";
 
+    virtual void SetUp() override {
+        // set_log_output_level(0);
+        system(("mkdir -p " + test_dir).c_str());
+
+        system(("echo \'" + global_config_content + "\' > " + global_config_path).c_str());
+        LOG_INFO("Global config file: ");
+        system(("cat " + global_config_path).c_str());
+
+        system(("echo \'" + image_config_content + "\' > " + image_config_path).c_str());
+        LOG_INFO("Image config file: ");
+        system(("cat " + image_config_path).c_str());
+
+        imgservice = create_image_service(global_config_path.c_str());
+        if(imgservice == nullptr) {
+            LOG_ERROR("failed to create image service");
+            exit(-1);
+        }
+    }
+    virtual void TearDown() override {
+        delete imgservice;
+        system(("rm -rf " + test_dir).c_str());
+    }
+};
+
+TEST_F(DevIDTest, parse_config_with_dev_id) {
+    std::string config_path, dev_id;
+    parse_config_and_dev_id("path/to/config.v1.json;123", config_path, dev_id);
+    EXPECT_EQ(config_path, "path/to/config.v1.json");
+    EXPECT_EQ(dev_id, "123");
+}
+
+TEST_F(DevIDTest, parse_config_without_dev_id) {
+    std::string config_path, dev_id;
+    parse_config_and_dev_id("path/to/config.v1.json", config_path, dev_id);
+    EXPECT_EQ(config_path, "path/to/config.v1.json");
+    EXPECT_EQ(dev_id, "");
+}
+
+TEST_F(DevIDTest, registers) {
+    ImageFile* imagefile0 = imgservice->create_image_file(image_config_path.c_str(), "");
+    ImageFile* imagefile1 = imgservice->create_image_file(image_config_path.c_str(), "111");
+    ImageFile* imagefile2 = imgservice->create_image_file(image_config_path.c_str(), "222");
+    ImageFile* imagefile3 = imgservice->create_image_file(image_config_path.c_str(), "333");
+
+    EXPECT_NE(imagefile0, nullptr);
+    EXPECT_NE(imagefile1, nullptr);
+    EXPECT_NE(imagefile2, nullptr);
+    EXPECT_NE(imagefile3, nullptr);
+
+    EXPECT_EQ(imgservice->find_image_file(""), nullptr);
+    EXPECT_EQ(imgservice->find_image_file("111"), imagefile1);
+    EXPECT_EQ(imgservice->find_image_file("222"), imagefile2);
+    EXPECT_EQ(imgservice->find_image_file("333"), imagefile3);
+
+    delete imagefile2;
+
+    EXPECT_EQ(imgservice->find_image_file(""), nullptr);
+    EXPECT_EQ(imgservice->find_image_file("111"), imagefile1);
+    EXPECT_EQ(imgservice->find_image_file("222"), nullptr);
+    EXPECT_EQ(imgservice->find_image_file("333"), imagefile3);
+
+    ImageFile* dup = imgservice->create_image_file(image_config_path.c_str(), "111");
+
+    EXPECT_EQ(dup, nullptr);
+    EXPECT_EQ(imgservice->find_image_file("111"), imagefile1);
+
+    delete imagefile0;
+    delete imagefile1;
+    delete imagefile3;
+}
 
 int main(int argc, char** argv) {
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
