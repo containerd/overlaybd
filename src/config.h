@@ -134,9 +134,8 @@ struct CertConfig : public ConfigUtils::Config {
 struct ServiceConfig : public ConfigUtils::Config {
     APPCFG_CLASS
     APPCFG_PARA(enable, bool, false);
-    APPCFG_PARA(domainSocket, std::string, "");
+    APPCFG_PARA(address, std::string, "http://127.0.0.1:9862");
 };
-
 
 struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_CLASS

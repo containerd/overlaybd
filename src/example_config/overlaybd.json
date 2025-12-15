@@ -39,6 +39,6 @@
     "registryFsVersion": "v2",
     "serviceConfig": {
         "enable": false,
-        "domainSocket": "/var/run/overlaybd.sock"
+        "address": "http://127.0.0.1:9862"
     }
 }

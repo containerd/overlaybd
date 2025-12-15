@@ -16,6 +16,7 @@
 #include "image_service.h"
 #include "config.h"
 #include "image_file.h"
+#include "api_server.h"
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
 #include <photon/common/io-alloc.h>
@@ -441,18 +442,22 @@ int ImageService::init() {
         }
     }
     if (global_conf.serviceConfig().enable()) {
-        auto sock_path = global_conf.serviceConfig().domainSocket();
-        if (access(sock_path.c_str(), 0) == 0) {
-            if (unlink(sock_path.c_str()) != 0) {
-                LOG_ERRNO_RETURN(0, -1, "failed to remove old socket file");
-            }
-        }
+        // auto sock_path = global_conf.serviceConfig().domainSocket();
+        // if (access(sock_path.c_str(), 0) == 0) {
+        //     if (unlink(sock_path.c_str()) != 0) {
+        //         LOG_ERRNO_RETURN(0, -1, "failed to remove old socket file");
+        //     }
+        // }
         // listen the domainSocket and create a HTTP SERVER
         /*
           handler definition:
             - create a live snapshot for a imageFile
                 /snapshot?dev_id=${devID}&config=${config}
         */
+        api_handler.reset(new ApiHandler(this));
+        api_server = new ApiServer(global_conf.serviceConfig().address(), api_handler.get());
+        if(!api_server->ready)
+            LOG_ERROR_RETURN(0, -1, "Failed to start http server for live snapshot");
     }
     return 0;
 }
@@ -540,6 +545,8 @@ ImageService::~ImageService() {
     delete global_fs.srcfs;
     delete global_fs.io_alloc;
     delete exporter;
+    delete api_server;
+    
     LOG_INFO("image service is fully stopped");
 }
 

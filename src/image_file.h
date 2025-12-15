@@ -123,6 +123,7 @@ public:
         // load new config file to get the snapshot layer path
         // open new upper layer
         // restack() current RW layer as snapshot layer
+        LOG_INFO("call create_snapshot, dev_id: `", m_dev_id);
         return 0;
     }
 
