@@ -49,6 +49,8 @@ struct ImageAuthResponse : public ConfigUtils::Config {
 };
 
 struct ImageFile;
+class ApiHandler;
+struct ApiServer;
 
 class ImageService {
 public:
@@ -67,6 +69,8 @@ public:
     struct GlobalFs global_fs;
     std::unique_ptr<OverlayBDMetric> metrics;
     ExporterServer *exporter = nullptr;
+    std::unique_ptr<ApiHandler> api_handler;
+    ApiServer *api_server = nullptr;
 
 private:
     int read_global_config_and_set();
