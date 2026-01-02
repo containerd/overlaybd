@@ -14,9 +14,7 @@ if(${BUILD_CURL_FROM_SOURCE})
     # In libcurl, CMakeLists build static lib is broken add build command via
     # make
     if(NOT TARGET libcurl_static_build)
-        if (NOT curl_bundle_POPULATED)
-            FetchContent_Populate(curl_bundle)
-        endif()
+        FetchContent_MakeAvailable(curl_bundle)
         find_package(OpenSSL)
         add_custom_command(
             OUTPUT ${curl_bundle_BINARY_DIR}/lib/libcurl.a

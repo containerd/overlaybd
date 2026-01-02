@@ -14,9 +14,7 @@ if(${BUILD_CURL_FROM_SOURCE})
     FetchContent_GetProperties(openssl102)
 
     if(NOT TARGET openssl102_static_build)
-        if(NOT openssl102_POPULATED)
-            FetchContent_Populate(openssl102)
-        endif()
+        FetchContent_MakeAvailable(openssl102)
         add_custom_command(
             OUTPUT ${openssl102_BINARY_DIR}/lib/libssl.a
             WORKING_DIRECTORY ${openssl102_SOURCE_DIR}
