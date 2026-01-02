@@ -17,7 +17,7 @@ if(${BUILD_CURL_FROM_SOURCE})
         if (NOT curl_bundle_POPULATED)
             FetchContent_Populate(curl_bundle)
         endif()
-        find_package(openssl)
+        find_package(OpenSSL)
         add_custom_command(
             OUTPUT ${curl_bundle_BINARY_DIR}/lib/libcurl.a
             WORKING_DIRECTORY ${curl_bundle_SOURCE_DIR}

@@ -1,7 +1,7 @@
 include_directories($ENV{GFLAGS}/include)
 link_directories($ENV{GFLAGS}/lib)
 
-find_package(curl REQUIRED)
+find_package(CURL REQUIRED)
 
 add_executable(ocf_perf_test ocf_perf_test.cpp)
 target_include_directories(
