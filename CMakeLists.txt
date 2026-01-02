@@ -44,19 +44,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED on)
 set(ENABLE_MIMIC_VDSO off)
 
 option(BUILD_CURL_FROM_SOURCE "Compile static libcurl" off)
+option(BUILD_STREAM_CONVERTOR "Build the stream convertor" on)
 option(ORIGIN_EXT2FS "Use original libext2fs" off)
+
 find_package(photon REQUIRED)
 find_package(tcmu REQUIRED)
-find_package(yaml-cpp)
-if (NOT yaml-cpp_FOUND)
-  FetchContent_Declare(
-    yaml-cpp
-    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-    GIT_TAG 0.8.0
-  )
-  FetchContent_MakeAvailable(yaml-cpp)
-endif()
 
+if(BUILD_STREAM_CONVERTOR)
+    find_package(yaml-cpp)
+    if (NOT yaml-cpp_FOUND)
+        FetchContent_Declare(
+            yaml-cpp
+            GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+            GIT_TAG 0.8.0
+        )
+        FetchContent_MakeAvailable(yaml-cpp)
+    endif()
+endif()
 
 if(BUILD_TESTING)
   enable_testing()

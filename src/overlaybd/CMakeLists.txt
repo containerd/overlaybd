@@ -6,7 +6,10 @@ add_subdirectory(cache)
 add_subdirectory(tar)
 add_subdirectory(gzip)
 add_subdirectory(gzindex)
-add_subdirectory(stream_convertor)
+
+if(BUILD_STREAM_CONVERTOR)
+    add_subdirectory(stream_convertor)
+endif()
 
 add_library(overlaybd_lib INTERFACE)
 target_include_directories(overlaybd_lib INTERFACE
