@@ -12,7 +12,7 @@ target_link_libraries(erofs_simple_test gtest gtest_main pthread photon_static
 
 target_include_directories(erofs_simple_test PUBLIC
     ${PHOTON_INCLUDE_DIR}
-    ${rapidjson_SOURCE_DIR}/include
+    ${RAPIDJSON_INCLUDE_DIRS}
 )
 
 add_test(
@@ -28,7 +28,7 @@ target_link_libraries(erofs_stress_test gtest gtest_main pthread photon_static
 
 target_include_directories(erofs_stress_test PUBLIC
     ${PHOTON_INCLUDE_DIR}
-    ${rapidjson_SOURCE_DIR}/include
+    ${RAPIDJSON_INCLUDE_DIRS}
 )
 
 add_test(
