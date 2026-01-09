@@ -131,6 +131,12 @@ struct CertConfig : public ConfigUtils::Config {
     APPCFG_PARA(keyFile, std::string, "");
 };
 
+struct ServiceConfig : public ConfigUtils::Config {
+    APPCFG_CLASS
+    APPCFG_PARA(enable, bool, false);
+    APPCFG_PARA(address, std::string, "http://127.0.0.1:9862");
+};
+
 struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_CLASS
 
@@ -155,6 +161,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(prefetchConfig, PrefetchConfig);
     APPCFG_PARA(certConfig, CertConfig);
     APPCFG_PARA(userAgent, std::string, OVERLAYBD_VERSION);
+    APPCFG_PARA(serviceConfig, ServiceConfig);
 };
 
 struct AuthConfig : public ConfigUtils::Config {
@@ -169,5 +176,6 @@ struct ImageAuthResponse : public ConfigUtils::Config {
 	APPCFG_PARA(success, bool, false);
 	APPCFG_PARA(data, AuthConfig);
 };
+
 
 } // namespace ImageConfigNS

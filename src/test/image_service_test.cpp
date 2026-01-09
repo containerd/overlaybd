@@ -27,10 +27,13 @@
 #include "../version.h"
 #include <photon/net/http/client.h>
 
-
+#include <unistd.h>
 #include <fcntl.h>
 
 #include "../image_service.cpp"
+#include "../image_service.h"
+#include "../image_file.h"
+#include "../tools/comm_func.h"
 
 char *test_ua = nullptr;
 
@@ -160,7 +163,143 @@ TEST(http_client, user_agent) {
     EXPECT_EQ(true, buf == "success");
 }
 
+class DevIDGetTest : public ::testing::Test {
+public:
+    virtual void SetUp() override {}
+    virtual void TearDown() override {}
+};
 
+TEST_F(DevIDGetTest, get_dev_id) {
+    std::string config_path, dev_id;
+    parse_config_and_dev_id("path/to/config.v1.json;123", config_path, dev_id);
+    EXPECT_EQ(config_path, "path/to/config.v1.json");
+    EXPECT_EQ(dev_id, "123");
+
+    parse_config_and_dev_id("path/to/config.v1.json", config_path, dev_id);
+    EXPECT_EQ(config_path, "path/to/config.v1.json");
+    EXPECT_EQ(dev_id, "");
+}
+
+class DevIDRegisterTest : public DevIDGetTest {
+public:
+    ImageService *imgservice;
+    const std::string test_dir = "/tmp/overlaybd";
+    const std::string global_config_path = test_dir + "/global_config.json";
+    const std::string image_config_path = test_dir + "/image_config.json";
+    std::string global_config_content = R"delimiter({
+    "enableAudit": false,
+    "logPath": "",
+    "p2pConfig": {
+        "enable": false,
+        "address": "localhost:64210"
+    }
+})delimiter";
+    std::string image_config_content = R"delimiter({
+    "lowers" : [
+        {
+            "file" : "/opt/overlaybd/baselayers/ext4_64"
+        }
+    ]
+})delimiter";
+
+    virtual void SetUp() override {
+        system(("mkdir -p " + test_dir).c_str());
+
+        system(("echo \'" + global_config_content + "\' > " + global_config_path).c_str());
+        LOG_INFO("Global config file: ");
+        system(("cat " + global_config_path).c_str());
+
+        system(("echo \'" + image_config_content + "\' > " + image_config_path).c_str());
+        LOG_INFO("Image config file: ");
+        system(("cat " + image_config_path).c_str());
+
+        imgservice = create_image_service(global_config_path.c_str());
+        if(imgservice == nullptr) {
+            LOG_ERROR("failed to create image service");
+            exit(-1);
+        }
+    }
+    virtual void TearDown() override {
+        delete imgservice;
+        system(("rm -rf " + test_dir).c_str());
+    }
+};
+
+TEST_F(DevIDRegisterTest, register_dev_id) {
+    ImageFile* imagefile0 = imgservice->create_image_file(image_config_path.c_str(), "");
+    ImageFile* imagefile1 = imgservice->create_image_file(image_config_path.c_str(), "111");
+    ImageFile* imagefile2 = imgservice->create_image_file(image_config_path.c_str(), "222");
+    ImageFile* imagefile3 = imgservice->create_image_file(image_config_path.c_str(), "333");
+
+    EXPECT_NE(imagefile0, nullptr);
+    EXPECT_NE(imagefile1, nullptr);
+    EXPECT_NE(imagefile2, nullptr);
+    EXPECT_NE(imagefile3, nullptr);
+
+    EXPECT_EQ(imgservice->find_image_file(""), nullptr);
+    EXPECT_EQ(imgservice->find_image_file("111"), imagefile1);
+    EXPECT_EQ(imgservice->find_image_file("222"), imagefile2);
+    EXPECT_EQ(imgservice->find_image_file("333"), imagefile3);
+
+    delete imagefile2;
+
+    EXPECT_EQ(imgservice->find_image_file(""), nullptr);
+    EXPECT_EQ(imgservice->find_image_file("111"), imagefile1);
+    EXPECT_EQ(imgservice->find_image_file("222"), nullptr);
+    EXPECT_EQ(imgservice->find_image_file("333"), imagefile3);
+
+    ImageFile* dup = imgservice->create_image_file(image_config_path.c_str(), "111");
+
+    EXPECT_EQ(dup, nullptr);
+    EXPECT_EQ(imgservice->find_image_file("111"), imagefile1);
+
+    delete imagefile0;
+    delete imagefile1;
+    delete imagefile3;
+}
+
+class SnapshotTest : public DevIDRegisterTest {
+public:
+    virtual void SetUp() override {
+        global_config_content = R"delimiter({
+    "enableAudit": false,
+    "logLevel": 1,
+    "logPath": "",
+    "p2pConfig": {
+        "enable": false,
+        "address": "localhost:64210"
+    },
+    "serviceConfig": {
+        "enable": true
+    }
+})delimiter";
+
+        DevIDRegisterTest::SetUp();
+    }
+    long request_snapshot(const char* request_url) {
+        auto request = new photon::net::cURL();
+        DEFER({ delete request; });
+
+        LOG_INFO("request url: `", request_url);
+        photon::net::StringWriter writer;
+        auto ret = request->POST(request_url, &writer, (int64_t)1000000);
+        LOG_INFO("response: `", writer.string);
+        return ret;
+    }
+};
+
+TEST_F(SnapshotTest, http_server) {
+    ImageFile* imgfile = imgservice->create_image_file(image_config_path.c_str(), "123");
+    EXPECT_NE(imgfile, nullptr);
+
+    EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot"), 400);
+    EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?V#RNWQC&*@#"), 400);
+    EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?dev_id=&config=/tmp/overlaybd/config.json"), 400);
+    EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?dev_id=456&config=/tmp/overlaybd/config.json"), 404);
+    EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?dev_id=123&config=/tmp/overlaybd/config.json"), 200);
+
+    delete imgfile;
+}
 
 int main(int argc, char** argv) {
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);

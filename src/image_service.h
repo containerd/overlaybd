@@ -22,6 +22,7 @@
 #include "overlaybd/cache/gzip_cache/cached_fs.h"
 #include <photon/fs/filesystem.h>
 #include <photon/common/io-alloc.h>
+#include <unordered_map>
 
 using namespace photon::fs;
 
@@ -48,27 +49,35 @@ struct ImageAuthResponse : public ConfigUtils::Config {
 };
 
 struct ImageFile;
+class ApiHandler;
+struct ApiServer;
 
 class ImageService {
 public:
     ImageService(const char *config_path = nullptr);
     ~ImageService();
     int init();
-    ImageFile *create_image_file(const char *image_config_path);
+    ImageFile *create_image_file(const char *image_config_path, const std::string &dev_id);
     // bool enable_acceleration(GlobalFs *global_fs, ImageConfigNS::P2PConfig conf);
     bool enable_acceleration();
+    int register_image_file(const std::string& dev_id, ImageFile* file);
+    int unregister_image_file(const std::string& dev_id);
+    ImageFile* find_image_file(const std::string& dev_id);
 
 
     ImageConfigNS::GlobalConfig global_conf;
     struct GlobalFs global_fs;
     std::unique_ptr<OverlayBDMetric> metrics;
     ExporterServer *exporter = nullptr;
+    std::unique_ptr<ApiHandler> api_handler;
+    ApiServer *api_server = nullptr;
 
 private:
     int read_global_config_and_set();
     std::pair<std::string, std::string> reload_auth(const char *remote_path);
     void set_result_file(std::string &filename, std::string &data);
     std::string m_config_path;
+    std::unordered_map<std::string, ImageFile*> m_image_files; // dev_id -> ImageFile*
 };
 
 ImageService *create_image_service(const char *config_path = nullptr);
