@@ -9,9 +9,7 @@ if(NOT ORIGIN_EXT2FS)
     FetchContent_GetProperties(e2fsprogs)
 
     if(NOT TARGET libext2fs_build)
-        if (NOT e2fsprogs_POPULATED)
-            FetchContent_Populate(e2fsprogs)
-        endif()
+        FetchContent_MakeAvailable(e2fsprogs)
         set(LIBEXT2FS_INSTALL_DIR ${e2fsprogs_SOURCE_DIR}/build/libext2fs CACHE STRING "")
 
         add_custom_command(

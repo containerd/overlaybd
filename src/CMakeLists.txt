@@ -1,7 +1,7 @@
-find_package(curl REQUIRED)
-find_package(openssl REQUIRED)
+find_package(CURL REQUIRED)
+find_package(OpenSSL REQUIRED)
 find_package(aio REQUIRED)
-find_package(rapidjson REQUIRED)
+find_package(RapidJSON REQUIRED MODULE)
 
 link_libraries(rt pthread resolv)
 
@@ -19,7 +19,7 @@ add_library(overlaybd_image_lib
 target_include_directories(overlaybd_image_lib PUBLIC
   ${CURL_INCLUDE_DIRS}
   ${OPENSSL_INCLUDE_DIR}
-  ${rapidjson_SOURCE_DIR}/include
+  ${RAPIDJSON_INCLUDE_DIRS}
   ${PHOTON_INCLUDE_DIR}
 )
 
@@ -39,7 +39,7 @@ target_include_directories(overlaybd-tcmu PUBLIC
   ${TCMU_INCLUDE_DIR}
   ${CURL_INCLUDE_DIRS}
   ${OPENSSL_INCLUDE_DIR}
-  ${rapidjson_SOURCE_DIR}/include
+  ${RAPIDJSON_INCLUDE_DIRS}
   ${PHOTON_INCLUDE_DIR}
 )
 target_link_libraries(overlaybd-tcmu

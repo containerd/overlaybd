@@ -3,7 +3,7 @@ file(GLOB SOURCE_SERV "*.cpp")
 add_executable(overlaybd-streamConv ${SOURCE_SERV})
 target_include_directories(overlaybd-streamConv PUBLIC
     ${PHOTON_INCLUDE_DIR}
-    ${rapidjson_SOURCE_DIR}/include
+    ${RAPIDJSON_INCLUDE_DIRS}
 )
 target_link_libraries(overlaybd-streamConv
     photon_static
