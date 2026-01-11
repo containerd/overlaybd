@@ -51,15 +51,15 @@ struct Segment {
     }
 } __attribute__((packed));
 
-struct SegmentMapping : public Segment { // 64 + 55 + 9 == 128
-    uint64_t moffset : 55;               // mapped offset (2^64 B if in sector)
+struct SegmentMapping : public Segment { // 64 + 47 + 1 + 16 == 128
+    uint64_t moffset : 47;               // mapped offset (64 PB if in sector)
     uint32_t zeroed : 1;                 // indicating a zero-filled segment
-    uint8_t tag;
-    const static uint64_t MAX_MOFFSET = (1UL << 55) - 1;
+    uint16_t tag;                        // layer index (up to 65535 layers)
+    const static uint64_t MAX_MOFFSET = (1UL << 47) - 1;
 
     SegmentMapping() {
     }
-    SegmentMapping(uint64_t loffset, uint32_t length, uint64_t moffset, uint8_t tag = 0)
+    SegmentMapping(uint64_t loffset, uint32_t length, uint64_t moffset, uint16_t tag = 0)
         : Segment{loffset, length}, moffset(moffset), zeroed(0), tag(tag) {
         assert(length <= Segment::MAX_LENGTH);
     }
@@ -186,7 +186,7 @@ extern "C" IMemoryIndex *merge_memory_indexes(const IMemoryIndex **pindexes, std
 // were one single index; inserting into a combo effectively inserting into the index0 part;
 // the mapped offset must be within [moffset_begin, moffset_end)
 extern "C" IComboIndex *create_combo_index(IMemoryIndex0 *index0, const IMemoryIndex *index,
-                                           uint8_t ro_index_count, bool ownership);
+                                           uint16_t ro_index_count, bool ownership);
 
 // compress raw index array by mergeing adjacent continuous mappings
 // returning compressed size of the array

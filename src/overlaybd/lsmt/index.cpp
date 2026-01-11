@@ -629,7 +629,7 @@ public:
     Index *m_backing_index{nullptr};
     bool m_ownership;
 
-    ComboIndex(Index0 *index0, const Index *index, uint8_t ro_layers_count, bool ownership) {
+    ComboIndex(Index0 *index0, const Index *index, uint16_t ro_layers_count, bool ownership) {
         m_index0 = index0;
         m_backing_index = const_cast<Index *>(index);
         mapping = index0->mapping;
@@ -853,7 +853,7 @@ static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const 
 }
 
 IComboIndex *create_combo_index(IMemoryIndex0 *index0, const IMemoryIndex *index,
-                                uint8_t ro_index_count, bool ownership) {
+                                uint16_t ro_index_count, bool ownership) {
     if (!index0 || !index)
         LOG_ERROR_RETURN(EINVAL, nullptr, "invalid argument(s)");
 
@@ -903,8 +903,8 @@ size_t compress_raw_index_predict(const SegmentMapping *mapping, size_t n) {
 }
 
 IMemoryIndex *merge_memory_indexes(const IMemoryIndex **pindexes, size_t n) {
-    if (n > 255) {
-        LOG_ERROR("too many indexes to merge, 255 at most!");
+    if (n > 65535) {
+        LOG_ERROR("too many indexes to merge, 65535 at most!");
         return nullptr;
     }
     if (n == 0 || pindexes == nullptr)
