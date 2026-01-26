@@ -500,6 +500,20 @@ public:
         return (IMemoryIndex0 *)m_index;
     }
 
+    virtual int index(const IMemoryIndex *index) override {
+        if(!index || !index->buffer()) {
+            errno = EINVAL;
+            LOG_ERROR("Invalid index!");
+            return -1;
+        }
+        if (m_index != nullptr) {
+            delete m_index;
+            m_index = nullptr;
+        }
+        m_index = (IMemoryIndex *)index;
+        return 0;
+    }
+
     virtual int close() override {
         safe_delete(m_index);
         if (m_file_ownership) {
@@ -521,6 +535,23 @@ public:
 
     virtual std::vector<IFile *> get_lower_files() const override {
         return m_files;
+    }
+
+    virtual IFile *get_file(size_t file_idx) const override {
+        if (file_idx >= m_files.size()) {
+            LOG_ERROR_RETURN(0, nullptr, "file_idx out of range.");
+        }
+        return m_files[file_idx];
+    }
+
+    virtual int insert_file(IFile * file) override {
+        m_files.insert(m_files.begin(), file);
+        return 0;
+    }
+
+    virtual int clear_files() override {
+        m_files.clear();
+        return 0;
     }
 
     template <typename T1, typename T2, typename T3>
@@ -1038,6 +1069,9 @@ public:
         m_findex = u->m_findex;
         m_vsize = u->m_vsize;
         ((IComboIndex *)m_index)->commit_index0();
+
+        delete fseal;
+        delete gc_layer;
         return 0;
     }
 
@@ -1333,7 +1367,7 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
     auto ret = file->fstat(&stat);
     if (ret < 0)
         LOG_ERRNO_RETURN(0, nullptr, "failed to stat file.");
-    assert(pht->is_sparse_rw() == false);
+    assert(trailer || pht->is_sparse_rw() == false);
     uint64_t index_bytes;
     if (trailer) {
         if (!pht->is_data_file())
@@ -1738,7 +1772,7 @@ static IMemoryIndex *load_merge_index(vector<IFile *> &files, vector<UUID> &uuid
         }
     }
 
-    std::reverse(files.begin(), files.end());
+    std::reverse(files.begin(), files.end()); // reverse files: layerN-1 ... layer0
     std::reverse(tm.indexes.begin(), tm.indexes.end());
     std::reverse(uuid.begin(), uuid.end());
     auto pmi = merge_memory_indexes((const IMemoryIndex **)&tm.indexes[0], tm.indexes.size());
