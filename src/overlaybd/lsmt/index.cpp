@@ -617,6 +617,7 @@ public:
     virtual const IMemoryIndex0 *front_index() const override {
         return this;
     }
+    UNIMPLEMENTED(int front_index(const IMemoryIndex0 *fi) override);
     UNIMPLEMENTED(size_t vsize() const override);
     UNIMPLEMENTED(int commit_index0() override);
 };
@@ -649,6 +650,19 @@ public:
         }
     }
 
+    virtual int front_index(const IMemoryIndex0 *fi) override {
+        if (!fi) {
+            errno = EINVAL;
+            LOG_ERROR("Invalid index!");
+            return -1;
+        }
+        if (m_ownership && m_index0 != nullptr) { // !!!
+            delete m_index0;
+            m_index0 = nullptr;
+        }
+        m_index0 = (Index0 *)fi;
+        return 0;
+    }
     virtual const IMemoryIndex0 *front_index() const override {
         return this->m_index0;
     }
@@ -759,7 +773,8 @@ public:
             p.tag = 0;
             merged_index->insert(p);
         }
-        delete m_backing_index;
+        if(m_ownership) // !!!
+            delete m_backing_index;
         m_backing_index = (Index*)(merged_index->make_read_only_index()); // set ownership=false
         delete merged_index;
         LOG_INFO("rebuild backing index done. {count: `}", m_backing_index->size());

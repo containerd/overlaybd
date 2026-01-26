@@ -26,6 +26,7 @@
 #include "photon/net/curl.h"
 #include "../version.h"
 #include <photon/net/http/client.h>
+#include <photon/fs/localfs.h>
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -34,6 +35,7 @@
 #include "../image_service.h"
 #include "../image_file.h"
 #include "../tools/comm_func.h"
+#include "../overlaybd/lsmt/file.h"
 
 char *test_ua = nullptr;
 
@@ -258,7 +260,7 @@ TEST_F(DevIDRegisterTest, register_dev_id) {
     delete imagefile3;
 }
 
-class SnapshotTest : public DevIDRegisterTest {
+class HTTPServerTest : public DevIDRegisterTest {
 public:
     virtual void SetUp() override {
         global_config_content = R"delimiter({
@@ -288,7 +290,7 @@ public:
     }
 };
 
-TEST_F(SnapshotTest, http_server) {
+TEST_F(HTTPServerTest, http_server) {
     ImageFile* imgfile = imgservice->create_image_file(image_config_path.c_str(), "123");
     EXPECT_NE(imgfile, nullptr);
 
@@ -296,7 +298,231 @@ TEST_F(SnapshotTest, http_server) {
     EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?V#RNWQC&*@#"), 400);
     EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?dev_id=&config=/tmp/overlaybd/config.json"), 400);
     EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?dev_id=456&config=/tmp/overlaybd/config.json"), 404);
-    EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?dev_id=123&config=/tmp/overlaybd/config.json"), 200);
+    EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?dev_id=123&config=/tmp/overlaybd/config.json"), 500);
+
+    delete imgfile;
+}
+
+class CreateSnapshotTest : public DevIDRegisterTest {
+public:
+    const std::string new_image_config_path = test_dir + "/new_image_config.json";
+    std::string new_image_config_content = R"delimiter({
+    "lowers" : [
+        {
+            "file" : "/opt/overlaybd/baselayers/ext4_64"
+        },
+        {
+            "file" : "/tmp/overlaybd/data0.lsmt"
+        }
+    ],
+    "upper": {
+        "index": "/tmp/overlaybd/index1.lsmt",
+        "data": "/tmp/overlaybd/data1.lsmt"
+    }
+})delimiter";
+    virtual void SetUp() override {
+        image_config_content = R"delimiter({
+    "lowers" : [
+        {
+            "file" : "/opt/overlaybd/baselayers/ext4_64"
+        }
+    ],
+    "upper": {
+        "index": "/tmp/overlaybd/index0.lsmt",
+        "data": "/tmp/overlaybd/data0.lsmt"
+    }
+})delimiter";
+
+        DevIDRegisterTest::SetUp();
+
+        system(("echo \'" + new_image_config_content + "\' > " + new_image_config_path).c_str());
+        LOG_INFO("New image config file: ");
+        system(("cat " + new_image_config_path).c_str());
+
+        srand(154574045);
+    }
+
+    void create_file_rw(char *data_name, char *index_name, bool sparse = false) {
+        auto fdata = photon::fs::open_localfile_adaptor(data_name, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+        auto findex = photon::fs::open_localfile_adaptor(index_name, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+        LSMT::LayerInfo args(fdata, findex);
+        args.sparse_rw = sparse;
+        args.virtual_size = 64 << 20;
+        auto file = LSMT::create_file_rw(args, true);
+        delete file;
+    }
+};
+
+TEST_F(CreateSnapshotTest, create_snapshot) {
+    // imagefile0->pwrite( buf, 0, 1MB)
+    // imagefile0->restack(xxx) //s config.v1.json.new
+    // imagefile1->pread(buf1, 0, 1MB) imagefile0->pread(buf0...)
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+    
+    ImageFile* imgfile0 = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile0, nullptr);
+
+    auto len = 1 << 20;
+    ssize_t ret;
+    ALIGNED_MEM4K(buf, len);
+    ALIGNED_MEM4K(buf0, len);
+    ALIGNED_MEM4K(buf1, len);
+
+    for (auto i = 0; i < len; i++) {
+        auto j = rand() % 256;
+        buf[i] = j;
+    }
+    ret = imgfile0->pwrite(buf, len, 0);
+    EXPECT_EQ(ret, len);
+
+    EXPECT_EQ(imgfile0->create_snapshot(new_image_config_path.c_str()), 0);
+
+    ImageFile* imgfile1 = imgservice->create_image_file(new_image_config_path.c_str(), "");
+    EXPECT_NE(imgfile1, nullptr);
+
+    std::cout << "create_snapshot & verify" << std::endl;
+    ret = imgfile0->pread(buf0, len, 0);
+    EXPECT_EQ(ret, len);
+    ret = imgfile1->pread(buf1, len, 0);
+    EXPECT_EQ(ret, len);
+    for(auto i = 0; i < len; i++) {
+        EXPECT_EQ(buf0[i], buf1[i]);
+    }
+
+    for (auto i = 0; i < len / 2; i++) {
+        auto j = rand() % 256;
+        buf[i] = j;
+    }
+    ret = imgfile0->pwrite(buf, len / 2, len / 4);
+    EXPECT_EQ(ret, len / 2);
+    ret = imgfile1->pwrite(buf, len / 2, len / 4);
+    EXPECT_EQ(ret, len / 2);
+
+    std::cout << "verify file after pwrite" << std::endl;
+    ret = imgfile0->pread(buf0, len, 0);
+    EXPECT_EQ(ret, len);
+    ret = imgfile1->pread(buf1, len, 0);
+    EXPECT_EQ(ret, len);
+    for(auto i = 0; i < len; i++) {
+        EXPECT_EQ(buf0[i], buf1[i]);
+    }
+
+    delete imgfile0;
+    delete imgfile1;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_sparse) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt", true);
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt", true);
+    
+    ImageFile* imgfile0 = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile0, nullptr);
+
+    auto len = 1 << 20;
+    ssize_t ret;
+    ALIGNED_MEM4K(buf, len);
+    ALIGNED_MEM4K(buf0, len);
+    ALIGNED_MEM4K(buf1, len);
+
+    for (auto i = 0; i < len; i++) {
+        auto j = rand() % 256;
+        buf[i] = j;
+    }
+    ret = imgfile0->pwrite(buf, len, 0);
+    EXPECT_EQ(ret, len);
+
+    EXPECT_EQ(imgfile0->create_snapshot(new_image_config_path.c_str()), 0);
+
+    ImageFile* imgfile1 = imgservice->create_image_file(new_image_config_path.c_str(), "");
+    EXPECT_NE(imgfile1, nullptr);
+
+    std::cout << "create_snapshot & verify" << std::endl;
+    ret = imgfile0->pread(buf0, len, 0);
+    EXPECT_EQ(ret, len);
+    ret = imgfile1->pread(buf1, len, 0);
+    EXPECT_EQ(ret, len);
+    for(auto i = 0; i < len; i++) {
+        EXPECT_EQ(buf0[i], buf1[i]);
+    }
+
+    for (auto i = 0; i < len / 2; i++) {
+        auto j = rand() % 256;
+        buf[i] = j;
+    }
+    ret = imgfile0->pwrite(buf, len / 2, len / 4);
+    EXPECT_EQ(ret, len / 2);
+    ret = imgfile1->pwrite(buf, len / 2, len / 4);
+    EXPECT_EQ(ret, len / 2);
+
+    std::cout << "verify file after pwrite" << std::endl;
+    ret = imgfile0->pread(buf0, len, 0);
+    EXPECT_EQ(ret, len);
+    ret = imgfile1->pread(buf1, len, 0);
+    EXPECT_EQ(ret, len);
+    for(auto i = 0; i < len; i++) {
+        EXPECT_EQ(buf0[i], buf1[i]);
+    }
+
+    delete imgfile0;
+    delete imgfile1;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_failed) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    ImageFile* imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+
+    std::cout << "set wrong new lower layer in config file" << std::endl;
+    new_image_config_content = R"delimiter({
+    "lowers" : [
+        {
+            "file" : "/opt/overlaybd/baselayers/ext4_64"
+        },
+        {
+            "file" : "/tmp/overlaybd/index0.lsmt"
+        }
+    ],
+    "upper": {
+        "index": "/tmp/overlaybd/index1.lsmt",
+        "data": "/tmp/overlaybd/data1.lsmt"
+    }
+})delimiter";
+    system(("echo \'" + new_image_config_content + "\' > " + new_image_config_path).c_str());
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    std::cout << "set wrong new upper layer in config file" << std::endl;
+    new_image_config_content = R"delimiter({
+    "lowers" : [
+        {
+            "file" : "/opt/overlaybd/baselayers/ext4_64"
+        },
+        {
+            "file" : "/tmp/overlaybd/data0.lsmt"
+        }
+    ],
+    "upper": {
+        "index": "/tmp/overlaybd/index1.lsmt",
+        "data": "/tmp/overlaybd/data0.lsmt"
+    }
+})delimiter";
+    system(("echo \'" + new_image_config_content + "\' > " + new_image_config_path).c_str());
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    delete imgfile;
+
+    std::cout << "create snapshot for imgfile with only RO layers" << std::endl;
+    image_config_content = R"delimiter({
+    "lowers" : [
+        {
+            "file" : "/opt/overlaybd/baselayers/ext4_64"
+        }
+    ]
+})delimiter";
+    system(("echo \'" + image_config_content + "\' > " + image_config_path).c_str());
+    imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
 
     delete imgfile;
 }

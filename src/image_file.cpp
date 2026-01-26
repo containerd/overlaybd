@@ -334,12 +334,12 @@ LSMT::IFileRO *ImageFile::open_lowers(std::vector<ImageConfigNS::LayerConfig> &l
         return NULL;
 
     photon::join_handle *ths[PARALLEL_LOAD_INDEX];
-    std::vector<IFile *> files;
+    std::vector<IFile *> files; // layer0 ... layerN-1
     files.resize(lowers.size(), nullptr);
     auto n = std::min(PARALLEL_LOAD_INDEX, (int)lowers.size());
     LOG_DEBUG("create ` photon threads to open lowers", n);
 
-    ParallelOpenTask tm(files, lowers.size(), lowers);
+    ParallelOpenTask tm(files, lowers.size(), lowers); // layer0 ... layerN-1
     for (auto i = 0; i < n; ++i) {
         ths[i] =
             photon::thread_enable_join(photon::thread_create11(&do_parallel_open_files, this, tm));
@@ -443,7 +443,7 @@ int ImageFile::init_image_file() {
     ImageConfigNS::UpperConfig upper;
     bool record_no_download = false;
     bool has_error = false;
-    auto lowers = conf.lowers();
+    auto lowers = conf.lowers(); // layer0 ... layerN-1
     auto concurrency = image_service.global_conf.prefetchConfig().concurrency();
 
     if (conf.accelerationLayer() && !conf.recordTracePath().empty()) {
@@ -553,4 +553,52 @@ void ImageFile::set_failed(const Ts &...xs) {
         m_status = -1;
         m_exception = estring().appends(xs...);
     }
+}
+
+int ImageFile::create_snapshot(const char *config_path) {
+    // load new config file to get the snapshot layer path
+    // open new upper layer
+    // restack() current RW layer as snapshot layer
+    if(!m_lower_file || !m_upper_file)
+        LOG_ERROR_RETURN(0, -1, "Lower or upper layer is NULL.");
+
+    ImageConfigNS::ImageConfig new_cfg;
+    LSMT::IFileRW *upper_file = nullptr;
+
+    LOG_INFO("Load new config `.", config_path);
+    if (!new_cfg.ParseJSON(config_path)) {
+        LOG_ERROR_RETURN(0, -1, "Error parse new config json: `.", config_path);
+    }
+
+    auto upper = new_cfg.upper();
+    auto lowers = new_cfg.lowers();
+    if(lowers[lowers.size()-1].file() != conf.upper().data())
+        LOG_ERROR_RETURN(0, -1, "The last lower layer(`) should be the same as old upper layer(`) after restack.", lowers[lowers.size()-1].file(), conf.upper().data());
+    if(upper.index() == conf.upper().index() || upper.data() == conf.upper().data())
+        LOG_ERROR_RETURN(0, -1, "The new upper layer(`, `) should be different from the old upper layer(`, `).", upper.data(), upper.index(), conf.upper().data(), conf.upper().index());
+
+    upper_file = open_upper(upper);
+    if (!upper_file)
+        LOG_ERROR_RETURN(0, -1, "Open upper layer failed.");
+    
+    if(((LSMT::IFileRW *)m_file)->restack(upper_file) != 0)
+        LOG_ERRNO_RETURN(0, -1, "Restack new rwlayer failed.");
+    
+    if(m_upper_file) {
+        // transfer the sealed layer from m_upper_file to m_lower_file before m_upper_file is destructed
+        auto sealed = ((LSMT::IFileRW *)m_upper_file)->get_file(0);
+        ((LSMT::IFileRO *)m_lower_file)->insert_file(sealed);
+        ((LSMT::IFileRW *)m_upper_file)->clear_files();
+        delete m_upper_file;
+    }
+    // set m_lower_file->m_index = m_file->m_index->m_backing_index because m_file is not responsible for the destruction of m_backing_index
+    auto combo_index = (LSMT::IComboIndex *)((LSMT::IFileRW *)m_file)->index(); // m_file->m_index
+    ((LSMT::IFileRO *)m_lower_file)->index(combo_index->backing_index());
+    // set m_file->m_index->m_index0 = upper_file->m_index
+    auto upper_file_index = (LSMT::IMemoryIndex0 *)((LSMT::IFileRW *)upper_file)->index(); // upper_file->m_index
+    combo_index->front_index(upper_file_index);
+
+    m_upper_file = upper_file;
+    
+    return 0;
 }

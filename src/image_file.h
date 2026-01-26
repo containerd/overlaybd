@@ -82,6 +82,16 @@ public:
         return ret;
     }
 
+    ssize_t pwrite(const void *buf, size_t count, off_t offset) override
+    {
+        return m_file->pwrite(buf, count, offset);
+    }
+    
+    ssize_t pread(void *buf, size_t count, off_t offset) override
+    {
+        return m_file->pread(buf, count, offset);
+    }
+        
     ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override {
         if (read_only) {
             LOG_ERROR_RETURN(EROFS, -1, "writing read only file");
@@ -119,13 +129,7 @@ public:
 
     int compact(IFile *as);
 
-    int create_snapshot(const char *config_path) {
-        // load new config file to get the snapshot layer path
-        // open new upper layer
-        // restack() current RW layer as snapshot layer
-        LOG_INFO("call create_snapshot, dev_id: `", m_dev_id);
-        return 0;
-    }
+    int create_snapshot(const char *config_path);
 
 private:
     Prefetcher *m_prefetcher = nullptr;
