@@ -119,13 +119,7 @@ public:
 
     int compact(IFile *as);
 
-    int create_snapshot(const char *config_path) {
-        // load new config file to get the snapshot layer path
-        // open new upper layer
-        // restack() current RW layer as snapshot layer
-        LOG_INFO("call create_snapshot, dev_id: `", m_dev_id);
-        return 0;
-    }
+    int create_snapshot(const char *config_path);
 
 private:
     Prefetcher *m_prefetcher = nullptr;
