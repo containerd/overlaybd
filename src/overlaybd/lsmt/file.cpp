@@ -500,6 +500,20 @@ public:
         return (IMemoryIndex0 *)m_index;
     }
 
+    virtual int index(const IMemoryIndex *index) override {
+        if(!index || !index->buffer()) {
+            errno = EINVAL;
+            LOG_ERROR("Invalid index!");
+            return -1;
+        }
+        if (m_index != nullptr) {
+            delete m_index;
+            m_index = nullptr;
+        }
+        m_index = (IMemoryIndex *)index;
+        return 0;
+    }
+
     virtual int close() override {
         safe_delete(m_index);
         if (m_file_ownership) {
@@ -521,6 +535,23 @@ public:
 
     virtual std::vector<IFile *> get_lower_files() const override {
         return m_files;
+    }
+
+    virtual IFile *get_file(size_t file_idx) const override {
+        if (file_idx >= m_files.size()) {
+            LOG_ERROR_RETURN(0, nullptr, "file_idx out of range.");
+        }
+        return m_files[file_idx];
+    }
+
+    virtual int insert_file(IFile * file) override {
+        m_files.insert(m_files.begin(), file);
+        return 0;
+    }
+
+    virtual int clear_files() override {
+        m_files.clear();
+        return 0;
     }
 
     template <typename T1, typename T2, typename T3>
@@ -680,6 +711,8 @@ public:
         reverse(files.begin(), files.end());
         return merge_files_ro(files, args);
     }
+
+    UNIMPLEMENTED(int restack(IFileRW *upper) override);
 };
 
 class LSMTFile : public LSMTReadOnlyFile {
@@ -946,7 +979,7 @@ public:
             }
             auto p = new LSMTReadOnlyFile;
             p->m_index = new_index;
-            p->m_files = {m_files.back()};
+            p->m_files = {m_files.back()};//p->m_files = {nullptr, m_files.back()};
             p->m_vsize = m_vsize;
             p->m_file_ownership = m_file_ownership;
             m_file_ownership = false;
@@ -1003,6 +1036,57 @@ public:
         CompactOptions opts(&m_files, (SegmentMapping*)(pmi->buffer()), pmi->size(), m_vsize, &args);
         return compact(opts, _no_use_var);
     }
+
+    int reserve_top_layer(LSMTFile *top_layer)
+    {
+        std::vector<SegmentMapping> pmappings; // temp index for reserved layer
+        /* ==== close_seal the top RW layer and reopen it. ==== */
+        IFileRO* gc_layer = nullptr;
+        auto fseal = (LSMTFile*)open_file_rw(m_files[m_rw_tag], m_findex, false);
+        if (fseal==nullptr){
+            return -1;
+        }
+        if (fseal->close_seal(&gc_layer)!=0){
+            LOG_ERROR_RETURN(0, -1, "close seal top RW layer failed.");
+        }
+        if (gc_layer == nullptr){
+            LOG_ERROR_RETURN(0, -1, "reopen sealed RW layer failed.");
+        }
+        /* ==== reserve m_files[0] for new layer. ==== */
+        auto u = top_layer;
+
+        LOG_INFO("m_files.insert new layer: file ptr: 0x`", u->m_files[0]);
+        // m_files[m_rw_tag] = ((LSMTReadOnlyFile*)gc_layer)->m_files[0];
+        m_files.insert(m_files.begin(), ((LSMTReadOnlyFile*)gc_layer)->m_files[0]);
+        m_rw_tag++;
+        m_files[m_rw_tag] = u->m_files[0]; // fnew_layer;
+        if (m_file_ownership){
+            LOG_INFO("delete original m_findex.");
+            m_findex->close();
+            safe_delete(m_findex);
+        }
+        LOG_DEBUG("m_files.size(): `, rw_tag: `", m_files.size(), m_rw_tag);
+        m_findex = u->m_findex;
+        m_vsize = u->m_vsize;
+        ((IComboIndex *)m_index)->commit_index0();
+
+        delete fseal;
+        delete gc_layer;
+        return 0;
+    }
+
+
+    int restack(IFileRW* upper_layer) override {
+        Lock _(m_rw_mtx);
+        LOG_INFO("restack new rwlayer, seal old.");
+        int ret = reserve_top_layer((LSMTFile*)upper_layer);
+        if (ret != 0) {
+            LOG_ERRNO_RETURN(0, -1, "restack new rwlayer failed.");
+        }
+        LOG_INFO("current ro layers count: `", m_files.size() - 1);
+        return ret;
+    }
+
 };
 class LSMTSparseFile : public LSMTFile {
 public:
@@ -1102,6 +1186,7 @@ public:
         m_files[m_rw_tag]->ftruncate(vsize + HeaderTrailer::SPACE);
         return 0;
     }
+
 };
 
 class LSMTWarpFile : public LSMTFile {
@@ -1282,7 +1367,7 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
     auto ret = file->fstat(&stat);
     if (ret < 0)
         LOG_ERRNO_RETURN(0, nullptr, "failed to stat file.");
-    assert(pht->is_sparse_rw() == false);
+    assert(trailer || pht->is_sparse_rw() == false);
     uint64_t index_bytes;
     if (trailer) {
         if (!pht->is_data_file())
@@ -1687,7 +1772,7 @@ static IMemoryIndex *load_merge_index(vector<IFile *> &files, vector<UUID> &uuid
         }
     }
 
-    std::reverse(files.begin(), files.end());
+    std::reverse(files.begin(), files.end()); // reverse files: layerN-1 ... layer0
     std::reverse(tm.indexes.begin(), tm.indexes.end());
     std::reverse(uuid.begin(), uuid.end());
     auto pmi = merge_memory_indexes((const IMemoryIndex **)&tm.indexes[0], tm.indexes.size());
@@ -1696,6 +1781,7 @@ static IMemoryIndex *load_merge_index(vector<IFile *> &files, vector<UUID> &uuid
     return pmi;
 }
 
+// layer0 ... layerN-1
 IFileRO *open_files_ro(IFile **files, size_t n, bool ownership) {
     if (n > MAX_STACK_LAYERS) {
         LOG_ERROR_RETURN(0, 0, "open too many files (` > `)", n, MAX_STACK_LAYERS);
@@ -1707,6 +1793,7 @@ IFileRO *open_files_ro(IFile **files, size_t n, bool ownership) {
     vector<IFile *> m_files(files, files + n);
     vector<UUID> m_uuid(n);
     auto pmi = load_merge_index(m_files, m_uuid, vsize);
+    // reverse files: layerN-1 ... layer0
     if (!pmi)
         return nullptr;
 
