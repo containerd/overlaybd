@@ -149,6 +149,7 @@ public:
     // backing index must NOT be IMemoryIndex0!
     virtual int backing_index(const IMemoryIndex *bi) = 0;
     virtual const IMemoryIndex *backing_index() const = 0;
+    virtual int front_index(const IMemoryIndex0 *fi) = 0;
     virtual const IMemoryIndex0 *front_index() const = 0;
 
     // dump index0 which needs to compact
