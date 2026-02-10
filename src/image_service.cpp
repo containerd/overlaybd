@@ -16,6 +16,7 @@
 #include "image_service.h"
 #include "config.h"
 #include "image_file.h"
+#include "api_server.h"
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
 #include <photon/common/io-alloc.h>
@@ -440,6 +441,24 @@ int ImageService::init() {
                 10000000, (uint64_t)1048576 * 4096, global_fs.io_alloc);
         }
     }
+    if (global_conf.serviceConfig().enable()) {
+        // auto sock_path = global_conf.serviceConfig().domainSocket();
+        // if (access(sock_path.c_str(), 0) == 0) {
+        //     if (unlink(sock_path.c_str()) != 0) {
+        //         LOG_ERRNO_RETURN(0, -1, "failed to remove old socket file");
+        //     }
+        // }
+        // listen the domainSocket and create a HTTP SERVER
+        /*
+          handler definition:
+            - create a live snapshot for a imageFile
+                /snapshot?dev_id=${devID}&config=${config}
+        */
+        api_handler.reset(new ApiHandler(this));
+        api_server = new ApiServer(global_conf.serviceConfig().address(), api_handler.get());
+        if(!api_server->ready)
+            LOG_ERROR_RETURN(0, -1, "Failed to start http server for live snapshot");
+    }
     return 0;
 }
 
@@ -456,7 +475,7 @@ bool ImageService::enable_acceleration() {
     }
 }
 
-ImageFile *ImageService::create_image_file(const char *config_path) {
+ImageFile *ImageService::create_image_file(const char *config_path, const std::string &dev_id) {
     ImageConfigNS::GlobalConfig defaultDlCfg;
     if (!defaultDlCfg.ParseJSON(m_config_path)) {
         LOG_WARN("default download config parse failed, ignore");
@@ -479,7 +498,7 @@ ImageFile *ImageService::create_image_file(const char *config_path) {
     }
 
     auto resFile = cfg.resultFile();
-    ImageFile *ret = new ImageFile(cfg, *this);
+    ImageFile *ret = new ImageFile(cfg, *this, dev_id);
     if (ret->m_status <= 0) {
         std::string data = "failed:" + ret->m_exception;
         set_result_file(resFile, data);
@@ -489,6 +508,29 @@ ImageFile *ImageService::create_image_file(const char *config_path) {
     std::string data = "success";
     set_result_file(resFile, data);
     return ret;
+}
+
+int ImageService::register_image_file(const std::string& dev_id, ImageFile* file) {
+    if (dev_id.empty())
+        return 0;
+    if(find_image_file(dev_id) != nullptr)
+        LOG_ERROR_RETURN(0, -1, "dev id exists: `", dev_id);
+    m_image_files[dev_id] = file;
+    LOG_INFO("Registered image file for dev_id: `", dev_id);
+    return 0;
+}
+
+int ImageService::unregister_image_file(const std::string& dev_id) {
+    if (dev_id.empty())
+        return 0;
+    m_image_files.erase(dev_id);
+    LOG_INFO("Unregistered image file for dev_id: `", dev_id);
+    return 0;
+}
+
+ImageFile* ImageService::find_image_file(const std::string& dev_id) {
+    auto it = m_image_files.find(dev_id);
+    return (it != m_image_files.end()) ? it->second : nullptr;
 }
 
 ImageService::ImageService(const char *config_path) {
@@ -503,6 +545,8 @@ ImageService::~ImageService() {
     delete global_fs.srcfs;
     delete global_fs.io_alloc;
     delete exporter;
+    delete api_server;
+    
     LOG_INFO("image service is fully stopped");
 }
 

@@ -16,6 +16,7 @@
 #include "version.h"
 #include "image_file.h"
 #include "image_service.h"
+#include "tools/comm_func.h"
 #include <photon/common/alog.h>
 #include <photon/common/event-loop.h>
 #include <photon/fs/filesystem.h>
@@ -34,6 +35,7 @@
 #include <scsi/scsi.h>
 #include <sys/resource.h>
 #include <sys/prctl.h>
+#include <string>
 
 class TCMUDevLoop;
 
@@ -46,6 +48,7 @@ struct obd_dev {
     uint32_t inflight;
     std::thread *work;
     photon::semaphore start, end;
+    std::string dev_id;
 };
 
 struct handle_args {
@@ -303,7 +306,7 @@ public:
 };
 
 static char *tcmu_get_path(struct tcmu_device *dev) {
-    char *config = strchr(tcmu_dev_get_cfgstring(dev), '/');
+    char *config = strchr(tcmu_dev_get_cfgstring(dev), '/'); // dev_config=overlaybd/<config_path>[;<dev_id>]
     if (!config) {
         LOG_ERROR("no configuration found in cfgstring");
         return NULL;
@@ -314,16 +317,18 @@ static char *tcmu_get_path(struct tcmu_device *dev) {
 }
 
 static int dev_open(struct tcmu_device *dev) {
-    char *config = tcmu_get_path(dev);
+    char *config = tcmu_get_path(dev); // <config_path>[;<dev_id>]
     LOG_INFO("dev open `", config);
     if (!config) {
         LOG_ERROR_RETURN(0, -EPERM, "get image config path failed");
     }
+    std::string config_path, dev_id;
+    parse_config_and_dev_id(config, config_path, dev_id);
 
     struct timeval start;
     gettimeofday(&start, NULL);
 
-    ImageFile *file = imgservice->create_image_file(config);
+    ImageFile *file = imgservice->create_image_file(config_path.c_str(), dev_id);
     if (file == nullptr) {
         LOG_ERROR_RETURN(0, -EPERM, "create image file failed");
     }
@@ -332,6 +337,7 @@ static int dev_open(struct tcmu_device *dev) {
     odev->aio_pending_wakeups = 0;
     odev->inflight = 0;
     odev->file = file;
+    odev->dev_id = dev_id;
 
     tcmu_dev_set_private(dev, odev);
     tcmu_dev_set_block_size(dev, file->block_size);
@@ -366,7 +372,7 @@ static int dev_open(struct tcmu_device *dev) {
     gettimeofday(&end, NULL);
 
     uint64_t elapsed = 1000000UL * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
-    LOG_INFO("dev opened `, time cost ` ms", config, elapsed / 1000);
+    LOG_INFO("dev opened `, time cost ` ms", config_path.c_str(), elapsed / 1000);
     return 0;
 }
 
