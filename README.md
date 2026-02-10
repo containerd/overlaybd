@@ -169,7 +169,11 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
         "updateInterval": 60000000
     },
     "enableAudit": true,
-    "auditPath": "/var/log/overlaybd-audit.log"
+    "auditPath": "/var/log/overlaybd-audit.log",
+    "serviceConfig": {
+        "enable": false,
+        "address": "http://127.0.0.1:9862"
+    }
 }
 ```
 
@@ -210,6 +214,8 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | certConfig.certFile | The path for SSL/TLS client certificate file                                                          |
 | certConfig.keyFile  | The path for SSL/TLS client key file                                                                  |
 | userAgent  | customized userAgent to identify HTTP request. default value is package version like 'overlaybd/1.1.14-6c449832'      |
+| serviceConfig.enable    | Enable live snapshot API service, `false` is default.                                      |
+| serviceConfig.address   | API service listening address, default `http://127.0.0.1:9862`.                             |
 
 
 > NOTE: `download` is the config for background downloading. After an overlaybd device is lauched, a background task will be running to fetch the whole blobs into local directories. After downloading, I/O requests are directed to local files. Unlike other options, download config is reloaded when a device launching.
@@ -381,6 +387,68 @@ At last, compression may be needed.
 ```
 The zfile can be used as lower layer with online decompression.
 
+### Live Snapshot
+
+Overlaybd supports creating live snapshots without stopping the device. This feature allows you to capture the current state of a writable layer and stack a new writable layer on top.
+
+#### Device ID
+
+To use the live snapshot feature, you need to specify a device ID when creating the overlaybd device. The device ID is appended to the config path with a semicolon separator:
+
+```bash
+echo -n dev_config=overlaybd//root/config.v1.json;123 > /sys/kernel/config/target/core/user_1/vol1/control
+```
+
+#### Enable API Service
+
+Add the following to your `overlaybd.json`:
+
+```json
+"serviceConfig": {
+    "enable": true,
+    "address": "http://127.0.0.1:9862"
+}
+```
+
+#### Create Snapshot
+
+Send an HTTP POST request to the `/snapshot` endpoint:
+
+```bash
+curl -X POST "http://127.0.0.1:9862/snapshot?dev_id=123&config=/path/to/new_config.json"
+```
+
+The response will be in JSON format:
+
+```json
+{
+    "success": true,
+    "message": "Snapshot created successfully"
+}
+```
+
+#### New Config Format
+
+The new config file should include the current upper layer as the last lower layer:
+
+```json
+{
+    "lowers": [
+        {
+            "file": "/opt/overlaybd/layer0"
+        },
+        {
+            "file": "/path/to/current_upper_data.lsmt"
+        }
+    ],
+    "upper": {
+        "index": "/path/to/new_upper_index.lsmt",
+        "data": "/path/to/new_upper_data.lsmt"
+    }
+}
+```
+
+**Note**: The new upper layer must be different from the old upper layer.
 
 ## Kernel module
 
