@@ -16,6 +16,7 @@ limitations under the License.
 #pragma once
 
 #include <cctype>
+#include <cstdint>
 #include <string>
 #include <photon/fs/filesystem.h>
 
