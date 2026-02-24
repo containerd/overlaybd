@@ -41,10 +41,15 @@ static std::string SEALED_FILE_NAME = "overlaybd.sealed";
 
 class ImageFile : public photon::fs::ForwardFile {
 public:
-    ImageFile(ImageConfigNS::ImageConfig &_conf, ImageService &is)
+    ImageFile(ImageConfigNS::ImageConfig &_conf, ImageService &is, const std::string &dev_id)
         : ForwardFile(nullptr), image_service(is), m_lower_file(nullptr) {
         conf.CopyFrom(_conf, conf.GetAllocator());
         m_exception = "";
+        if(image_service.register_image_file(dev_id, this) != 0) { // register itself
+            set_failed("duplicated dev id: " + dev_id);
+            return;
+        }
+        m_dev_id = dev_id;
         m_status = init_image_file();
         if (m_status == 1) {
             struct stat st;
@@ -55,6 +60,7 @@ public:
 
     ~ImageFile() {
         m_status = -1;
+        image_service.unregister_image_file(m_dev_id); // unregister itself
         if (dl_thread_jh != nullptr)
             photon::thread_join(dl_thread_jh);
         delete m_prefetcher;
@@ -113,6 +119,8 @@ public:
 
     int compact(IFile *as);
 
+    int create_snapshot(const char *config_path);
+
 private:
     Prefetcher *m_prefetcher = nullptr;
     ImageConfigNS::ImageConfig conf;
@@ -121,6 +129,7 @@ private:
     ImageService &image_service;
     photon::fs::IFile *m_lower_file = nullptr;
     photon::fs::IFile *m_upper_file = nullptr;
+    std::string m_dev_id = "";
 
     int init_image_file();
     template<typename...Ts> void set_failed(const Ts&...xs);

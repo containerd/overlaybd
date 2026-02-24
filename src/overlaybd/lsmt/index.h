@@ -149,14 +149,18 @@ public:
     // backing index must NOT be IMemoryIndex0!
     virtual int backing_index(const IMemoryIndex *bi) = 0;
     virtual const IMemoryIndex *backing_index() const = 0;
+    virtual int front_index(const IMemoryIndex0 *fi) = 0;
     virtual const IMemoryIndex0 *front_index() const = 0;
 
     // dump index0 which needs to compact
     // and then clear the original index0.
     // virtual IMemoryIndex0* gc_index() = 0;
     virtual IMemoryIndex *load_range_index(int, int) const = 0;
-
-
+    
+    // commit index0 (upper index) to backing index (lower index)
+    // rebuild backing index before async-compact.
+    // merge the image's backing_index and gc_idx( dump from original index0 ) for pread()
+    virtual int commit_index0() = 0;
 };
 
 // create writable level 0 memory index from an array of mappings;

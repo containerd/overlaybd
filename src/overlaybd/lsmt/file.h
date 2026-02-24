@@ -46,10 +46,18 @@ public:
 
     virtual IMemoryIndex *index() const = 0;
 
+    virtual int index(const IMemoryIndex *index) = 0;
+
     // return uuid of  m_files[layer_idx];
     virtual int get_uuid(UUID &out, size_t layer_idx = 0) const = 0;
 
     virtual std::vector<IFile *> get_lower_files() const = 0;
+
+    virtual IFile *get_file(size_t file_idx) const = 0;
+
+    virtual int insert_file(IFile * file) = 0;
+
+    virtual int clear_files() = 0;
 
     virtual ssize_t seek_data(off_t begin, off_t end, std::vector<Segment> &segs) = 0;
 
@@ -101,6 +109,8 @@ public:
     };
     virtual DataStat data_stat() const = 0;
 
+    // close_seal current RW layer (change it to RO layer) and re-stack with upper layer
+    virtual int restack(IFileRW *upper) = 0;
 };
 
 // create a new writable LSMT file constitued by a data file and an index file,

@@ -50,3 +50,5 @@ photon::fs::IFileSystem *create_ext4fs(photon::fs::IFile *imgfile, bool mkfs,
 
 bool is_erofs_fs(const photon::fs::IFile *imgfile);
 photon::fs::IFileSystem *create_erofs_fs(photon::fs::IFile *imgfile, uint64_t blksz);
+
+void parse_config_and_dev_id(const char *raw_config, std::string &config_path, std::string &dev_id);

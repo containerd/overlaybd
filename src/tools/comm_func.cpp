@@ -24,6 +24,8 @@
 #include "../image_service.h"
 #include "../image_file.h"
 #include "../overlaybd/tar/erofs/erofs_fs.h"
+#include <string>
+#include <cstring>
 
 
 using namespace std;
@@ -51,7 +53,7 @@ int create_overlaybd(const std::string &srv_config, const std::string &dev_confi
         fprintf(stderr, "failed to create image service\n");
         exit(-1);
     }
-    imgfile = imgservice->create_image_file(dev_config.c_str());
+    imgfile = imgservice->create_image_file(dev_config.c_str(), "");
     if (imgfile == nullptr) {
         fprintf(stderr, "failed to create image file\n");
         exit(-1);
@@ -111,4 +113,16 @@ IFile *create_uploader(ZFile::CompressArgs *zfile_args,  IFile *src,
         exit(-1);
     }
     return upload_builder;
+}
+
+void parse_config_and_dev_id(const char *raw_config, std::string &config_path, std::string &dev_id) { 
+    const char *semicolon = strchr(raw_config, ';');
+    if(!semicolon) {
+        config_path = std::string(raw_config);
+        dev_id = std::string("");
+    }
+    else {
+        config_path = std::string(raw_config, semicolon - raw_config);
+        dev_id = std::string(semicolon + 1);
+    }
 }
