@@ -33,7 +33,7 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 
 namespace LSMT {
 
-static const int MAX_STACK_LAYERS = 255;
+static const int MAX_STACK_LAYERS = 65535;
 
 static const uint32_t ALIGNMENT = 512; // same as trim block size.
 static const uint32_t ALIGNMENT4K = 4096;

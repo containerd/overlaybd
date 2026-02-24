@@ -692,7 +692,7 @@ public:
     bool m_init_concurrency = false;
     uint64_t m_data_offset = HeaderTrailer::SPACE / ALIGNMENT;
 
-    uint8_t m_rw_tag = 0;
+    uint16_t m_rw_tag = 0;
 
     Mutex m_rw_mtx;
     IFile *m_findex = nullptr;
@@ -1120,7 +1120,7 @@ public:
 
     virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
         LOG_DEBUG("write fs meta {offset: `, len: `}", offset, count);
-        auto tag = m_rw_tag + (uint8_t)SegmentType::fsMeta;
+        auto tag = m_rw_tag + (uint16_t)SegmentType::fsMeta;
         SegmentMapping m{
             (uint64_t)offset / (uint64_t)ALIGNMENT,
             (uint32_t)count / (uint32_t)ALIGNMENT,
@@ -1159,7 +1159,7 @@ public:
             m.length = (Segment::MAX_LENGTH < lba.count / ALIGNMENT ? Segment::MAX_LENGTH
                                                                     : lba.count / ALIGNMENT);
             m.moffset = lba.roffset / ALIGNMENT;
-            m.tag = m_rw_tag + (uint8_t)SegmentType::remoteData;
+            m.tag = m_rw_tag + (uint16_t)SegmentType::remoteData;
             LOG_DEBUG("insert segment: ` into findex: `", m, m_findex);
             static_cast<IMemoryIndex0 *>(m_index)->insert(m);
             append_index(m);
@@ -1179,7 +1179,7 @@ public:
         size_t compacted_idx_size = 0;
         moffset /= ALIGNMENT;
         for (auto &m : marray) {
-            if (m.tag == (uint8_t)SegmentType::remoteData) {
+            if (m.tag == (uint16_t)SegmentType::remoteData) {
                 compact_index.push_back(m);
                 compacted_idx_size++;
                 continue;
@@ -1271,7 +1271,7 @@ static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer, ssize_t
 }
 
 static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer, bool trailer,
-                                     uint8_t warp_file_tag = 0) {
+                                     uint16_t warp_file_tag = 0) {
 
     ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
     auto pht = verify_ht(file, buf);
@@ -1315,7 +1315,7 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
     }
 
     size_t index_size = 0;
-    uint8_t min_tag = 255;
+    uint16_t min_tag = 65535;
     for (size_t i = 0; i < pht->index_size; ++i) {
         if (ibuf[i].offset != SegmentMapping::INVALID_OFFSET) {
             ibuf[index_size] = ibuf[i];
@@ -1329,9 +1329,9 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
         LOG_INFO("rebuild index tag for LSMTWarpFile.");
         for (size_t i = 0; i < index_size; i++) {
             if (warp_file_tag == 1) /* only fsmeta */
-                ibuf[i].tag = (uint8_t)SegmentType::fsMeta;
+                ibuf[i].tag = (uint16_t)SegmentType::fsMeta;
             if (warp_file_tag == 2) /* only remote data */
-                ibuf[i].tag = (uint8_t)SegmentType::remoteData;
+                ibuf[i].tag = (uint16_t)SegmentType::remoteData;
             if (warp_file_tag == 3) /* only remote data */
                 ibuf[i].tag -= min_tag;
             LOG_DEBUG("`", ibuf[i]);
@@ -1485,8 +1485,8 @@ IFileRW *create_warpfile(WarpFileArgs &args, bool ownership) {
     write_header_trailer(rst->m_findex, true, false, false, HeaderTrailer::SPACE, 0, info);
     rst->m_index = create_memory_index0((const SegmentMapping *)nullptr, 0, 0, 0);
     rst->m_files.resize(2);
-    rst->m_files[(uint8_t)SegmentType::fsMeta] = args.fsmeta;
-    rst->m_files[(uint8_t)SegmentType::remoteData] = args.target_file;
+    rst->m_files[(uint16_t)SegmentType::fsMeta] = args.fsmeta;
+    rst->m_files[(uint16_t)SegmentType::remoteData] = args.target_file;
     rst->m_vsize = args.virtual_size;
     rst->m_file_ownership = ownership;
     UUID raw;
