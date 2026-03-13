@@ -555,7 +555,7 @@ void ImageFile::set_failed(const Ts &...xs) {
     }
 }
 
-int ImageFile::create_snapshot(const char *config_path) {
+int ImageFile::create_snapshot(const char *new_config_path) {
     // load new config file to get the snapshot layer path
     // open new upper layer
     // restack() current RW layer as snapshot layer
@@ -565,13 +565,13 @@ int ImageFile::create_snapshot(const char *config_path) {
     ImageConfigNS::ImageConfig new_cfg;
     LSMT::IFileRW *upper_file = nullptr;
 
-    LOG_INFO("Load new config `.", config_path);
-    if (!new_cfg.ParseJSON(config_path)) {
-        LOG_ERROR_RETURN(0, -1, "Error parse new config json: `.", config_path);
+    LOG_INFO("Load new config `.", new_config_path);
+    if (!new_cfg.ParseJSON(new_config_path)) {
+        LOG_ERROR_RETURN(0, -1, "Error parse new config json: `.", new_config_path);
     }
 
     auto upper = new_cfg.upper();
-    auto lowers = new_cfg.lowers();
+    // auto lowers = new_cfg.lowers();
     // if(lowers[lowers.size()-1].file() != conf.upper().data())
     //     LOG_ERROR_RETURN(0, -1, "The last lower layer(`) should be the same as old upper layer(`) after restack.", lowers[lowers.size()-1].file(), conf.upper().data());
     if(upper.index() == conf.upper().index() || upper.data() == conf.upper().data())
@@ -589,7 +589,7 @@ int ImageFile::create_snapshot(const char *config_path) {
         auto sealed = ((LSMT::IFileRW *)m_upper_file)->get_file(0);
         ((LSMT::IFileRO *)m_lower_file)->insert_file(sealed);
         ((LSMT::IFileRW *)m_upper_file)->clear_files();
-        delete m_upper_file;
+        safe_delete(m_upper_file);
     }
     // set m_lower_file->m_index = m_file->m_index->m_backing_index because m_file is not responsible for the destruction of m_backing_index
     auto combo_index = (LSMT::IComboIndex *)((LSMT::IFileRW *)m_file)->index(); // m_file->m_index
@@ -599,6 +599,15 @@ int ImageFile::create_snapshot(const char *config_path) {
     combo_index->front_index(upper_file_index);
 
     m_upper_file = upper_file;
+
+    // overwrite the config file in use in case the old files are used again after the process restarts
+    auto lfs = photon::fs::new_localfs_adaptor();
+    if (lfs == nullptr) {
+        LOG_ERRNO_RETURN(0, -1, "new localfs_adaptor failed");
+    }
+    DEFER(delete lfs);
+    lfs->rename(new_config_path, this->config_path.c_str());
+    // LOG_INFO("Overwrite the old config file: ` -> `.", new_config_path, this->config_path);
     
     return 0;
 }
