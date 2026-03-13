@@ -16,30 +16,5 @@
 
 #pragma once
 
-#include <map>
-#include <string>
-#include <photon/net/http/server.h>
-#include <photon/net/socket.h>
-
-class ImageService;
-
-class ApiHandler : public photon::net::http::HTTPHandler {
-public:
-    ImageService *imgservice;
-    std::map<std::string, std::string> params;
-
-    ApiHandler(ImageService *imgservice) : imgservice(imgservice) {}
-    int handle_request(photon::net::http::Request& req,
-                       photon::net::http::Response& resp,
-                       std::string_view) override;
-    void parse_params(std::string_view query);
-};
-
-struct ApiServer {
-    photon::net::ISocketServer* tcpserver = nullptr;
-    photon::net::http::HTTPServer* httpserver = nullptr;
-    bool ready = false;
-
-    ApiServer(const std::string &addr, ApiHandler* handler);
-    ~ApiServer();
-};
+int start_api_server(ApiServer *&api_server , ImageService *imgservice, const std::string &addr);
+int stop_api_server(ApiServer *api_server);
