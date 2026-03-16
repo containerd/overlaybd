@@ -278,30 +278,15 @@ public:
 
         DevIDRegisterTest::SetUp();
     }
-    int request_snapshot(const char* request_url) {
-        // auto request = new photon::net::cURL();
-        // DEFER({ delete request; });
+    long request_snapshot(const char* request_url) {
+        auto request = new photon::net::cURL();
+        DEFER({ delete request; });
 
-        // LOG_INFO("request url: `", request_url);
-        // photon::net::StringWriter writer;
-        // auto ret = request->POST(request_url, &writer, (int64_t)1000000);
-        // LOG_INFO("response: `", writer.string);
-        // return ret;
-
-        auto client = photon::net::http::new_http_client();
-        DEFER(delete client);
-        auto op = client->new_operation(photon::net::http::Verb::GET, request_url);
-        DEFER(delete op);
-        op->req.headers.content_length(0);
-        // std::cout << "op->req.target(): " << op->req.target() << " op->req.query(): " << op->req.query() << std::endl;
-        client->call(op);
-        auto code = op->status_code;
-        std::string buf;
-        buf.resize(op->resp.headers.content_length());
-        op->resp.read((void*)buf.data(), op->resp.headers.content_length());
-        LOG_INFO(VALUE(buf));
-
-        return code;
+        LOG_INFO("request url: `", request_url);
+        photon::net::StringWriter writer;
+        auto ret = request->POST(request_url, &writer, (int64_t)1000000);
+        LOG_INFO("response: `", writer.string);
+        return ret;
     }
 };
 
@@ -403,7 +388,7 @@ TEST_F(CreateSnapshotTest, create_snapshot) {
 
     EXPECT_EQ(imgfile0->create_snapshot(new_image_config_path.c_str()), 0);
 
-    ImageFile* imgfile1 = imgservice->create_image_file(image_config_path.c_str(), "");
+    ImageFile* imgfile1 = imgservice->create_image_file(new_image_config_path.c_str(), "");
     EXPECT_NE(imgfile1, nullptr);
 
     std::cout << "create_snapshot & verify" << std::endl;
@@ -462,7 +447,7 @@ TEST_F(CreateSnapshotTest, create_snapshot_sparse) {
 
     EXPECT_EQ(imgfile0->create_snapshot(new_image_config_path.c_str()), 0);
 
-    ImageFile* imgfile1 = imgservice->create_image_file(image_config_path.c_str(), "");
+    ImageFile* imgfile1 = imgservice->create_image_file(new_image_config_path.c_str(), "");
     EXPECT_NE(imgfile1, nullptr);
 
     std::cout << "create_snapshot & verify" << std::endl;

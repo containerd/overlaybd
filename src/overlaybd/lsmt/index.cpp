@@ -652,10 +652,12 @@ public:
 
     virtual int front_index(const IMemoryIndex0 *fi) override {
         if (!fi) {
-            LOG_ERROR_RETURN(EINVAL, -1, "Invalid index!");
+            errno = EINVAL;
+            LOG_ERROR("Invalid index!");
+            return -1;
         }
         if (m_ownership && m_index0 != nullptr) { // !!!
-            safe_delete(m_index0); // delete m_index0;
+            delete m_index0;
             m_index0 = nullptr;
         }
         m_index0 = (Index0 *)fi;
@@ -772,10 +774,10 @@ public:
             merged_index->insert(p);
         }
         if(m_ownership) { // !!!
-            safe_delete(m_backing_index);
+            delete m_backing_index;
         }
         m_backing_index = (Index*)(merged_index->make_read_only_index()); // set ownership=false
-        safe_delete(merged_index);
+        delete merged_index;
         LOG_INFO("rebuild backing index done. {count: `}", m_backing_index->size());
         // Clear original index0
         mapping.clear();

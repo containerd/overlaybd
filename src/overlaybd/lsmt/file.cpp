@@ -502,10 +502,12 @@ public:
 
     virtual int index(const IMemoryIndex *index) override {
         if(!index || !index->buffer()) {
-            LOG_ERROR_RETURN(EINVAL, -1, "Invalid index!");
+            errno = EINVAL;
+            LOG_ERROR("Invalid index!");
+            return -1;
         }
         if (m_index != nullptr) {
-            safe_delete(m_index);
+            delete m_index;
             m_index = nullptr;
         }
         m_index = (IMemoryIndex *)index;
@@ -1068,8 +1070,8 @@ public:
         m_vsize = u->m_vsize;
         ((IComboIndex *)m_index)->commit_index0();
 
-        safe_delete(fseal);
-        safe_delete(gc_layer);
+        delete fseal;
+        delete gc_layer;
         return 0;
     }
 
