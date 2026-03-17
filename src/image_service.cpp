@@ -454,10 +454,10 @@ int ImageService::init() {
             - create a live snapshot for a imageFile
                 /snapshot?dev_id=${devID}&config=${config}
         */
-        api_handler.reset(new ApiHandler(this));
-        api_server = new ApiServer(global_conf.serviceConfig().address(), api_handler.get());
-        if(!api_server->ready)
+        auto ret = start_api_server(api_server, this, global_conf.serviceConfig().address());
+        if (ret == -1) {
             LOG_ERROR_RETURN(0, -1, "Failed to start http server for live snapshot");
+        }
     }
     return 0;
 }
@@ -498,7 +498,7 @@ ImageFile *ImageService::create_image_file(const char *config_path, const std::s
     }
 
     auto resFile = cfg.resultFile();
-    ImageFile *ret = new ImageFile(cfg, *this, dev_id);
+    ImageFile *ret = new ImageFile(cfg, *this, dev_id, config_path);
     if (ret->m_status <= 0) {
         std::string data = "failed:" + ret->m_exception;
         set_result_file(resFile, data);
@@ -545,7 +545,7 @@ ImageService::~ImageService() {
     delete global_fs.srcfs;
     delete global_fs.io_alloc;
     delete exporter;
-    delete api_server;
+    stop_api_server(api_server);
     
     LOG_INFO("image service is fully stopped");
 }
