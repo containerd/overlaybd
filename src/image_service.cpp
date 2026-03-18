@@ -166,6 +166,45 @@ int load_cred_from_http(const std::string addr /* http server */, const std::str
     return parse_auths(response.data().auths(), remote_path, username, password);
 }
 
+int load_cred_from_https(const std::string addr /* https server */, const std::string &remote_path,
+                         std::string &username, std::string &password, int timeout,
+                         const std::string &client_cert_path, const std::string &client_key_path,
+                         const std::string &server_ca_path) {
+
+    auto request = new photon::net::cURL();
+    DEFER({ delete request; });
+
+    // Configure mTLS: client certificate, client key, and server CA verification
+    if (!server_ca_path.empty()) {
+        request->set_cafile(server_ca_path.c_str());
+        request->setopt(CURLOPT_SSL_VERIFYPEER, 1L).setopt(CURLOPT_SSL_VERIFYHOST, 2L);
+    }
+    if (!client_cert_path.empty() && !client_key_path.empty()) {
+        request->setopt(CURLOPT_SSLCERT, client_cert_path.c_str());
+        request->setopt(CURLOPT_SSLKEY, client_key_path.c_str());
+    }
+
+    auto request_url = addr + "?remote_url=" + remote_path;
+    LOG_INFO("request url: `", request_url);
+    photon::net::StringWriter writer;
+    auto ret = request->GET(request_url.c_str(), &writer, (int64_t)timeout * 1000000);
+    if (ret != 200) {
+        LOG_ERRNO_RETURN(0, -1, "connect to auth component failed. http response code: `", ret);
+    }
+    LOG_DEBUG(writer.string);
+    ImageAuthResponse response;
+    LOG_DEBUG("response size: `", writer.string.size());
+    if (response.ParseJSONStream(writer.string) == false) {
+        LOG_ERRNO_RETURN(0, -1, "parse http response message failed: `", writer.string);
+    }
+    LOG_INFO("traceId: `, succ: `", response.traceId(), response.success());
+    if (response.success() == false) {
+        LOG_ERRNO_RETURN(0, -1, "http request failed.");
+    }
+    ImageConfigNS::AuthConfig cfg;
+    return parse_auths(response.data().auths(), remote_path, username, password);
+}
+
 int ImageService::read_global_config_and_set() {
     LOG_INFO("using config `", m_config_path);
     if (!global_conf.ParseJSON(m_config_path)) {
@@ -241,6 +280,13 @@ ImageService::reload_auth(const char *remote_path) {
         } else if (mode == "http") {
             auto timeout = global_conf.credentialConfig().timeout();
             res = load_cred_from_http(path, std::string(remote_path), username, password, timeout);
+        } else if (mode == "https") {
+            auto timeout = global_conf.credentialConfig().timeout();
+            auto client_cert = global_conf.credentialConfig().client_cert_path();
+            auto client_key = global_conf.credentialConfig().client_key_path();
+            auto server_ca = global_conf.credentialConfig().server_ca_path();
+            res = load_cred_from_https(path, std::string(remote_path), username, password,
+                                       timeout, client_cert, client_key, server_ca);
         } else {
             LOG_ERROR("invalid mode for authentication.");
             return std::make_pair("","");
