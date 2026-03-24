@@ -179,8 +179,12 @@ int load_cred_from_https(const std::string addr /* https server */, const std::s
         request->set_cafile(server_ca_path.c_str());
         request->setopt(CURLOPT_SSL_VERIFYPEER, 1L).setopt(CURLOPT_SSL_VERIFYHOST, 2L);
     }
-    if (!client_cert_path.empty() && !client_key_path.empty()) {
+    if (!client_cert_path.empty()) {
         request->setopt(CURLOPT_SSLCERT, client_cert_path.c_str());
+    }
+    // When CURLOPT_SSLKEY is not set, libcurl expects the private key to be
+    // bundled in the same PEM file as the client certificate.
+    if (!client_key_path.empty()) {
         request->setopt(CURLOPT_SSLKEY, client_key_path.c_str());
     }
 
