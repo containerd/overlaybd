@@ -193,8 +193,11 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | gzipCacheConfig.cacheSizeGB | The max size of cache, in GB.                                                                 |
 | gzipCacheConfig.refillSize  | The refill size from source, in byte. `262144` is default (256 KB).                           |
 | credentialFilePath(legacy)  | The credential used for fetching images on registry. `/opt/overlaybd/cred.json` is the default value. |
-| credentialConfig.mode       | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` |
+| credentialConfig.mode       | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` <br> - `https` means sending an https request to `credentialConfig.path`, with optional client certificate authentication and CA pinning |
 | credentialConfig.path       | credential file path or url which is determined by `mode`                                     |
+| credentialConfig.client_cert_path | Optional. Path to the client certificate file (`https` mode). May contain the private key in the same PEM file. |
+| credentialConfig.client_key_path  | Optional. Path to the client private key file (`https` mode). Only needed when the key is separate from the certificate. |
+| credentialConfig.server_ca_path   | Optional. Path to the CA certificate used to verify the server (`https` mode). If omitted, the system CA bundle is used. When set, **only** this CA file is trusted. |
 | download.enable     | Whether background downloading is enabled or not.                                                     |
 | download.delay      | The seconds waiting to start downloading task after the overlaybd device launched.                    |
 | download.delayExtra | A random extra delay is attached to delay, avoiding too many tasks started at the same time.          |
@@ -292,6 +295,35 @@ Overlaybd supports serveral credential mode. Here are some example `credentialCo
 }
 ```
 we write a sample http server in `test/simple_auth_server.cpp`
+
+- mode **https**
+
+  the `credentialConfig.path` should be an HTTPS server listening address. Unlike `http` mode, the `https://` scheme prefix must be included in the path (e.g. `https://localhost:19876/auth`). The optional `client_cert_path`/`client_key_path` fields enable client certificate authentication, and `server_ca_path` pins trust to a specific CA. For a local auth server, providing all three fields secures communication exclusively with that server (mutual TLS).
+
+```json
+#### /etc/overlaybd/config.json ####
+{
+  "logLevel": 1,
+  "logPath": "/var/log/overlaybd.log",
+  ...
+  "credentialConfig": {
+      "mode": "https",
+      "path": "https://localhost:19876/auth",
+      "client_cert_path": "/etc/overlaybd/client.crt",
+      "client_key_path": "/etc/overlaybd/client.key",
+      "server_ca_path": "/etc/overlaybd/ca.crt"
+    },
+  ...
+}
+```
+  overlaybd will send an https request with mTLS to the server with `remote_url` like this:
+> GET "https://localhost:19876/auth?remote_url=https://hub.docker.com/v2/overlaybd/ubuntu/blobs/sha256:47e63559a8487efb55b2f1ccea9cfc04110a185c49785fdf1329d1ea462ce5f0"
+  the server response format is the same as the `http` mode.
+
+  All three TLS fields are optional and independently configured:
+  - `client_cert_path` sets the client certificate. If the PEM file also contains the private key, `client_key_path` can be omitted.
+  - `client_key_path` sets the client private key. Only needed when the key is in a separate file from the certificate.
+  - If `server_ca_path` is omitted, the system CA bundle is used to verify the server certificate. When `server_ca_path` is set, **only** the specified CA file is used — the system CA bundle is not consulted.
 
 
 ## Usage

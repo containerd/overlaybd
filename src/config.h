@@ -97,6 +97,9 @@ struct CredentialConfig : public ConfigUtils::Config {
     APPCFG_PARA(mode, std::string, "");
     APPCFG_PARA(path, std::string, "");
     APPCFG_PARA(timeout, int, 1);
+    APPCFG_PARA(client_cert_path, std::string, "");
+    APPCFG_PARA(client_key_path, std::string, "");
+    APPCFG_PARA(server_ca_path, std::string, "");
 };
 
 struct CacheConfig : public ConfigUtils::Config {
