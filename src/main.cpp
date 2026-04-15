@@ -35,6 +35,7 @@
 #include <scsi/scsi.h>
 #include <sys/resource.h>
 #include <sys/prctl.h>
+#include <linux/netlink.h>
 #include <string>
 
 class TCMUDevLoop;
@@ -87,6 +88,32 @@ public:
         : ctx(ctx),
           loop(new_event_loop({this, &TCMULoop::wait_for_readable}, {this, &TCMULoop::on_accept})) {
         fd = tcmulib_get_master_fd(ctx);
+
+        // libnl3 defaults the socket receive buffer to 32KB which can be 
+        // overrun during concurrent device creation. This causes
+        // TCMU_CMD_ADDED_DEVICE messages to be silently dropped and leaves 
+        // kernel threads stuck in tcmu_wait_genl_cmd_reply().
+        // SO_RCVBUFFORCE requires CAP_NET_ADMIN (the daemon runs as root).
+        static constexpr int NETLINK_RCVBUF_SIZE = 4 * 1024 * 1024;
+        int rcvbuf = NETLINK_RCVBUF_SIZE;
+        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUFFORCE,
+                        &rcvbuf, sizeof(rcvbuf)) < 0) {
+            LOG_ERROR("setsockopt(SO_RCVBUFFORCE) failed: `. "
+                      "Netlink buffer remains at libnl3 default (32KB); "
+                      "concurrent device creation may cause kernel hangs.",
+                      strerror(errno));
+        }
+
+        // NETLINK_NO_ENOBUFS prevents netlink_overrun() from setting
+        // the NETLINK_S_CONGESTED sticky flag on the socket. Without this,
+        // a single buffer-full event poisons all future deliveries until
+        // the buffer fully drains, cascading the original drop into a
+        // complete stall.
+        int no_enobufs = 1;
+        if (setsockopt(fd, SOL_NETLINK, NETLINK_NO_ENOBUFS,
+                        &no_enobufs, sizeof(no_enobufs)) < 0) {
+            LOG_WARN("setsockopt(NETLINK_NO_ENOBUFS) failed: `", strerror(errno));
+        }
     }
 
     ~TCMULoop() {
