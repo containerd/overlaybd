@@ -21,3 +21,16 @@ if(ENABLE_ISAL)
         COMMAND mkdir -p ${LIBRARY_OUTPUT_PATH}/include && cp ${THIRDPARTY_PATH}/isa-l/include/crc.h ${LIBRARY_OUTPUT_PATH}/include/
     )
 endif()
+
+if(ENABLE_QAT)
+    add_custom_command(TARGET thirdparty_lib
+        COMMAND cd ${THIRDPARTY_PATH}/QATzip && git checkout b908048e13e076f85b2cec2e72b366ae755c2fb7
+        COMMAND cd ${THIRDPARTY_PATH}/QATzip && ./autogen.sh
+        COMMAND cd ${THIRDPARTY_PATH}/QATzip && ./configure --with-ICP_ROOT=$ENV{ICP_ROOT}
+        COMMAND cd ${THIRDPARTY_PATH}/QATzip && make clean
+        COMMAND cd ${THIRDPARTY_PATH}/QATzip && make
+        COMMAND cd ${THIRDPARTY_PATH}/QATzip && make install
+        COMMAND cp -r ${THIRDPARTY_PATH}/QATzip/src/.libs/libqatzip.a ${LIBRARY_OUTPUT_PATH}/
+        COMMAND mkdir -p ${LIBRARY_OUTPUT_PATH}/include && cp ${THIRDPARTY_PATH}/QATzip/include/qatzip.h ${LIBRARY_OUTPUT_PATH}/include/
+    )
+endif()
