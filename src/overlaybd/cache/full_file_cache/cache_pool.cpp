@@ -215,7 +215,7 @@ void FileCachePool::eviction() {
     isFull_ = true;
 
     if (!lru_.empty() && !exit_) {
-        LOG_INFO("start eviction ", VALUE(actualEvict), VALUE(evictByCache), VALUE(evictByDisk), VALUE(totalUsed_));
+        LOG_AUDIT("eviction", VALUE(actualEvict), VALUE(evictByCache), VALUE(evictByDisk), VALUE(totalUsed_));
     }
 
     while (actualEvict > 0 && !lru_.empty() && !exit_) {
