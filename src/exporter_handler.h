@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <unistd.h>
+
 #include <photon/common/conststr.h>
 #include <photon/common/estring.h>
 #include <photon/common/metric-meter/metrics.h>
@@ -50,8 +52,18 @@ struct ExposeRender : public photon::net::http::HTTPHandler {
     EXPOSE_PHOTON_METRICLIST(count, Metric::AddCounter);
     EXPOSE_PHOTON_METRICLIST(cache, Metric::ValueCounter);
 
+    std::string node_name;
+
     template <typename... Args>
-    ExposeRender(Args&&... args) {}
+    ExposeRender(Args&&... args) {
+        char hostname[256];
+        if (gethostname(hostname, sizeof(hostname)) == 0) {
+            hostname[sizeof(hostname) - 1] = '\0';
+            node_name = hostname;
+        } else {
+            node_name = "unknown";
+        }
+    }
 
     std::string render() {
         EXPOSE_TEMPLATE(alive, OverlayBD_Alive : gauge{node});
@@ -65,7 +77,7 @@ struct ExposeRender : public photon::net::http::HTTPHandler {
         ret.append("\n")
             .append(alive.type_str())
             .append("\n")
-            .append(alive.render(1))
+            .append(alive.render(1, node_name.c_str()))
             .append("\n\n");
         LOOP_APPEND_METRIC(ret, throughput);
         LOOP_APPEND_METRIC(ret, qps);
