@@ -46,20 +46,17 @@ struct ImageRef {
     std::vector<std::string> seg; // cr: seg_0, ns: seg_1, repo: seg_2, seg_3,...
 };
 
-bool create_dir(const char *dirname) {
+bool create_dir(const std::string &dirname) {
     auto lfs = new_localfs_adaptor();
     if (lfs == nullptr) {
         LOG_ERRNO_RETURN(0, false, "new localfs_adaptor failed");
     }
     DEFER(delete lfs);
-    if (lfs->access(dirname, 0) == 0) {
-        return true;
+
+    if (photon::fs::mkdir_recursive(dirname+"/", lfs, 0755)) {
+        LOG_ERRNO_RETURN(0, false, "failed to create dir `", dirname);
     }
-    if (lfs->mkdir(dirname, 0644) == 0) {
-        LOG_INFO("dir ` doesn't exist. create succ.", dirname);
-        return true;
-    }
-    LOG_ERRNO_RETURN(0, false, "dir ` doesn't exist. create failed.", dirname);
+    return true;
 }
 
 int parse_blob_url(const std::string &url, struct ImageRef &ref) {
@@ -640,7 +637,7 @@ ImageService::~ImageService() {
     delete global_fs.io_alloc;
     delete exporter;
     stop_api_server(api_server);
-    
+
     LOG_INFO("image service is fully stopped");
 }
 
