@@ -26,6 +26,7 @@
 
 #ifdef ENABLE_QAT
 #include "lz4/lz4-qat.h"
+#include <atomic>
 extern "C" {
 #include <pci/pci.h>
 }
@@ -37,7 +38,11 @@ namespace ZFile {
 
 #define QAT_VENDOR_ID 0x8086
 #define QAT_DEVICE_ID 0x4940
-
+#ifdef ENABLE_QAT
+/* 0 = unprobed; 1 = available; 2 = unavailable. Cached process-wide so repeat
+ * LZ4Compressor::init calls skip PCI scan + qat_init when QAT is absent. */
+static std::atomic<int> g_qat_state{0};
+#endif
 class BaseCompressor : public ICompressor {
 public:
     uint32_t max_dst_size = 0;
@@ -147,21 +152,28 @@ public:
 
     bool check_qat() {
 #ifdef ENABLE_QAT
-        struct pci_access *pacc;
-        struct pci_dev *dev;
-        pacc = pci_alloc();
+        int cached = g_qat_state.load(std::memory_order_acquire);
+        if (cached == 1) return true;
+        if (cached == 2) return false;
+
+        struct pci_access *pacc = pci_alloc();
+        if (!pacc) {
+            g_qat_state.store(2, std::memory_order_release);
+            return false;
+        }
         pci_init(pacc);
         pci_scan_bus(pacc);
-        for (dev = pacc->devices; dev; dev = dev->next) {
+        bool found = false;
+        for (struct pci_dev *dev = pacc->devices; dev; dev = dev->next) {
             pci_fill_info(dev, PCI_FILL_IDENT | PCI_FILL_BASES);
             if (dev->vendor_id == QAT_VENDOR_ID && dev->device_id == QAT_DEVICE_ID) {
-                pci_cleanup(pacc);
-                return true;
+                found = true;
+                break;
             }
         }
         pci_cleanup(pacc);
-
-        return false;
+        if (!found) g_qat_state.store(2, std::memory_order_release);
+        return found;
 #endif
         return false;
     }
@@ -180,15 +192,23 @@ public:
 #ifdef ENABLE_QAT
         if (check_qat()) {
             pQat = new LZ4_qat_param();
-            qat_init(pQat);
-            qat_enable = true;
+            if (qat_init(pQat) == 0) {
+                qat_enable = true;
+                g_qat_state.store(1, std::memory_order_release);
+                /* nbatch() now returns DEFAULT_N_BATCH (was 1 when BaseCompressor::init ran). */
+                compressed_data.resize(DEFAULT_N_BATCH);
+                uncompressed_data.resize(DEFAULT_N_BATCH);
+            } else {
+                delete pQat;
+                pQat = nullptr;
+                g_qat_state.store(2, std::memory_order_release);
+            }
         }
 #endif
         return 0;
     }
 
     int nbatch() override {
-        // return DEFAULT_N_BATCH;
         return (qat_enable ? DEFAULT_N_BATCH : 1);
     }
 
@@ -197,13 +217,13 @@ public:
 
         int ret = 0;
 #ifdef ENABLE_QAT
-        if (qat_enable) {
-            ret = LZ4_compress_qat(pQat, &raw_data[0], src_chunk_len, &compressed_data[0],
-                                   dst_chunk_len, n);
-            if (ret < 0) {
-                LOG_ERROR_RETURN(EFAULT, -1, "LZ4 compress data failed. (retcode: `).", ret);
-            }
-            return ret;
+       if (qat_enable) {
+            /* dst_chunk_len in = capacity, out = actual compressed bytes. */
+            for (size_t i = 0; i < nblock; i++) dst_chunk_len[i] = dst_buffer_capacity / nblock;
+            ret = LZ4_compress_qat(pQat, &uncompressed_data[0], src_chunk_len,
+                                   &compressed_data[0], dst_chunk_len, nblock);
+            if (ret == 0) return 0;
+            /* Any QAT failure falls through to the CPU loop below. */
         }
 #endif
         for (size_t i = 0; i < nblock; i++) {
@@ -230,12 +250,12 @@ public:
         int ret = 0;
 #ifdef ENABLE_QAT
         if (qat_enable) {
+            /* dst_chunk_len in = capacity, out = actual decompressed bytes. */
+            for (size_t i = 0; i < n; i++) dst_chunk_len[i] = dst_buffer_capacity / n;
             ret = LZ4_decompress_qat(pQat, &compressed_data[0], src_chunk_len,
                                      &uncompressed_data[0], dst_chunk_len, n);
-            if (ret < 0) {
-                LOG_ERROR_RETURN(EFAULT, -1, "LZ4 decompress data failed. (retcode: `).", ret);
-            }
-            return ret;
+            if (ret == 0) return 0;
+            /* Any QAT failure falls through to the CPU loop below; not duplicated in lz4-qat. */
         }
 #endif
         for (size_t i = 0; i < n; i++) {

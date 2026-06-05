@@ -111,7 +111,7 @@ If you want to use avx512 to accelerate CRC calculation.
 cmake -D ENABLE_ISAL=1 ..
 ```
 
-If you want to use QAT to accelerate compression/decompression.
+If you want to use QAT to accelerate compression/decompression.However, currently only the decompression part has been integrated. Since LZ4 is already a highly efficient compression algorithm, our tests show that QAT can only outperform the CPU at a 4KB block size and a batch size of 256 when the compression ratio significantly exceeds a threshold.
 
 ```bash
 cmake -D ENABLE_QAT=1 ..
