@@ -14,11 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        images: [ubuntu_18.04, ubuntu_20.04, ubuntu_22.04, ubuntu_24.04, centos_7, centos_8, mcr.microsoft.com/cbl-mariner/base/core_2.0, mcr.microsoft.com/azurelinux/base/core_3.0]
+        images: [ubuntu_18.04, ubuntu_20.04, ubuntu_22.04, ubuntu_24.04, centos_8, mcr.microsoft.com/cbl-mariner/base/core_2.0, mcr.microsoft.com/azurelinux/base/core_3.0]
         platforms: [linux/amd64, linux/arm64]
-        exclude:
-          - images: centos_7
-            platforms: linux/arm64
     steps:
     - name: Set Release Version
       if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
