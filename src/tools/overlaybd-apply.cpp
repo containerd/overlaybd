@@ -41,6 +41,8 @@
 #include "CLI11.hpp"
 #include "comm_func.h"
 #include "sha256file.h"
+#include "qcow2converter.h"
+
 
 using namespace std;
 using namespace photon::fs;
@@ -82,18 +84,18 @@ public:
 int main(int argc, char **argv) {
     std::string image_config_path, input_path, gz_index_path, config_path, sha256_checksum;
     string tarheader;
-    bool raw = false, mkfs = false, verbose = false;
+    bool raw = false, mkfs = false, verbose = false, qcow2 = false;
 
     CLI::App app{"this is overlaybd-apply, apply OCIv1 tar layer to overlaybd format"};
     app.add_flag("--raw", raw, "apply to raw image")->default_val(false);
     app.add_flag("--mkfs", mkfs, "mkfs before apply")->default_val(false);
+    app.add_flag("--from_qcow2", qcow2, "convert from qcow2 image file instead of tar")->default_val(false);
 
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     app.add_option("--service_config_path", config_path, "overlaybd image service config path")->type_name("FILEPATH")->check(CLI::ExistingFile)->default_val("/etc/overlaybd/overlaybd.json");
     app.add_option("--gz_index_path", gz_index_path, "build gzip index if layer is gzip, only used with turboOCIv1")->type_name("FILEPATH");
     app.add_option("--checksum", sha256_checksum, "sha256 checksum for origin uncompressed data");
-    app.add_option("input_path", input_path, "input OCIv1 tar layer path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
-
+    app.add_option("input_path", input_path, "input OCIv1 tar layer path")->type_name("FILEPATH")->check(CLI::ExistingFile);
     app.add_option("image_config_path", image_config_path, "overlaybd image config path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     CLI11_PARSE(app, argc, argv);
 
@@ -103,6 +105,7 @@ int main(int argc, char **argv) {
 
     ImageService *imgservice = nullptr;
     photon::fs::IFile *imgfile = nullptr;
+
     if (raw) {
         imgfile = open_file(image_config_path.c_str(), O_RDWR, 0644);
     } else {
@@ -116,6 +119,18 @@ int main(int argc, char **argv) {
         delete imgfile;
         delete imgservice;
     });
+
+    if(qcow2){
+        int ret = convert_qcow2_to_imgfile(input_path.c_str(), imgfile,
+                                            DEFAULT_BLOCK_SIZE, verbose, true);
+        if (ret != 0) {
+            fprintf(stderr, "qcow2 conversion failed\n");
+            exit(-1);
+        }
+        printf("qcow2 to overlaybd conversion done\n");
+        return 0;
+    }
+
     bool gen_turboOCI = (gz_index_path != "" );
 
     auto target = create_ext4fs(imgfile, mkfs, !gen_turboOCI, "/");
