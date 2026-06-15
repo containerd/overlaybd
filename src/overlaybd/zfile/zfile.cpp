@@ -473,7 +473,44 @@ public:
             return 0;
         }
         ssize_t readn = 0; // final will equal to count
+
         unsigned char raw[MAX_READ_SIZE];
+
+        /* Batch decompress: when the read size exceeds one block, collect
+         * up to nbatch() full blocks and submit them to QAT/CPU in a single
+         * call instead of per-block. Compressed data is copied to a flat
+         * heap buffer (CRC bytes between blocks are excluded). */
+        const int max_batch = m_compressor->nbatch();
+        const bool batch_enable = (cnt > (ssize_t)m_ht.opt.block_size) && (max_batch > 1);
+        int batch_count = 0;
+        unsigned char *batch_dst_base = nullptr;
+        unsigned char *batch_src_buf = nullptr;
+        size_t batch_src_cap = 0, batch_src_pos = 0;
+        // heap arrays to avoid VLA issues with non-constexpr nbatch()
+        size_t *batch_src_lens = nullptr;
+        size_t *batch_dst_lens = nullptr;  // for flush_batch output
+
+        if (batch_enable) {
+            batch_src_cap = (size_t)cnt * 2;  // worst case: incompressible data
+            batch_src_buf = new unsigned char[batch_src_cap];
+            batch_src_lens = new size_t[max_batch];
+            batch_dst_lens = new size_t[max_batch];
+            if (!batch_src_buf || !batch_src_lens || !batch_dst_lens) {
+                delete[] batch_src_buf;  batch_src_buf = nullptr;
+                delete[] batch_src_lens; batch_src_lens = nullptr;
+                delete[] batch_dst_lens; batch_dst_lens = nullptr;
+                // fall through to per-block decompress
+            }
+        }
+
+        auto flush_batch = [&](unsigned char *batch_src, size_t *src_lens,
+                               unsigned char *dst, int n) -> int {
+            if (n == 0) return 0;
+            return m_compressor->decompress_batch(
+                batch_src, src_lens, dst,
+                (size_t)n * m_ht.opt.block_size, batch_dst_lens, (size_t)n);
+        };
+
         BlockReader br(this, offset, cnt);
         for (auto &block : br) {
             if (buf == nullptr) {
@@ -510,6 +547,60 @@ public:
                 readn += block.cp_len;
                 continue;
             }
+
+            /* ---- batch path ---- */
+            bool is_full_block = (block.cp_len == m_ht.opt.block_size);
+            bool can_batch = batch_enable && batch_src_buf && is_full_block;
+
+            if (can_batch) {
+                /* Flush first if adding this block would overflow the flat buffer */
+                if (batch_src_pos + block.compressed_size > batch_src_cap && batch_count > 0) {
+                    if (flush_batch(batch_src_buf, batch_src_lens, batch_dst_base,
+                                    batch_count) != 0) {
+                        delete[] batch_src_buf; delete[] batch_src_lens; delete[] batch_dst_lens;
+                        LOG_ERRNO_RETURN(0, -1, "batch decompress failed");
+                    }
+                    batch_count = 0;
+                    batch_src_pos = 0;
+                }
+
+                if (batch_count == 0) {
+                    batch_dst_base = (unsigned char *)buf;
+                    batch_src_pos = 0;
+                }
+                memcpy(batch_src_buf + batch_src_pos,
+                       block.buffer(), block.compressed_size);
+                batch_src_lens[batch_count] = block.compressed_size;
+                batch_src_pos += block.compressed_size;
+                batch_count++;
+
+                readn += block.cp_len;
+                buf = (unsigned char *)buf + block.cp_len;
+
+                if (batch_count >= max_batch) {
+                    if (flush_batch(batch_src_buf, batch_src_lens, batch_dst_base,
+                                    batch_count) != 0) {
+                        delete[] batch_src_buf; delete[] batch_src_lens; delete[] batch_dst_lens;
+                        LOG_ERRNO_RETURN(0, -1, "batch decompress failed");
+                    }
+                    batch_count = 0;
+                    batch_src_pos = 0;
+                }
+                continue;
+            }
+            /* ---- /batch path ---- */
+
+            /* Flush any pending batch before individual decompress */
+            if (batch_count > 0) {
+                if (flush_batch(batch_src_buf, batch_src_lens, batch_dst_base,
+                                batch_count) != 0) {
+                    delete[] batch_src_buf; delete[] batch_src_lens; delete[] batch_dst_lens;
+                    LOG_ERRNO_RETURN(0, -1, "batch decompress failed");
+                }
+                batch_count = 0;
+                batch_src_pos = 0;
+            }
+
             int dret = -1;
             if (block.cp_len == m_ht.opt.block_size) {
                 dret = m_compressor->decompress(block.buffer(), block.compressed_size,
@@ -526,10 +617,12 @@ public:
                     LOG_ERROR("decompression failed {offset: `, length: `}, reload result: `",
                         block.m_reader->m_buf_offset, block.compressed_size, reload_res);
                     if (reload_res < 0) {
+                        delete[] batch_src_buf; delete[] batch_src_lens; delete[] batch_dst_lens;
                         LOG_ERRNO_RETURN(0, -1, "decompression and reload failed");
                     }
                     goto again;
                 }
+                delete[] batch_src_buf; delete[] batch_src_lens; delete[] batch_dst_lens;
                 LOG_ERRNO_RETURN(0, -1,
                                  "decompression failed after retries, {offset: `, length: `}",
                                  block.m_reader->m_buf_offset, block.compressed_size);
@@ -537,6 +630,17 @@ public:
             readn += block.cp_len;
             buf = (unsigned char *)buf + block.cp_len;
         }
+        /* Flush remaining batch */
+        if (batch_count > 0) {
+            if (flush_batch(batch_src_buf, batch_src_lens, batch_dst_base,
+                            batch_count) != 0) {
+                delete[] batch_src_buf; delete[] batch_src_lens; delete[] batch_dst_lens;
+                LOG_ERRNO_RETURN(0, -1, "batch decompress failed");
+            }
+        }
+        delete[] batch_src_buf;
+        delete[] batch_src_lens;
+        delete[] batch_dst_lens;
         if (br.m_eno != 0) {
             LOG_ERRNO_RETURN(br.m_eno, -1, "read compressed data failed.");
         }
@@ -1228,14 +1332,18 @@ int zfile_decompress(IFile *src, IFile *dst) {
     struct stat _st;
     file->fstat(&_st);
     auto raw_data_size = _st.st_size;
+#ifdef ENABLE_QAT
+    size_t block_size = 1024 * 1024;
+#else
     size_t block_size = file->m_ht.opt.block_size;
+#endif
 
     auto raw_buf = std::unique_ptr<unsigned char[]>(new unsigned char[block_size]);
     for (off_t offset = 0; offset < raw_data_size; offset += block_size) {
         auto len = (ssize_t)std::min(block_size, (size_t)raw_data_size - offset);
         auto readn = file->pread(raw_buf.get(), len, offset);
         LOG_DEBUG("readn: `, crc32: `", readn, HEX(crc32c_salt(raw_buf.get(), len)).width(8));
-        if (readn != len)
+        if (readn != len) 
             return -1;
         if (dst->write(raw_buf.get(), readn) != readn) {
             LOG_ERRNO_RETURN(0, -1, "failed to write file into dst");
@@ -1257,7 +1365,11 @@ int zfile_validation_check(IFile *src) {
     struct stat _st;
     file->fstat(&_st);
     auto raw_data_size = _st.st_size;
+#ifdef ENABLE_QAT
+    size_t block_size = 1024 * 1024;
+#else
     size_t block_size = file->m_ht.opt.block_size;
+#endif
     auto raw_buf = std::unique_ptr<unsigned char[]>(new unsigned char[block_size]);
     for (off_t offset = 0; offset < raw_data_size; offset += block_size) {
         auto len = (ssize_t)std::min(block_size, (size_t)raw_data_size - offset);
