@@ -1,21 +1,9 @@
 /*
- * qcow2converter.cpp - Convert QCOW2 images to LSMT (zfile-compressed) format
+ * qcow2converter.cpp - Convert QCOW2 images to LSMT format
  *
- * This tool reads a QCOW2 disk image and converts it into an LSMT layer blob
- * with LZ4-compressed data blocks, compatible with the OverlayBD project.
- *
- * Output format (LSMT):
- *   | Header (4096B) | Data (compressed blocks) | Index (SegmentMapping[]) | Trailer (4096B) |
- *
- * Each data block is independently compressed with LZ4, enabling random
- * read access to any block without decompressing the entire image.
- *
- * Usage:
- *   qcow2converter <input.qcow2> <output.zfile> [--block-size N] [--verbose]
- *
- * Dependencies:
- *   - liblz4 (for compression)
- *   - Standard C++17 / POSIX
+ * Reads a QCOW2 disk image and converts it into an LSMT layer blob
+ * compatible with the OverlayBD project. Supports rootfs partition
+ * extraction (MBR/GPT) and full-disk conversion.
  */
 
 #include <cstdio>
@@ -23,6 +11,7 @@
 #include <cstring>
 #include <cstdint>
 #include <array>
+#include <cerrno>
 #include <vector>
 #include <string>
 #include <memory>
@@ -45,25 +34,26 @@
 using namespace photon::fs;
 using namespace LSMT;
 
-// ============================================================================
 // QCOW2 Constants
-// ============================================================================
 
 #define QCOW2_MAGIC             (('Q' << 24) | ('F' << 16) | ('I' << 8) | 0xfb)
 #define QCOW2_VERSION           2
 #define QCOW2_VERSION3          3
 
-// L2 table entry flags
-#define QCOW2_OFLAG_COPIED      (1ULL << 63)  // cluster is refcounted
-#define QCOW2_OFLAG_COMPRESSED  (1ULL << 62)  // cluster is compressed
-#define QCOW2_OFLAG_ZERO        (1ULL << 0)   // v3: reads as zero (with subcluster flag)
+#define QCOW2_OFLAG_COPIED      (1ULL << 63)
+#define QCOW2_OFLAG_COMPRESSED  (1ULL << 62)
+#define QCOW2_OFLAG_ZERO        (1ULL << 0)   // v3 only, standard L2 (not extended_l2)
 
-// Standard cluster size for qcow2 conversion (64KB)
-#define QCOW2_DEFAULT_CLUSTER_BITS  16
-// ============================================================================
-// QCOW2 Header (v2 format, 72 bytes)
-// ============================================================================
+#define QCOW2_INCOMPAT_DIRTY            (1ULL << 0)
+#define QCOW2_INCOMPAT_CORRUPT          (1ULL << 1)
+#define QCOW2_INCOMPAT_DATA_FILE        (1ULL << 2)
+#define QCOW2_INCOMPAT_COMPRESSION_TYPE (1ULL << 3)
+#define QCOW2_INCOMPAT_EXTL2            (1ULL << 4)
 
+#define QCOW2_INCOMPAT_SUPPORTED_MASK   (QCOW2_INCOMPAT_DIRTY | QCOW2_INCOMPAT_CORRUPT | QCOW2_INCOMPAT_EXTL2)
+#define QCOW2_L1E_OFFSET_MASK           0x00fffffffffffe00ULL
+#define QCOW2_DEFAULT_CLUSTER_BITS      16
+// QCOW2 Header (v2: 72 bytes)
 struct Qcow2Header {
     uint32_t magic;                  // QCOW_MAGIC
     uint32_t version;                // 2 or 3
@@ -84,9 +74,7 @@ struct Qcow2Header {
     uint64_t snapshots_offset;       // offset of snapshot table
 } __attribute__((packed));
 
-// ============================================================================
-// QCOW2 v3 Header Extension (additional 32 bytes after v2 header)
-// ============================================================================
+// QCOW2 v3 Header Extension (additional 32 bytes)
 struct Qcow2HeaderV3 {
     // v2 fields (72 bytes)
     Qcow2Header v2;
@@ -102,44 +90,30 @@ struct Qcow2HeaderV3 {
 static_assert(sizeof(Qcow2Header) == 72, "Qcow2Header size mismatch");
 static_assert(sizeof(Qcow2HeaderV3) == 104, "Qcow2HeaderV3 size mismatch");
 
-// ============================================================================
-// Cluster Mapping: records the mapping of a logical cluster to its data
-// ============================================================================
 struct ClusterMapping {
     uint64_t logical_offset;   // logical byte offset in virtual disk
     uint64_t physical_offset;  // byte offset in qcow2 file (0 = unallocated/zero)
     uint32_t cluster_size;     // size of this cluster in bytes
     bool     is_zero;          // true if cluster reads as zero
+    bool     is_unallocated;
     bool     is_compressed;    // true if cluster is compressed in qcow2
+    uint64_t compressed_size;
 
     ClusterMapping() : logical_offset(0), physical_offset(0),
-                       cluster_size(0), is_zero(false), is_compressed(false) {}
+                       cluster_size(0), is_zero(false), is_unallocated(false), is_compressed(false), compressed_size(0) {}
 };
 
-// ============================================================================
-// Qcow2Reader: reads and parses a QCOW2 image
-// ============================================================================
 class Qcow2Reader {
 public:
     Qcow2Reader() : fd_(-1), cluster_size_(0), cluster_bits_(0),
-                    l2_size_(0), virtual_size_(0) {}
-
+                    l2_size_(0), l2_entry_size_(8), extended_l2_(false), virtual_size_(0) {}
     ~Qcow2Reader() { close(); }
 
-    // Open a qcow2 file and parse its header
     bool open(const char *path);
-
-    // Close the file
     void close();
-
-    // Get all cluster mappings in logical order
-    // Returns a sorted list of (logical_offset -> physical_offset) mappings
     std::vector<ClusterMapping> get_cluster_mappings();
-
-    // Read raw data at a given logical offset
     ssize_t read_data(uint64_t logical_offset, void *buf, size_t count);
 
-    // Getters
     uint64_t virtual_size() const { return virtual_size_; }
     uint32_t cluster_size()  const { return cluster_size_; }
     uint32_t cluster_bits()  const { return cluster_bits_; }
@@ -148,15 +122,14 @@ private:
     int      fd_;
     uint32_t cluster_size_;
     uint32_t cluster_bits_;
-    uint32_t l2_size_;       // number of entries per L2 table
+    uint32_t l2_size_;
+    uint32_t l2_entry_size_;
+    bool     extended_l2_;
     uint64_t virtual_size_;
     uint64_t l1_table_offset_;
     uint32_t l1_size_;
-
-    // L1/L2 tables loaded into memory
     std::vector<uint64_t> l1_table_;
 
-    // Read a big-endian uint64_t from a buffer offset
     static uint64_t be64_to_cpu(const uint8_t *p) {
         return ((uint64_t)p[0] << 56) | ((uint64_t)p[1] << 48) |
                ((uint64_t)p[2] << 40) | ((uint64_t)p[3] << 32) |
@@ -169,39 +142,34 @@ private:
                ((uint32_t)p[2] << 8)  | (uint32_t)p[3];
     }
 
-    // Read L2 table entries at a given byte offset
     std::vector<uint64_t> read_l2_table(uint64_t l2_offset);
 };
 
-// ============================================================================
 // Disk partition parsing: MBR & GPT
 // Identifies rootfs partitions by type + filesystem superblock magic
-// ============================================================================
 
-// MBR partition entry (16 bytes)
 #pragma pack(push, 1)
 struct MbrPartEntry {
-    uint8_t  boot_flag;       // 0x80 = bootable
+    uint8_t  boot_flag;
     uint8_t  start_chs[3];
-    uint8_t  type;            // partition type: 0x83=Linux, 0x82=swap, 0xEE=GPT
+    uint8_t  type;            // 0x83=Linux, 0x82=swap, 0xEE=GPT
     uint8_t  end_chs[3];
-    uint32_t start_lba;       // little-endian
-    uint32_t sectors;         // little-endian
+    uint32_t start_lba;
+    uint32_t sectors;
 };
 
-// MBR sector layout
 struct MbrSector {
-    uint8_t     bootstrap[446];
+    uint8_t      bootstrap[446];
     MbrPartEntry parts[4];
-    uint16_t    signature;    // 0xAA55
+    uint16_t     signature;   // 0xAA55
 };
 #pragma pack(pop)
 static_assert(sizeof(MbrSector) == 512, "MBR must be 512 bytes");
 
-// GPT header (LBA 1, 92 bytes)
+// GPT header (LBA 1)
 #pragma pack(push, 1)
 struct GptHeader {
-    uint64_t signature;       // "EFI PART"
+    uint64_t signature;
     uint32_t revision;
     uint32_t header_size;
     uint32_t header_crc32;
@@ -215,38 +183,32 @@ struct GptHeader {
     uint32_t num_entries;
     uint32_t entry_size;
     uint32_t entries_crc32;
-    // followed by reserved padding to sector size
 };
 
-// GPT partition entry (128 bytes)
 struct GptPartEntry {
     uint8_t  type_guid[16];
     uint8_t  unique_guid[16];
     uint64_t first_lba;
     uint64_t last_lba;
     uint64_t attributes;
-    uint16_t name[36];  // UTF-16LE, 36 chars max
+    uint16_t name[36];
 };
 #pragma pack(pop)
 static_assert(sizeof(GptPartEntry) == 128, "GPT entry must be 128 bytes");
 
-// Known GUIDs for partition type (little-endian in GPT)
-// Linux filesystem: 0FC63DAF-8483-4772-8E79-3D69D8477DE4
+// Known GPT type GUIDs (mixed-endian as stored on disk)
 constexpr std::array<uint8_t, 16> GPT_LINUX_FS = {
     0xAF, 0x3D, 0xC6, 0x0F,  0x83, 0x84,  0x72, 0x47,
     0x8E, 0x79,  0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4
 };
-// Linux swap: 0657FD6D-A4AB-43C4-84E5-0933C84B4F4F
 constexpr std::array<uint8_t, 16> GPT_LINUX_SWAP = {
     0x6D, 0xFD, 0x57, 0x06,  0xAB, 0xA4,  0xC4, 0x43,
     0x84, 0xE5,  0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F
 };
-// EFI System: C12A7328-F81F-11D2-BA4B-00A0C93EC93B
 constexpr std::array<uint8_t, 16> GPT_EFI_SYSTEM = {
     0x28, 0x73, 0x2A, 0xC1,  0x1F, 0xF8,  0xD2, 0x11,
     0xBA, 0x4B,  0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B
 };
-// BIOS boot: 21686148-6449-6E6F-744E-656564454649
 constexpr std::array<uint8_t, 16> GPT_BIOS_BOOT = {
     0x48, 0x61, 0x68, 0x21,  0x49, 0x64,  0x6F, 0x6E,
     0x74, 0x4E,  0x65, 0x65, 0x64, 0x45, 0x46, 0x49
@@ -254,57 +216,43 @@ constexpr std::array<uint8_t, 16> GPT_BIOS_BOOT = {
 
 // Partition info
 struct PartitionInfo {
-    uint64_t start_byte;   // absolute byte offset in disk
-    uint64_t size_bytes;   // partition size
-    int      type_code;    // MBR type or 0xEE00+ for GPT
+    uint64_t start_byte;
+    uint64_t size_bytes;
+    int      type_code;
     std::string label;
-    bool     is_rootfs;    // detected rootfs
+    bool     is_rootfs;
 
     PartitionInfo() : start_byte(0), size_bytes(0), type_code(0), is_rootfs(false) {}
 };
 
-// Check if MBR partition type is likely Linux rootfs
 static bool is_linux_mbr_type(uint8_t type) {
-    // Common Linux filesystem types
-    return type == 0x83;  // Linux native
+    return type == 0x83;
 }
 
-// Check if MBR partition type should be excluded from rootfs
 static bool is_excluded_mbr_type(uint8_t type) {
-    return type == 0x82 ||  // Linux swap
-           type == 0x05 ||  // Extended
-           type == 0x0F ||  // Extended (LBA)
-           type == 0xEF ||  // EFI System
-           type == 0x00;    // Empty
+    return type == 0x82 || type == 0x05 || type == 0x0F ||
+           type == 0xEF || type == 0x00;
 }
 
-// Check if GPT type GUID matches a known one
 static bool guid_match(const uint8_t *a, const uint8_t *b) {
     return memcmp(a, b, 16) == 0;
 }
 
-// Filesystem superblock detection by reading partition header
-// Returns true if the bytes look like a recognized filesystem
+// Detect filesystem by superblock magic bytes
 static bool detect_filesystem(const uint8_t *data, size_t size) {
     if (size < 4096) return false;
 
-    // ext2/3/4: magic 0xEF53 at offset 0x438 (1024 + 0x38)
-    if (size > 0x438 + 2) {
+    // ext2/3/4: magic 0xEF53 at offset 0x438
+    if (size > 0x43A) {
         uint16_t ext_magic = static_cast<uint16_t>(data[0x438]) | (static_cast<uint16_t>(data[0x439]) << 8);
-        if (ext_magic == 0xEF53) {
-            return true;
-        }
+        if (ext_magic == 0xEF53) return true;
     }
 
     // xfs: magic "XFSB" at offset 0
-    if (size >= 4 && memcmp(data, "XFSB", 4) == 0) {
-        return true;
-    }
+    if (size >= 4 && memcmp(data, "XFSB", 4) == 0) return true;
 
-    // btrfs: magic "_BHRfS_M" at offset 0x10040
-    if (size > 0x10040 + 8 && memcmp(data + 0x10040, "_BHRfS_M", 8) == 0) {
-        return true;
-    }
+    // btrfs: magic "_BHRfS_M" at offset 0x10040 (requires >= 65608 bytes)
+    if (size >= 0x10048 && memcmp(data + 0x10040, "_BHRfS_M", 8) == 0) return true;
 
     // f2fs: magic 0xF2F52010 at offset 0x400
     if (size > 0x404) {
@@ -316,9 +264,7 @@ static bool detect_filesystem(const uint8_t *data, size_t size) {
     return false;
 }
 
-// ============================================================================
 // PartitionFilter: manages rootfs byte ranges for selective conversion
-// ============================================================================
 class PartitionFilter {
 public:
     PartitionFilter() : enabled_(true) {}  // default: extract rootfs only
@@ -326,8 +272,7 @@ public:
     void set_enabled(bool v) { enabled_ = v; }
     bool enabled() const { return enabled_; }
 
-    // Parse disk image data to find rootfs partitions
-    // 'reader' provides access to raw qcow2 data
+    // Parse disk image to find rootfs partitions
     bool scan(Qcow2Reader &reader) {
         partitions_.clear();
         ranges_.clear();
@@ -372,9 +317,8 @@ public:
         }
 
         if (ranges_.empty()) {
-            // Try to read the first few KB for filesystem detection on raw disk
-            // (e.g., whole disk is a single filesystem without partition table)
-            std::vector<uint8_t> probe(65536);  // 64KB for btrfs detection
+            // No partition found; try detecting filesystem on raw disk
+            std::vector<uint8_t> probe(66000);  // large enough for btrfs detection
             n = reader.read_data(0, probe.data(), probe.size());
             if (n > 0 && detect_filesystem(probe.data(), static_cast<size_t>(n))) {
                 printf("  No partition table, but detected filesystem on raw disk\n");
@@ -396,7 +340,7 @@ public:
         return true;
     }
 
-    // Check if a byte range [offset, offset+len) overlaps with any rootfs range
+    // Check if [offset, offset+len) overlaps with any rootfs range
     bool overlaps_rootfs(uint64_t offset, uint64_t len) const {
         if (!enabled_) return true;  // full-disk: everything passes
         if (ranges_.empty()) return false;
@@ -411,7 +355,6 @@ public:
     }
 
     // Get the total virtual size of extracted rootfs
-    // (used when creating output with extracted partition size)
     uint64_t total_rootfs_size() const {
         if (!enabled_ || ranges_.empty()) return 0;
         uint64_t total = 0;
@@ -422,7 +365,6 @@ public:
     }
 
     // Remap absolute disk offset to output-relative offset
-    // Returns UINT64_MAX if offset doesn't fall in any rootfs range
     uint64_t to_output_offset(uint64_t abs_offset) const {
         if (!enabled_) return abs_offset;
 
@@ -454,11 +396,10 @@ private:
 
             if (pe.type == 0x00 || pe.sectors == 0) continue;
 
-            // Handle extended partition: skip (MBR extended chain parsing)
+            // Handle extended partition (skip)
             if (pe.type == 0x05 || pe.type == 0x0F) {
                 printf("  /dev/sda%d: type=0x%02X (extended) - skipped\n",
                        i + 1, pe.type);
-                // TODO: parse EBR chain for logical partitions
                 continue;
             }
 
@@ -471,8 +412,7 @@ private:
 
             // Check if rootfs candidate
             if (is_linux_mbr_type(pe.type)) {
-                // Probe filesystem superblock
-                std::vector<uint8_t> probe(65536);
+                std::vector<uint8_t> probe(66000);
                 ssize_t n = reader.read_data(pi.start_byte, probe.data(), probe.size());
                 if (n > 0 && detect_filesystem(probe.data(), static_cast<size_t>(n))) {
                     pi.is_rootfs = true;
@@ -535,7 +475,6 @@ private:
             fprintf(stderr, "WARNING: Cannot read all GPT entries\n");
         }
 
-        int part_num = 1;
         for (uint32_t i = 0; i < gpt_hdr->num_entries; i++) {
             const auto *gpe = reinterpret_cast<const GptPartEntry *>(
                 entries_buf.data() + static_cast<size_t>(i) * entry_size);
@@ -563,8 +502,7 @@ private:
 
             // Determine partition type
             const char *type_str = "UNKNOWN";
-            bool is_linux = false;
-            bool is_unknown = true;
+            bool is_linux = false, is_unknown = true;
 
             if (guid_match(gpe->type_guid, GPT_LINUX_FS.data())) {
                 type_str = "Linux FS";
@@ -581,10 +519,8 @@ private:
                 is_unknown = false;
             }
 
-            // For unknown type GUIDs, also probe for filesystem
             if (is_linux || is_unknown) {
-                // Probe filesystem superblock
-                std::vector<uint8_t> probe(65536);
+                std::vector<uint8_t> probe(66000);
                 ssize_t rn = reader.read_data(pi.start_byte, probe.data(), probe.size());
                 if (rn > 0 && detect_filesystem(probe.data(), static_cast<size_t>(rn))) {
                     pi.is_rootfs = true;
@@ -604,14 +540,11 @@ private:
             }
 
             partitions_.push_back(pi);
-            part_num++;
         }
     }
 };
 
-// ============================================================================
 // Qcow2Reader Implementation
-// ============================================================================
 
 bool Qcow2Reader::open(const char *path) {
     fd_ = ::open(path, O_RDONLY);
@@ -624,7 +557,7 @@ bool Qcow2Reader::open(const char *path) {
     Qcow2Header hdr;
     ssize_t n = ::pread(fd_, &hdr, sizeof(hdr), 0);
     if (n != sizeof(hdr)) {
-        fprintf(stderr, "ERROR: Failed to read qcow2 header: %s\n", strerror(errno));
+        fprintf(stderr, "ERROR: Failed to read qcow2 header\n");
         return false;
     }
 
@@ -644,11 +577,46 @@ bool Qcow2Reader::open(const char *path) {
 
     virtual_size_  = be64_to_cpu(raw + 24);  // size field
     cluster_bits_  = be32_to_cpu(raw + 20);  // cluster_bits field
+    if (cluster_bits_ < 9 || cluster_bits_ > 30) {
+        fprintf(stderr, "ERROR: Invalid cluster_bits %u (must be 9..30)\n", cluster_bits_);
+        return false;
+    }
     cluster_size_  = 1U << cluster_bits_;
     l1_size_       = be32_to_cpu(raw + 36);  // l1_size field
     l1_table_offset_ = be64_to_cpu(raw + 40); // l1_table_offset field
 
-    l2_size_ = cluster_size_ / sizeof(uint64_t);
+    // Default: standard 8-byte L2 entries
+    extended_l2_ = false;
+    l2_entry_size_ = sizeof(uint64_t);
+
+    // Read v3 header extension to check incompatible features
+    if (version == 3) {
+        uint8_t v3_ext[32];
+        n = ::pread(fd_, v3_ext, sizeof(v3_ext), sizeof(Qcow2Header));
+        if (n == static_cast<ssize_t>(sizeof(v3_ext))) {
+            uint64_t incompat = be64_to_cpu(v3_ext);
+            if (incompat & QCOW2_INCOMPAT_EXTL2) {
+                extended_l2_ = true;
+                l2_entry_size_ = 16;
+                printf("  Extended L2:      enabled (16-byte entries)\n");
+            }
+            if (incompat & QCOW2_INCOMPAT_DIRTY) {
+                printf("  WARNING: Image was not closed properly (dirty bit set)\n");
+            }
+            if (incompat & QCOW2_INCOMPAT_CORRUPT) {
+                printf("  WARNING: Image is marked as corrupt\n");
+            }
+            // Reject incompatible features we don't support
+            uint64_t unsupported = incompat & ~QCOW2_INCOMPAT_SUPPORTED_MASK;
+            if (unsupported) {
+                fprintf(stderr, "ERROR: Unsupported incompatible features: 0x%lx\n",
+                        static_cast<unsigned long>(unsupported));
+                return false;
+            }
+        }
+    }
+
+    l2_size_ = cluster_size_ / l2_entry_size_;
 
     printf("QCOW2 image opened:\n");
     printf("  Virtual size:  %lu bytes (%.2f GB)\n",
@@ -664,7 +632,7 @@ bool Qcow2Reader::open(const char *path) {
     std::vector<uint8_t> l1_buf(l1_bytes);
     n = ::pread(fd_, l1_buf.data(), l1_bytes, l1_table_offset_);
     if (n != static_cast<ssize_t>(l1_bytes)) {
-        fprintf(stderr, "ERROR: Failed to read L1 table: %s\n", strerror(errno));
+        fprintf(stderr, "ERROR: Failed to read L1 table\n");
         return false;
     }
     for (uint32_t i = 0; i < l1_size_; i++) {
@@ -683,20 +651,31 @@ void Qcow2Reader::close() {
 
 std::vector<uint64_t> Qcow2Reader::read_l2_table(uint64_t l2_offset) {
     std::vector<uint64_t> table(l2_size_);
-    size_t l2_bytes = l2_size_ * sizeof(uint64_t);
+    size_t l2_bytes = static_cast<size_t>(l2_size_) * l2_entry_size_;
     std::vector<uint8_t> buf(l2_bytes);
 
     ssize_t n = ::pread(fd_, buf.data(), l2_bytes, l2_offset);
     if (n != static_cast<ssize_t>(l2_bytes)) {
-        fprintf(stderr, "ERROR: Failed to read L2 table at offset %lu: %s\n",
-                static_cast<unsigned long>(l2_offset), strerror(errno));
-        // Return zeros = unallocated
+        fprintf(stderr, "ERROR: Failed to read L2 table at offset %lu\n",
+                static_cast<unsigned long>(l2_offset));
         std::fill(table.begin(), table.end(), 0);
         return table;
     }
 
-    for (uint32_t i = 0; i < l2_size_; i++) {
-        table[i] = be64_to_cpu(buf.data() + i * 8);
+    if (extended_l2_) {
+        // Extended L2 entries (16 bytes each):
+        //   Bytes 0-7:  Standard cluster descriptor (big-endian, same format
+        //               as non-extended entries, EXCEPT bit 0 is NOT the zero flag)
+        //   Bytes 8-11: Sub-cluster allocation bitmap (little-endian)
+        //   Bytes 12-15: Sub-cluster zero bitmap (little-endian)
+        // We only need the standard descriptor (bytes 0-7) for cluster-level ops.
+        for (uint32_t i = 0; i < l2_size_; i++) {
+            table[i] = be64_to_cpu(buf.data() + i * 16);  // first 8 bytes = descriptor
+        }
+    } else {
+        for (uint32_t i = 0; i < l2_size_; i++) {
+            table[i] = be64_to_cpu(buf.data() + i * 8);
+        }
     }
     return table;
 }
@@ -710,7 +689,7 @@ std::vector<ClusterMapping> Qcow2Reader::get_cluster_mappings() {
     for (uint32_t l1_idx = 0; l1_idx < l1_size_; l1_idx++) {
         uint64_t l1_entry = l1_table_[l1_idx];
 
-        // L1 entry == 0 means this entire L2 range is unallocated (zero)
+        // L1 entry == 0: entire L2 range is unallocated
         if (l1_entry == 0) {
             uint64_t base_offset = static_cast<uint64_t>(l1_idx) * l2_size_ * cluster_size_;
             for (uint32_t j = 0; j < l2_size_; j++) {
@@ -722,14 +701,16 @@ std::vector<ClusterMapping> Qcow2Reader::get_cluster_mappings() {
                 cm.physical_offset = 0;
                 cm.cluster_size = cluster_size_;
                 cm.is_zero = true;
+                cm.is_unallocated = true;
                 cm.is_compressed = false;
+                cm.compressed_size = 0;
                 mappings.push_back(cm);
             }
             continue;
         }
 
         // L1 entry & mask gives the L2 table offset
-        uint64_t l2_offset = l1_entry & ~(QCOW2_OFLAG_COPIED);
+        uint64_t l2_offset = l1_entry & QCOW2_L1E_OFFSET_MASK;
         auto l2_table = read_l2_table(l2_offset);
 
         uint64_t base_offset = static_cast<uint64_t>(l1_idx) * l2_size_ * cluster_size_;
@@ -743,20 +724,40 @@ std::vector<ClusterMapping> Qcow2Reader::get_cluster_mappings() {
             cm.cluster_size = cluster_size_;
 
             if (l2_entry == 0) {
-                // Unallocated cluster → zero
                 cm.physical_offset = 0;
                 cm.is_zero = true;
+                cm.is_unallocated = true;
                 cm.is_compressed = false;
+                cm.compressed_size = 0;
             } else if (l2_entry & QCOW2_OFLAG_COMPRESSED) {
-                // Compressed cluster (qcow2 internal compression)
-                cm.physical_offset = l2_entry & ~(QCOW2_OFLAG_COMPRESSED | QCOW2_OFLAG_COPIED);
+                // MUST check compressed (bit 62) BEFORE zero (bit 0):
+                // compressed entries store byte offset in bits 0..x-1,
+                // which can have bit 0 set (odd address).
+                int shift = 62 - (cluster_bits_ - 8);
+                uint64_t offset_mask = (1ULL << shift) - 1;
+                cm.physical_offset = l2_entry & offset_mask;
+
+                uint64_t sectors_mask = (1ULL << (cluster_bits_ - 8)) - 1;
+                uint64_t nb_sectors = ((l2_entry >> shift) & sectors_mask) + 1;
+                cm.compressed_size = nb_sectors * 512 - (cm.physical_offset & 511);
+
                 cm.is_zero = false;
+                cm.is_unallocated = false;
                 cm.is_compressed = true;
-            } else {
-                // Normal allocated cluster
-                cm.physical_offset = l2_entry & ~(QCOW2_OFLAG_COPIED);
-                cm.is_zero = false;
+
+            } else if (!extended_l2_ && (l2_entry & QCOW2_OFLAG_ZERO)) {
+                // v3 standard L2 only; in extended L2 bit 0 is reserved
+                cm.physical_offset = l2_entry & QCOW2_L1E_OFFSET_MASK;
+                cm.is_zero = true;
+                cm.is_unallocated = false;
                 cm.is_compressed = false;
+                cm.compressed_size = 0;
+            } else {
+                cm.physical_offset = l2_entry & QCOW2_L1E_OFFSET_MASK;
+                cm.is_zero = false;
+                cm.is_unallocated = false;
+                cm.is_compressed = false;
+                cm.compressed_size = 0;
             }
             mappings.push_back(cm);
         }
@@ -767,129 +768,115 @@ std::vector<ClusterMapping> Qcow2Reader::get_cluster_mappings() {
 }
 
 ssize_t Qcow2Reader::read_data(uint64_t logical_offset, void *buf, size_t count) {
-    // Find which cluster contains this offset
-    uint64_t cluster_idx = logical_offset / cluster_size_;
-    uint64_t offset_in_cluster = logical_offset % cluster_size_;
+    size_t total_read = 0;
+    uint8_t *dst = static_cast<uint8_t *>(buf);
 
-    uint32_t l1_idx = cluster_idx / l2_size_;
-    uint32_t l2_idx = cluster_idx % l2_size_;
+    // Loop to handle cross-cluster reads (e.g. probe buffers > cluster_size)
+    while (total_read < count) {
+        uint64_t cur_offset = logical_offset + total_read;
+        size_t remaining = count - total_read;
 
-    if (l1_idx >= l1_size_) {
-        // Beyond image size, return zeros
-        memset(buf, 0, count);
-        return count;
-    }
+        uint64_t cluster_idx = cur_offset / cluster_size_;
+        uint64_t offset_in_cluster = cur_offset % cluster_size_;
+        size_t chunk = std::min(remaining, static_cast<size_t>(cluster_size_ - offset_in_cluster));
 
-    uint64_t l1_entry = l1_table_[l1_idx];
+        uint32_t l1_idx = cluster_idx / l2_size_;
+        uint32_t l2_idx = cluster_idx % l2_size_;
 
-    if (l1_entry == 0) {
-        // Unallocated → zero
-        memset(buf, 0, count);
-        return count;
-    }
-
-    uint64_t l2_offset = l1_entry & ~(QCOW2_OFLAG_COPIED);
-    auto l2_table = read_l2_table(l2_offset);
-
-    if (l2_idx >= l2_table.size()) {
-        memset(buf, 0, count);
-        return count;
-    }
-
-    uint64_t l2_entry = l2_table[l2_idx];
-
-    if (l2_entry == 0) {
-        memset(buf, 0, count);
-        return count;
-    }
-
-    if (l2_entry & QCOW2_OFLAG_COMPRESSED) {
-        // Compressed cluster entry format (from QCOW2 spec):
-        //   bits 0..x-1: host cluster offset (BYTE offset in file, usually not
-        //                cluster-aligned; stored data can start mid-sector)
-        //   bits x..61:  compressed size in 512-byte sectors minus 1
-        //   bit 62:      compressed flag (1)
-        //   bit 63:      allocated flag (1)
-        //   where x = 62 - (cluster_bits - 8)
-        int shift = 62 - (cluster_bits_ - 8);
-        uint64_t mask = (1ULL << shift) - 1;
-        uint64_t coffset = l2_entry & mask;          // byte offset into file
-        uint64_t nb_sectors = ((l2_entry >> shift) & 0xFF) + 1;
-        // Compressed data starts at coffset (may be mid-sector).
-        // It occupies nb_sectors sectors from the sector-aligned base,
-        // but actual data begins at coffset, so subtract partial sector.
-        uint64_t compressed_size = nb_sectors * 512 - (coffset & 511);
-
-        // Read compressed data
-        std::vector<uint8_t> comp_buf(static_cast<size_t>(compressed_size));
-        if (::pread(fd_, comp_buf.data(), static_cast<size_t>(compressed_size), coffset) < 0) {
-            fprintf(stderr, "ERROR: read compressed cluster failed at byte %lu: %s\n",
-                    static_cast<unsigned long>(coffset), strerror(errno));
-            return -1;
+        if (l1_idx >= l1_size_) {
+            memset(dst + total_read, 0, remaining);
+            return total_read + remaining;
         }
 
-        // Decompress with zlib (QEMU uses raw deflate, windowBits=-12)
-        z_stream strm = {};
-        strm.next_in = comp_buf.data();
-        strm.avail_in = static_cast<uInt>(compressed_size);
-
-        // Try raw deflate first (QEMU default), then gzip, then auto-detect
-        int ret = inflateInit2(&strm, -12);  // QEMU uses -12 windowBits
-        if (ret != Z_OK) {
-            fprintf(stderr, "ERROR: inflateInit2 failed: %d\n", ret);
-            return -1;
+        uint64_t l1_entry = l1_table_[l1_idx];
+        if (l1_entry == 0) {
+            memset(dst + total_read, 0, chunk);
+            total_read += chunk;
+            continue;
         }
 
-        std::vector<uint8_t> decomp(cluster_size_);
-        strm.next_out = decomp.data();
-        strm.avail_out = static_cast<uInt>(cluster_size_);
+        uint64_t l2_offset = l1_entry & QCOW2_L1E_OFFSET_MASK;
+        auto l2_table = read_l2_table(l2_offset);
 
-        ret = inflate(&strm, Z_FINISH);
-        if (ret != Z_STREAM_END) {
-            inflateEnd(&strm);
-            // Retry with -MAX_WBITS (sometimes used)
-            ret = inflateInit2(&strm, -MAX_WBITS);
-            if (ret == Z_OK) {
-                std::fill(decomp.begin(), decomp.end(), 0);
-                strm.next_in = comp_buf.data();
-                strm.avail_in = static_cast<uInt>(compressed_size);
-                strm.next_out = decomp.data();
-                strm.avail_out = static_cast<uInt>(cluster_size_);
-                ret = inflate(&strm, Z_FINISH);
+        if (l2_idx >= l2_table.size()) {
+            memset(dst + total_read, 0, chunk);
+            total_read += chunk;
+            continue;
+        }
+
+        uint64_t l2_entry = l2_table[l2_idx];
+        if (l2_entry == 0) {
+            memset(dst + total_read, 0, chunk);
+            total_read += chunk;
+            continue;
+        }
+
+        if (l2_entry & QCOW2_OFLAG_COMPRESSED) {
+            int shift = 62 - (cluster_bits_ - 8);
+            uint64_t mask = (1ULL << shift) - 1;
+            uint64_t coffset = l2_entry & mask;
+            uint64_t size_mask = (1ULL << (cluster_bits_ - 8)) - 1;
+            uint64_t nb_sectors = ((l2_entry >> shift) & size_mask) + 1;
+            uint64_t compressed_size = nb_sectors * 512 - (coffset & 511);
+
+            std::vector<uint8_t> comp_buf(static_cast<size_t>(compressed_size));
+            ssize_t n = ::pread(fd_, comp_buf.data(), static_cast<size_t>(compressed_size), coffset);
+            if (n != static_cast<ssize_t>(compressed_size)) {
+                fprintf(stderr, "ERROR: read compressed cluster failed at byte %lu\n",
+                        static_cast<unsigned long>(coffset));
+                return -1;
             }
-        }
-        if (ret != Z_STREAM_END) {
+
+            z_stream strm = {};
+            strm.next_in = comp_buf.data();
+            strm.avail_in = static_cast<uInt>(compressed_size);
+
+            int ret = inflateInit2(&strm, -MAX_WBITS);
+            if (ret != Z_OK) {
+                fprintf(stderr, "ERROR: inflateInit2 failed: %d\n", ret);
+                return -1;
+            }
+
+            std::vector<uint8_t> decomp(cluster_size_);
+            strm.next_out = decomp.data();
+            strm.avail_out = static_cast<uInt>(cluster_size_);
+
+            ret = inflate(&strm, Z_FINISH);
             inflateEnd(&strm);
-            fprintf(stderr, "ERROR: decompression failed at offset %lu, ret=%d (comp=%lu bytes)\n",
-                    static_cast<unsigned long>(logical_offset), ret, static_cast<unsigned long>(compressed_size));
+            if (ret != Z_STREAM_END) {
+                fprintf(stderr, "ERROR: decompression failed at offset %lu, ret=%d\n",
+                        static_cast<unsigned long>(cur_offset), ret);
+                return -1;
+            }
+
+            memcpy(dst + total_read, decomp.data() + offset_in_cluster, chunk);
+            total_read += chunk;
+            continue;
+        }
+
+        // In extended L2, bit 0 is reserved (not zero flag)
+        if (!extended_l2_ && (l2_entry & QCOW2_OFLAG_ZERO)) {
+            memset(dst + total_read, 0, chunk);
+            total_read += chunk;
+            continue;
+        }
+
+        // Normal cluster
+        uint64_t phys_offset = (l2_entry & QCOW2_L1E_OFFSET_MASK) + offset_in_cluster;
+        ssize_t n = ::pread(fd_, dst + total_read, chunk, phys_offset);
+        if (n < 0) {
+            fprintf(stderr, "ERROR: read failed at physical offset %lu\n",
+                    static_cast<unsigned long>(phys_offset));
             return -1;
         }
-        inflateEnd(&strm);
-
-        // Copy requested bytes from decompressed data
-        size_t to_copy = std::min(count, static_cast<size_t>(cluster_size_ - offset_in_cluster));
-        memcpy(buf, decomp.data() + offset_in_cluster, to_copy);
-        return to_copy;
+        total_read += n;
+        if (static_cast<size_t>(n) < chunk) break;
     }
-
-    uint64_t phys_offset = (l2_entry & ~(QCOW2_OFLAG_COPIED)) + offset_in_cluster;
-    size_t to_read = std::min(count, static_cast<size_t>(cluster_size_ - offset_in_cluster));
-
-    ssize_t n = ::pread(fd_, buf, to_read, phys_offset);
-    if (n < 0) {
-        fprintf(stderr, "ERROR: read failed at physical offset %lu: %s\n",
-                static_cast<unsigned long>(phys_offset), strerror(errno));
-        return -1;
-    }
-    return n;
+    return total_read;
 }
 
-// ============================================================================
-// Write qcow2 clusters directly to an existing overlaybd IFile (ImageFile)
-// Used by overlaybd-apply --from_qcow2: the target already has LSMT layers
-// created via create_overlaybd(). This function reads qcow2 clusters and
-// pwrites them at the correct logical offsets.
-// ============================================================================
+// Write qcow2 clusters to an existing overlaybd ImageFile.
+// Used by overlaybd-apply --from_qcow2.
 
 int convert_qcow2_to_imgfile(const char *input_path, IFile *target,
                               uint32_t block_size, bool verbose,
@@ -897,7 +884,7 @@ int convert_qcow2_to_imgfile(const char *input_path, IFile *target,
     // Open QCOW2 image
     Qcow2Reader reader;
     if (!reader.open(input_path)) {
-        return 1;
+        return -1;
     }
 
     uint64_t virtual_size = reader.virtual_size();
@@ -908,7 +895,7 @@ int convert_qcow2_to_imgfile(const char *input_path, IFile *target,
     filter.set_enabled(extract_rootfs);
     if (extract_rootfs) {
         if (!filter.scan(reader)) {
-            return 1;
+            return -1;
         }
         if (!filter.enabled()) {
             printf("No rootfs partitions detected, converting entire image.\n");
@@ -921,7 +908,7 @@ int convert_qcow2_to_imgfile(const char *input_path, IFile *target,
         output_virtual_size = filter.total_rootfs_size();
         if (output_virtual_size == 0) {
             fprintf(stderr, "ERROR: No rootfs data to extract\n");
-            return 1;
+            return -1;
         }
         output_virtual_size = ((output_virtual_size + block_size - 1) / block_size) * block_size;
         printf("\nRootFS output virtual size: %lu bytes (%.2f GB)\n",
@@ -931,10 +918,6 @@ int convert_qcow2_to_imgfile(const char *input_path, IFile *target,
 
     printf("\nWriting qcow2 clusters to overlaybd ImageFile, block_size=%u...\n", block_size);
 
-    // --- Read QCOW2 clusters and pwrite to target IFile ---
-    // The target (ImageFile) already has LSMT layers set up.
-    // pwrite() at logical offsets auto-manages index/segment mapping.
-    // Unwritten regions are treated as zero (sparse).
     auto mappings = reader.get_cluster_mappings();
     std::vector<uint8_t> cluster_buf(cluster_size);
 
@@ -945,13 +928,8 @@ int convert_qcow2_to_imgfile(const char *input_path, IFile *target,
 
     for (size_t i = 0; i < mappings.size(); i++) {
         const auto &cm = mappings[i];
-
-        if (verbose && (i % 1000 == 0 || i == mappings.size() - 1)) {
-            printf("\r  Processing cluster %zu/%zu (%.1f%%)...",
-                   i + 1, mappings.size(),
-                   100.0 * (i + 1) / mappings.size());
-            fflush(stdout);
-        }
+        
+        if (cm.is_unallocated) continue;
 
         // When rootfs filtering, skip clusters outside rootfs ranges
         if (filter.enabled() && !filter.overlaps_rootfs(cm.logical_offset, cm.cluster_size)) {
@@ -965,25 +943,30 @@ int convert_qcow2_to_imgfile(const char *input_path, IFile *target,
             if (out_offset == UINT64_MAX) continue;
         }
 
-        // Read cluster data (handles compressed/uncompressed/zero internally)
-        ssize_t n = reader.read_data(cm.logical_offset, cluster_buf.data(), cm.cluster_size);
-        if (n < 0) {
-            fprintf(stderr, "ERROR: Failed to read cluster at logical offset %lu\n",
-                    static_cast<unsigned long>(cm.logical_offset));
-            return 1;
-        }
-        if (n < static_cast<ssize_t>(cm.cluster_size)) {
-            std::fill(cluster_buf.begin() + n, cluster_buf.end(), 0);
-        }
-
-        // Write to target IFile (ImageFile backed by LSMT) at the correct logical offset.
-        // This is the key difference from convert_qcow2_to_zfile:
-        // we write to an existing ImageFile instead of creating a new LSMT layer.
-        ssize_t written = target->pwrite(cluster_buf.data(), cm.cluster_size, out_offset);
-        if (written != static_cast<ssize_t>(cm.cluster_size)) {
-            fprintf(stderr, "ERROR: pwrite to ImageFile failed at offset %lu (wrote %zd, expected %u)\n",
-                    static_cast<unsigned long>(out_offset), written, cm.cluster_size);
-            return 1;
+        if (cm.is_zero) {
+            // Zero cluster: punch hole directly, no need to read data
+            int ret=target->fallocate(3, out_offset, cm.cluster_size);
+            if (ret < 0) {
+                fprintf(stderr, "ERROR: fallocate to ImageFile failed at offset %lu\n",
+                        static_cast<unsigned long>(out_offset));
+                return -1;
+            }
+        } else {
+            ssize_t n = reader.read_data(cm.logical_offset, cluster_buf.data(), cm.cluster_size);
+            if (n < 0) {
+                fprintf(stderr, "ERROR: Failed to read cluster at logical offset %lu\n",
+                        static_cast<unsigned long>(cm.logical_offset));
+                return -1;
+            }
+            if (n < static_cast<ssize_t>(cm.cluster_size)) {
+                std::fill(cluster_buf.begin() + n, cluster_buf.end(), 0);
+            }
+            ssize_t written = target->pwrite(cluster_buf.data(), cm.cluster_size, out_offset);
+            if (written != static_cast<ssize_t>(cm.cluster_size)) {
+                fprintf(stderr, "ERROR: pwrite to ImageFile failed at offset %lu (wrote %zd, expected %u)\n",
+                        static_cast<unsigned long>(out_offset), written, cm.cluster_size);
+                return -1;
+            }
         }
 
         // Stats
@@ -1005,9 +988,7 @@ int convert_qcow2_to_imgfile(const char *input_path, IFile *target,
     return 0;
 }
 
-// ============================================================================
-// Main Entry Point
-// ============================================================================
+// Main Entry Point (commented out - invoked from overlaybd-apply)
 
 // int main(int argc, char *argv[]) {
 //     CLI::App app("Convert a QCOW2 disk image to ZFile compressed format (OverlayBD ZFile).");

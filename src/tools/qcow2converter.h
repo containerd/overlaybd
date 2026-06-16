@@ -1,6 +1,7 @@
 #pragma once
 
 #include <photon/fs/filesystem.h>
+#include <cstdint>
 // Default compression block size
 constexpr uint32_t DEFAULT_BLOCK_SIZE = 4096;
 // Write qcow2 clusters directly to an existing overlaybd IFile (ImageFile)

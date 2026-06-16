@@ -18,7 +18,7 @@ target_link_libraries(overlaybd-zfile photon_static overlaybd_lib)
 
 add_executable(overlaybd-apply overlaybd-apply.cpp qcow2converter.cpp)
 target_include_directories(overlaybd-apply PUBLIC ${PHOTON_INCLUDE_DIR} ${RAPIDJSON_INCLUDE_DIRS})
-target_link_libraries(overlaybd-apply photon_static overlaybd_lib overlaybd_image_lib checksum_lib)
+target_link_libraries(overlaybd-apply photon_static overlaybd_lib overlaybd_image_lib checksum_lib z)
 set_target_properties(overlaybd-apply PROPERTIES INSTALL_RPATH "/opt/overlaybd/lib")
 
 add_executable(turboOCI-apply turboOCI-apply.cpp)

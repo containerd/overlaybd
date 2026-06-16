@@ -172,5 +172,7 @@ int start_api_server(ApiServer *&api_server , ImageService *imgservice, const st
 }
 
 int stop_api_server(ApiServer *api_server) {
+    if (api_server == nullptr) return 0;
     safe_delete(api_server);
+    return 0;
 }
