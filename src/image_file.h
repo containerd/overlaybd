@@ -121,6 +121,11 @@ public:
 
     int create_snapshot(const char *new_config_path);
 
+    // Resize the block device (and optionally the ext4 filesystem).
+    // target_size: new block device size in bytes.
+    // resize_fs: if true, also resize the ext4 filesystem to match.
+    int resize(uint64_t target_size, bool resize_fs = false);
+
 private:
     Prefetcher *m_prefetcher = nullptr;
     ImageConfigNS::ImageConfig conf;

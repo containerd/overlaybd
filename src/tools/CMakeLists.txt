@@ -30,6 +30,14 @@ add_library(checksum_lib sha256file.cpp)
 target_include_directories(checksum_lib PUBLIC ${PHOTON_INCLUDE_DIR})
 target_link_libraries(checksum_lib photon_static)
 
+# overlaybd-resize: userspace ext4 resize for overlaybd images
+if (NOT ORIGIN_EXT2FS)
+    add_executable(overlaybd-resize overlaybd-resize.cpp)
+    target_include_directories(overlaybd-resize PUBLIC ${PHOTON_INCLUDE_DIR})
+    target_link_libraries(overlaybd-resize photon_static overlaybd_image_lib)
+    set_target_properties(overlaybd-resize PROPERTIES INSTALL_RPATH "/opt/overlaybd/lib")
+endif()
+
 install(TARGETS
     overlaybd-commit
     overlaybd-create
@@ -40,3 +48,7 @@ install(TARGETS
     turboOCI-apply
     DESTINATION /opt/overlaybd/bin
 )
+
+if (NOT ORIGIN_EXT2FS)
+    install(TARGETS overlaybd-resize DESTINATION /opt/overlaybd/bin)
+endif()

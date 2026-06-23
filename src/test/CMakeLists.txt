@@ -49,3 +49,28 @@ add_test(
     NAME trace_test
     COMMAND ${EXECUTABLE_OUTPUT_PATH}/trace_test
 )
+
+if (NOT ORIGIN_EXT2FS)
+    set_source_files_properties(
+        ${E2FS_RESIZE_DIR}/resize2fs.o
+        ${E2FS_RESIZE_DIR}/extent.o
+        ${E2FS_RESIZE_DIR}/resource_track.o
+        PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
+    add_executable(resize_test
+        resize_test.cpp
+        ${E2FS_RESIZE_DIR}/resize2fs.o
+        ${E2FS_RESIZE_DIR}/extent.o
+        ${E2FS_RESIZE_DIR}/resource_track.o
+    )
+    target_include_directories(resize_test PUBLIC
+        ${PHOTON_INCLUDE_DIR}
+        ${E2FS_INCLUDE_DIRS}
+        ${E2FS_RESIZE_DIR}
+    )
+    target_link_libraries(resize_test gtest pthread photon_static ${E2FS_LIBRARIES})
+    add_dependencies(resize_test libext2fs_build)
+    add_test(
+        NAME resize_test
+        COMMAND ${EXECUTABLE_OUTPUT_PATH}/resize_test
+    )
+endif()

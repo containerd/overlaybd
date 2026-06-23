@@ -33,6 +33,18 @@ target_link_libraries(overlaybd_image_lib
   ${AIO_LIBRARIES}
 )
 
+# Propagate resize .o files to all consumers of overlaybd_image_lib.
+# These provide the resize_fs() symbol needed by photon's resize_extfs().
+if (NOT ORIGIN_EXT2FS)
+    target_link_libraries(overlaybd_image_lib
+        ${E2FS_RESIZE_DIR}/resize2fs.o
+        ${E2FS_RESIZE_DIR}/extent.o
+        ${E2FS_RESIZE_DIR}/resource_track.o
+        ${E2FS_LIBRARIES}
+    )
+    add_dependencies(overlaybd_image_lib libext2fs_build)
+endif()
+
 add_executable(overlaybd-tcmu
   main.cpp
 )
