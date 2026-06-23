@@ -1,0 +1,21 @@
+# Keep dependencies up to date automatically.
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates
+version: 2
+updates:
+  # GitHub Actions used by CI/release workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Git submodules (vendored C/C++ dependencies)
+  - package-ecosystem: "gitsubmodule"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Base image for the release build container
+  - package-ecosystem: "docker"
+    directory: "/.github/workflows/release"
+    schedule:
+      interval: "weekly"
