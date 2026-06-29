@@ -193,7 +193,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | gzipCacheConfig.cacheSizeGB | The max size of cache, in GB.                                                                 |
 | gzipCacheConfig.refillSize  | The refill size from source, in byte. `262144` is default (256 KB).                           |
 | credentialFilePath(legacy)  | The credential used for fetching images on registry. `/opt/overlaybd/cred.json` is the default value. |
-| credentialConfig.mode       | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` <br> - `https` means sending an https request to `credentialConfig.path`, with optional client certificate authentication and CA pinning |
+| credentialConfig.mode       | Authentication mode for lazy-loading. <br> - `file` means reading credential from `credentialConfig.path`.  <br> - `http` means sending an http request to `credentialConfig.path` <br> - `https` means sending an https request to `credentialConfig.path`, with optional client certificate authentication and CA pinning <br> - `uds` means sending the same http request as `http` mode, but over a Unix-domain socket at `credentialConfig.path` |
 | credentialConfig.path       | credential file path or url which is determined by `mode`                                     |
 | credentialConfig.client_cert_path | Optional. Path to the client certificate file (`https` mode). May contain the private key in the same PEM file. |
 | credentialConfig.client_key_path  | Optional. Path to the client private key file (`https` mode). Only needed when the key is separate from the certificate. |
@@ -324,6 +324,30 @@ we write a sample http server in `test/simple_auth_server.cpp`
   - `client_cert_path` sets the client certificate. If the PEM file also contains the private key, `client_key_path` can be omitted.
   - `client_key_path` sets the client private key. Only needed when the key is in a separate file from the certificate.
   - If `server_ca_path` is omitted, the system CA bundle is used to verify the server certificate. When `server_ca_path` is set, **only** the specified CA file is used — the system CA bundle is not consulted.
+
+- mode **uds**
+
+  the `credentialConfig.path` should be the filesystem path of a Unix-domain socket. overlaybd dials the socket and speaks the same HTTP request/response format as the `http` mode.
+
+```json
+#### /etc/overlaybd/config.json ####
+{
+  "logLevel": 1,
+  "logPath": "/var/log/overlaybd.log",
+  ...
+  "credentialConfig": {
+      "mode": "uds",
+      "path": "/run/overlaybd/creds.sock"
+    },
+  ...
+}
+```
+  overlaybd will dial the socket and send a request like:
+> GET "http://localhost/auth?remote_url=https://hub.docker.com/v2/overlaybd/ubuntu/blobs/sha256:47e63559a8487efb55b2f1ccea9cfc04110a185c49785fdf1329d1ea462ce5f0"
+
+  The HTTP host (`localhost` here) is a placeholder — the request is always dialed over the configured socket. The server response format is identical to the `http` mode.
+
+  Security model: a UDS is not network-reachable and is gated by filesystem permissions on the socket file. Restrict access by setting the socket owner/group and a non-world-readable mode (e.g. `0600` or `0660`) on the helper side; overlaybd does not enforce this on the client.
 
 
 ## Usage
