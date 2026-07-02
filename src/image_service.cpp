@@ -212,10 +212,13 @@ int load_cred_from_https(const std::string addr /* https server */, const std::s
 int load_cred_from_uds(const std::string socket_path, const std::string &remote_path,
                        std::string &username, std::string &password, int timeout) {
     if (socket_path.empty()) {
-        LOG_ERRNO_RETURN(0, -1, "empty uds socket path");
+        LOG_ERROR_RETURN(0, -1, "empty uds socket path");
     }
-    if (::access(socket_path.c_str(), R_OK | W_OK) != 0) {
-        LOG_ERRNO_RETURN(0, -1, "uds socket not accessible: `", socket_path);
+    if (::access(socket_path.c_str(), F_OK) != 0) {
+        LOG_ERRNO_RETURN(0, -1, "uds socket does not exist: `", socket_path);
+    }
+    if (::access(socket_path.c_str(), W_OK) != 0) {
+        LOG_ERRNO_RETURN(0, -1, "uds socket not writable: `", socket_path);
     }
 
     auto request = new photon::net::cURL();
