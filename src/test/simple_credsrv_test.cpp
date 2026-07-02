@@ -97,6 +97,37 @@ TEST(auth, http_server) {
     photon::thread_sleep(60);
 }
 
+TEST(auth, uds_server) {
+    const char *sock_path = "/tmp/obd-credsrv-uds-test.sock";
+    ::unlink(sock_path);
+
+    auto udsserver = photon::net::new_uds_server(true /* autoremove */);
+    udsserver->timeout(1000UL * 1000);
+    ASSERT_EQ(0, udsserver->bind(sock_path));
+    ASSERT_EQ(0, udsserver->listen());
+    DEFER(delete udsserver);
+
+    auto server = new_http_server();
+    DEFER(delete server);
+    SimpleAuthHandler h;
+    server->add_handler(&h, false, "/auth");
+    udsserver->set_handler(server->get_connection_handler());
+    udsserver->start_loop();
+    photon::thread_sleep(1);
+
+    std::string remote_path = "", user = "", passwd = "";
+    // The handler sleeps 1s before responding; a 1s timeout must trip.
+    auto ret = load_cred_from_uds(sock_path, remote_path, user, passwd, 1);
+    EXPECT_EQ(ret, -1);
+    ret = load_cred_from_uds(sock_path, remote_path, user, passwd, 3);
+    EXPECT_EQ(ret, 0);
+
+    // Missing socket file must surface as a clear error.
+    ret = load_cred_from_uds("/tmp/obd-credsrv-uds-test.does-not-exist.sock",
+                             remote_path, user, passwd, 1);
+    EXPECT_EQ(ret, -1);
+}
+
 int main(int argc, char** arg) {
     photon::init();
     DEFER(photon::fini());
