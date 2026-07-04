@@ -93,7 +93,7 @@ jobs:
         name="releases-${image//\//_}-${platform/\//_}"
         echo "name=${name}" >> "$GITHUB_OUTPUT"
     - name: Upload
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ steps.upload_name.outputs.name }}
         path: releases/overlaybd-*.*
