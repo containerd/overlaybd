@@ -209,6 +209,46 @@ int load_cred_from_https(const std::string addr /* https server */, const std::s
     return parse_auths(response.data().auths(), remote_path, username, password);
 }
 
+int load_cred_from_uds(const std::string socket_path, const std::string &remote_path,
+                       std::string &username, std::string &password, int timeout) {
+    if (socket_path.empty()) {
+        LOG_ERROR_RETURN(0, -1, "empty uds socket path");
+    }
+    if (::access(socket_path.c_str(), F_OK) != 0) {
+        LOG_ERRNO_RETURN(0, -1, "uds socket does not exist: `", socket_path);
+    }
+    if (::access(socket_path.c_str(), W_OK) != 0) {
+        LOG_ERRNO_RETURN(0, -1, "uds socket not writable: `", socket_path);
+    }
+
+    auto request = new photon::net::cURL();
+    DEFER({ delete request; });
+
+    request->setopt(CURLOPT_UNIX_SOCKET_PATH, socket_path.c_str());
+
+    // Host is a placeholder when CURLOPT_UNIX_SOCKET_PATH is set; libcurl
+    // dials the socket regardless of the URL host.
+    auto request_url = std::string("http://localhost/auth?remote_url=") + remote_path;
+    LOG_INFO("request url: ` (uds: `)", request_url, socket_path);
+    photon::net::StringWriter writer;
+    auto ret = request->GET(request_url.c_str(), &writer, (int64_t)timeout * 1000000);
+    if (ret != 200) {
+        LOG_ERRNO_RETURN(0, -1, "connect to auth component failed. http response code: `", ret);
+    }
+    LOG_DEBUG(writer.string);
+    ImageAuthResponse response;
+    LOG_DEBUG("response size: `", writer.string.size());
+    if (response.ParseJSONStream(writer.string) == false) {
+        LOG_ERRNO_RETURN(0, -1, "parse http response message failed: `", writer.string);
+    }
+    LOG_INFO("traceId: `, succ: `", response.traceId(), response.success());
+    if (response.success() == false) {
+        LOG_ERRNO_RETURN(0, -1, "http request failed.");
+    }
+    ImageConfigNS::AuthConfig cfg;
+    return parse_auths(response.data().auths(), remote_path, username, password);
+}
+
 int ImageService::read_global_config_and_set() {
     LOG_INFO("using config `", m_config_path);
     if (!global_conf.ParseJSON(m_config_path)) {
@@ -291,6 +331,10 @@ ImageService::reload_auth(const char *remote_path) {
             auto server_ca = global_conf.credentialConfig().server_ca_path();
             res = load_cred_from_https(path, std::string(remote_path), username, password,
                                        timeout, client_cert, client_key, server_ca);
+        } else if (mode == "uds") {
+            auto timeout = global_conf.credentialConfig().timeout();
+            res = load_cred_from_uds(path, std::string(remote_path),
+                                     username, password, timeout);
         } else {
             LOG_ERROR("invalid mode for authentication.");
             return std::make_pair("","");
