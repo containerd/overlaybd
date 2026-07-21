@@ -83,8 +83,28 @@ elif [[ ${OS} =~ "mariner" ]]; then
     PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.${DISTRO}"
 elif [[ ${OS} =~ "azurelinux" ]]; then
     tdnf update -y
-    tdnf install -y libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel glibc-devel libzstd-devel binutils ca-certificates-microsoft build-essential
-    tdnf install -y rpm-build make git wget sudo tar gcc gcc-c++ autoconf automake libtool
+    if [[ ${OS} =~ "azurelinux:4" ]]; then
+        # Azure Linux 4.0 removed the `ca-certificates-microsoft` and
+        # `build-essential` packages that AL3 ships, and no longer pulls
+        # zlib-devel/pkg-config in transitively. Install the equivalent set
+        # explicitly. (gcc/gcc-c++/make/binutils/glibc-devel/autoconf/
+        # automake/libtool are already installed on the next line, which is
+        # everything `build-essential` provided.)
+        tdnf install -y libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel glibc-devel libzstd-devel binutils ca-certificates zlib-devel
+        tdnf install -y rpm-build make git wget sudo tar gcc gcc-c++ autoconf automake libtool pkg-config
+
+        # Azure Linux 4's rpmbuild runs check-rpaths which rejects the
+        # /opt/overlaybd/lib RPATH baked into our binaries (they link against
+        # the bundled libext2fs installed there). Bit 0x0002 = "rpath contains
+        # a directory not in the standard set" -- the exact check we hit. Only
+        # bypass this single check; the produced binaries are byte-identical
+        # to what other targets ship.
+        export QA_RPATHS=0x0002
+    else
+        # Azure Linux 3.0 (and earlier) -- unchanged from the original recipe.
+        tdnf install -y libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel glibc-devel libzstd-devel binutils ca-certificates-microsoft build-essential
+        tdnf install -y rpm-build make git wget sudo tar gcc gcc-c++ autoconf automake libtool
+    fi
 
     DISTRO=${OS/:/.}
     PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.${DISTRO}"

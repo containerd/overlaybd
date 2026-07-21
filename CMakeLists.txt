@@ -23,6 +23,13 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fpic -Wall -Werror=sign-compare")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fpic -Wall -Werror=sign-compare -DOVERLAYBD_VER=${OBD_VER}")
 
+# GCC 13+ (default on Azure Linux 4.0 with GCC 15) no longer transitively
+# includes <cstdint> from other standard headers. Force-include it for every
+# C++ translation unit so that fixed-width integer types (uint64_t, etc.) used
+# in third-party headers (e.g. photon's fs/path.h at the pinned commit) resolve
+# without needing to upgrade those pins. C sources (e.g. OCF) are unaffected.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -include cstdint")
+
 if ((CMAKE_SYSTEM_PROCESSOR STREQUAL aarch64) OR (CMAKE_SYSTEM_PROCESSOR STREQUAL arm64))
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a+crc -fsigned-char -fno-stack-protector -fomit-frame-pointer")
 endif ()
@@ -56,7 +63,9 @@ if(BUILD_STREAM_CONVERTOR)
         FetchContent_Declare(
             yaml-cpp
             GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-            GIT_TAG 0.8.0
+            # 0.9.0 includes the missing <cstdint> include (PR #1310) required
+            # to build with GCC 15 (C23 default), e.g. on Azure Linux 4.0.
+            GIT_TAG yaml-cpp-0.9.0
         )
         FetchContent_MakeAvailable(yaml-cpp)
     endif()

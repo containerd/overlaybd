@@ -14,10 +14,17 @@ if(NOT ORIGIN_EXT2FS)
         set(E2FS_RESIZE_DIR ${e2fsprogs_SOURCE_DIR}/build/resize CACHE STRING "path to e2fsprogs resize build dir")
         set(E2FS_INSTALL_LIB_DIR ${LIBEXT2FS_INSTALL_DIR}/lib CACHE STRING "path to e2fsprogs install-libs output")
 
+        # Force the e2fsprogs autotools build to use C11. GCC 15 (Azure Linux
+        # 4.0) defaults to C23, under which `typedef int bool;` in
+        # lib/ext2fs/tdb.c is illegal because `bool` is now a keyword. The
+        # upstream build.sh hardcodes `CFLAGS="-fPIC -O3"` on the configure
+        # line, so setting CFLAGS via the environment is ignored -- we patch
+        # build.sh in place instead. `-std=gnu11` is supported by every
+        # compiler used across the release matrix (GCC 7+).
         add_custom_command(
             OUTPUT ${LIBEXT2FS_INSTALL_DIR}/lib
             WORKING_DIRECTORY ${e2fsprogs_SOURCE_DIR}
-            COMMAND chmod 755 build.sh && ./build.sh
+            COMMAND chmod 755 build.sh && sed -i 's|CFLAGS="-fPIC -O3"|CFLAGS="-fPIC -O3 -std=gnu11"|' build.sh && ./build.sh
         )
         add_custom_target(libext2fs_build DEPENDS ${LIBEXT2FS_INSTALL_DIR}/lib)
     endif()
