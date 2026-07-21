@@ -107,7 +107,7 @@ jobs:
     needs: [build]
     steps:
       - name: Download builds and release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
       - name: Display downloaded files
         shell: bash
         run: ls -l releases*/
@@ -128,7 +128,7 @@ jobs:
     needs: [build]
     steps:
       - name: Download builds and release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
       - name: Display downloaded files
         shell: bash
         run: ls -l releases*/
