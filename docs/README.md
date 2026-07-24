@@ -1,8 +1,21 @@
-# Overlaybd
+# Overlaybd — Instant Container Image Pulling, No More Waiting
 
 <img src="assets/overlaybd_logo.svg" width="100px"/>
 
-Overlaybd (overlay block device) is a novel layering block-level image format, which is design for container, secure container and applicable to virtual machine. And it is an open-source implementation of paper [DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20](https://www.usenix.org/conference/atc20/presentation/li-huiba).
+Overlaybd (overlay block device) is a novel layered image format based on block-diff represenation.
+It is designed for efficient launching of containers (as well as secure containers).
+Born in Alibaba, overlaybd is deployed at scale in its production environment, exclusively
+supporting *all* its own applications, such as Taobao, TMall, AlibabaCloud, etc.
+Overlaybd is also commercialized in AlibabaCloud, and has been adopted by many major
+customers of AlibabaCloud who need image acceleration.
+Overlaybd is an open-source sub-project of containerd, CNCF. It has been adopted by many
+organizations world-wide, most notably Microsoft Azure, Databricks, Boss直聘, etc.
+Overlaybd can be also used for virtual machines or micro sandboxes.
+
+Overlaybd is the open-source project of a technical paper [DADI: Block-Level Image Service for Agile
+and Elastic Application Deployment](https://www.usenix.org/conference/atc20/presentation/li-huiba) in
+USENIX Annual Technical Conference.
+
 
 <img src="assets/Scaling_up.jpg" width="400px">
 
