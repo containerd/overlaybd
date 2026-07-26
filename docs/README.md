@@ -2,33 +2,212 @@
 
 <img src="assets/overlaybd_logo.svg" width="100px"/>
 
-Overlaybd (overlay block device) is a novel layered image format based on block-diff represenation.
-It is designed for efficient launching of containers (as well as secure containers).
-Born in Alibaba, overlaybd is deployed at scale in its production environment, exclusively
-supporting *all* its own applications, such as Taobao, TMall, AlibabaCloud, etc.
-Overlaybd is also commercialized in AlibabaCloud, and has been adopted by many major
-customers of AlibabaCloud who need image acceleration.
-Overlaybd is an open-source sub-project of containerd, CNCF. It has been adopted by many
-organizations world-wide, most notably Microsoft Azure, Databricks, Boss直聘, etc.
-Overlaybd can be also used for virtual machines or micro sandboxes.
+A fast, secure, stable, universal, proven, open-source image solution for all forms of
+containers, virtual machines, and sandboxes.
 
-Overlaybd is the open-source project of a technical paper [DADI: Block-Level Image Service for Agile
-and Elastic Application Deployment](https://www.usenix.org/conference/atc20/presentation/li-huiba) in
-USENIX Annual Technical Conference.
+# Introduction
+
+[Overlaybd (overlay block device)](https://github.com/containerd/overlaybd)
+is a novel layered image format based on block-diff representation.
+It is designed for fast launching of containers (as well as secure containers).
+Born in Alibaba, overlaybd is deployed at **scale** for **years** in its production environment,
+exclusively supporting all its own applications, such as Taobao (淘宝), TMall (天猫), AlibabaCloud (阿里云), etc.
+Overlaybd is also commercialized in AlibabaCloud as the single option for container image
+acceleration, and has been adopted by many major customers of AlibabaCloud across the globe.
+Overlaybd is an open-source sub-project of containerd, the industry-standard container runtime
+[graduated at CNCF](https://www.cncf.io/projects/containerd/).
+The project has been integrated by many organizations world-wide, most notably
+[Azure Kubernetes Service's Artifact Streaming](https://learn.microsoft.com/en-us/azure/aks/artifact-streaming-overview),
+[Databricks](https://www.databricks.com/blog/booting-databricks-vms-7x-faster-serverless-compute),
+[DeepSeek Elastic Compute (DSes)](https://arxiv.org/html/2606.19348v1),
+[fly.io](https://community.fly.io/t/experimental-speedy-machine-creation-with-overlaybd/18958),
+[hocus.dev](https://hocus.dev/blog/virtualizing-development-environments), etc.
+Overlaybd can also be used for virtual machines or micro sandboxes.
+
+<!-- Boss直聘, -->
+<!-- RedNote(小红书), etc. -->
+
+Overlaybd is the official open-sourced implementation of
+two papers published in USENIX Annual Technical Conference:
+[DADI](https://www.usenix.org/conference/atc20/presentation/li-huiba) and
+[FaaSNet](https://www.usenix.org/conference/atc21/presentation/wang-ao).
+The first paper describes the general idea of overlaybd and how it
+supports the large-scale infrastructure of Alibaba. And the second one
+describes how overlaybd is applied (and fine-tuned) in the Function Compute
+service of AlibabaCloud.
+
+## Fast
+
+Overlaybd achieves fast container startup through the following key designs:
+
+- **On-demand (lazy) fetching**: Containers start immediately by reading image data remotely as needed,
+  without downloading and unpacking the entire image. A 1GB+ image can launch in under 1 second.
+  With proper caching / P2P transferring, overlaybd can support [launching 10,000s of containers
+  within seconds](articles/dadi-aliyun-2020-en.md).
+
+- **Optimized LBA lookup**: Overlaybd operates at the block level with a flat LBA address space, so
+  cross-layer lookup is a **single** index query regardless of layer count, whereas filesystem-based
+  stacking (e.g. overlayfs) requires an *O(n)* lookup across layers on every path resolution, where
+  *n* is the number of layers — checking each layer's directory entries sequentially.
+  Furthermore, overlaybd's multi-layer block mapping uses a highly optimized linearized B+ tree
+  with AVX-512 SIMD batch comparison, achieving 100s of millions of QPS on a single CPU core,
+  up to 10X over conventional approaches.
+  [Details](https://github.com/containerd/overlaybd/blob/main/docs/lsmt_lookup.md).
+  Note that this algorithm is so fast that it is [even feasible for IP address lookup in
+  backbone core routers](https://www.usenix.org/conference/nsdi26/presentation/zhang-zhihao).
+
+- **Metadata efficiency**: Operations like hardlink, chown, etc. are supported as usual
+  without copy-up. Actually writes to overlaybd are pure writes - no lower-layer data
+  is ever copied on write. ~~CoW~~
+
+- **Seekable compression (ZFile)**: Random reads decompress only the requested data range,
+  not the entire compressed block. Because compressed data is smaller, the actual I/O
+  transfer is reduced enough that compressed random reads are often *faster* than
+  uncompressed ones — the decompression cost is less than the I/O saved.
+
+- **High-efficiency I/O runtime**:
+  The service is built on [PhotonLibOS](https://github.com/alibaba/PhotonLibOS),
+  which is probably the fastest coroutine framework in the world.
+
+<style>
+.pic {
+    width: 30%; margin-right: 2%;
+    background-color: #3f3f3f;
+}
+</style>
+
+- **Benchmark results**:
+
+<img src="assets/cold_startup_latency.png" class="pic"/>
+<img src="assets/warm_startup_latency.png" class="pic"/>
+<img src="assets/startup_latency_with_prefetch.png" class="pic"/>
+<img src="assets/batch_code_startup_latency.png" class="pic"/>
+<img src="assets/time_pull_image.png" class="pic"/>
+<img src="assets/time_launch_app.png" class="pic"/>
 
 
-<img src="assets/Scaling_up.jpg" width="400px">
+## Secure
 
-[Scaling up Without Slowing Down: Accelerating Pod Start Time. KubeCon+CloudNativeCon Europe 2024](https://youtu.be/RJ6Lt9bVNTw)
+Overlaybd exposes a virtual block device to the system, which is a well-understood interface
+that keeps the attack surface minimal:
 
-Overlaybd was first proposed by Alibaba Cloud and widely used in Alibaba cloud services. It became a sub-project of containerd in 2021.
+- **Block-device interface**:
+  The block I/O interface is one of the oldest and most battle-tested
+  boundaries in computing — hardened by decades of use in the virtual machine ecosystem
+  (QEMU/KVM, virtio-blk). Filesystem-semantics image formats must serve files through
+  extra translation layers — FUSE, virtio-fs, or fscache — each adding its own
+  userspace/kernel interface and attack surface. Overlaybd delegates all filesystem logic
+  to the kernel's native, thoroughly audited filesystem stack.
 
-As an image format, overlaybd has 2 core component:
+- **No filesystem parsing in userspace**: Filesystem-based image formats must implement
+  tar extraction, permission handling, and metadata reconciliation in userspace — a large
+  and complex attack surface. Overlaybd's userspace component only maps LBAs to data
+  ranges; it never interprets filesystem structures.
 
-- Overlaybd is a layering image format, provideing a merged view of a sequence of block-based layers as a virtual block device. [SPEC](https://containerd.github.io/overlaybd/#/specs/lsmt.md)
+- **Simple data path**: The read path is a straightforward index lookup followed by a data
+  fetch. There is no code execution, no archive extraction, and no dynamic linking of
+  untrusted content during image loading.
 
-- Zfile is a compression file format which support seekalbe online decompression. [SPEC](https://containerd.github.io/overlaybd/#/specs/zfile.md)
+- **Sound resource isolation**: Filesystem-sharing mechanisms (virtio-fs / virtio-9p) have
+  been shown to let containers bypass memory cgroup and ephemeral storage limits, because
+  page population and file backing happen outside the sandbox
+  ([kata-containers#12203](https://github.com/kata-containers/kata-containers/issues/12203)).
+  This is a class of issue that does not exist for block-device-based images.
 
+## Stable
+
+Overlaybd is built on mature, production-hardened foundations:
+
+- **Kernel-backed device interface**: Virtual block devices are exported through
+  [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt) (with
+  [ublk](https://docs.kernel.org/block/ublk.html) support planned), both of which are
+  in-kernel frameworks maintained by the Linux community and widely deployed in storage
+  stacks such as LIO and Ceph. The interface is stable across kernel versions and
+  distributions.
+
+- **Crash and failure recovery**: Because overlaybd's state lives in a thin, well-defined
+  interface and on-disk format, the service can recover from process crashes or
+  restarts and re-attach the device. FUSE-based formats keep filesystem state in a
+  userspace daemon — if it dies, the mounted filesystem typically hangs or becomes
+  unusable, and recovery is difficult.
+
+- **Simple implementation, easier correctness**: Overlaybd's core logic is a thin LBA-to-data
+  mapping over a straightforward on-disk format — far simpler than a full filesystem implementation.
+  Less code and fewer invariants mean correctness is easier to achieve and verify, and the
+  kernel block layer adds request queuing, retries, and error handling for free.
+
+## Universal
+
+A block device is the most universal storage abstraction in computing, so overlaybd works
+across the full spectrum of workloads without per-runtime adaptation:
+
+- **One format, every consumer**: Anything that can attach a block device can use
+  overlaybd — containers (via a containerd snapshotter, and potentially Windows
+  containers), virtual machines (QEMU/KVM, Firecracker), and micro-sandboxes alike. No
+  runtime-specific image variant is needed.
+
+- **Decoupled from filesystem choice**: Because overlaybd sits *below* the filesystem,
+  the guest or host is free to run any filesystem on top — ext4, XFS, Btrfs, EROFS, and
+  so on. Filesystem-based image formats, by contrast, bake a specific layout into the
+  image and tie you to its semantics.
+
+- **OS-agnostic guests**: Sandboxes and VMs increasingly run diverse operating systems —
+  Linux, Windows, Android, macOS, and more. A block device is understood by all of them,
+  so the same overlaybd image mechanism serves any guest OS. Linux-centric filesystem
+  formats (overlayfs, EROFS, FUSE) simply cannot address non-Linux guests.
+
+- **No special guest support**: A VM or sandbox needs only a standard block-device driver
+  (virtio-blk, etc.) to consume an overlaybd image. There is no requirement to install a
+  custom agent, FUSE daemon, or filesystem module inside the guest.
+
+## Proven
+
+Overlaybd is not a research prototype — it runs some of the largest container fleets in
+the world:
+
+- **Production in Alibaba at scale**: Deployed for years across Alibaba's entire application
+  portfolio — Taobao, TMall, AlibabaCloud and more — and commercialized on AlibabaCloud as
+  its container image acceleration offering, adopted by major customers worldwide.
+
+- **Adopted across the industry**: Integrated by organizations including
+  [Azure Kubernetes Service (Artifact Streaming)](https://learn.microsoft.com/en-us/azure/aks/artifact-streaming-overview),
+  [Databricks](https://www.databricks.com/blog/booting-databricks-vms-7x-faster-serverless-compute),
+  [DeepSeek Elastic Compute](https://arxiv.org/html/2606.19348v1),
+  [fly.io](https://community.fly.io/t/experimental-speedy-machine-creation-with-overlaybd/18958),
+  and [hocus.dev](https://hocus.dev/blog/virtualizing-development-environments).
+
+- **Peer-reviewed research**: The design is documented in two USENIX Annual Technical
+  Conference papers — [DADI](https://www.usenix.org/conference/atc20/presentation/li-huiba)
+  and [FaaSNet](https://www.usenix.org/conference/atc21/presentation/wang-ao).
+
+## Open-source
+
+Overlaybd is developed in the open under neutral governance:
+
+- **Source code repositories on GitHub**:
+  - I/O data path: [containerd/overlaybd](https://github.com/containerd/overlaybd)
+  - Snapshotter & conversion tools: [containerd/accelerated-container-image](https://github.com/containerd/accelerated-container-image)
+  - P2P distribution: [data-accelerator/dadi-p2proxy](https://github.com/data-accelerator/dadi-p2proxy)
+
+- **Neutral governance**: An open-source sub-project of
+  [containerd](https://www.cncf.io/projects/containerd/) (a CNCF graduated project) since
+  2021, released under the Apache-2.0 license. Originally proposed by Alibaba Cloud, it is
+  maintained in the open rather than controlled by a single vendor.
+
+- **Active, broadening community**: Beyond the core maintainers, the project receives
+  contributions and feedback from across the industry — distribution packagers (Gentoo),
+  cloud providers (Azure Linux / Ubuntu targets), users at organizations such as
+  Databricks, and members of the EROFS, kernel, and containerd communities.
+
+- **Open specifications**: The image format is fully documented and open for independent
+  implementation:
+  [LSMT](https://containerd.github.io/overlaybd/#/specs/lsmt.md),
+  [ZFile](https://containerd.github.io/overlaybd/#/specs/zfile.md).
+
+- **Join the discussion**: For synchronous communication, catch us in the `#overlaybd`
+  channel on the [CNCF slack](https://cloud-native.slack.com) (cloud-native.slack.com).
+  Everyone is welcome to join and chat.
+  [Get an invite to the CNCF slack.](https://communityinviter.com/apps/cloud-native/cncf)
 
 # Components
 
@@ -36,7 +215,7 @@ As an image format, overlaybd has 2 core component:
 
 [GitHub](https://github.com/containerd/overlaybd)
 
-Sub-project of containerd, contains the storage service of overlaybd image format, provideing a merged view of a sequence of block-based layers as a virtual block device.
+Sub-project of containerd, contains the storage service of overlaybd image format, providing a merged view of a sequence of block-based layers as a virtual block device.
 Now this service contains an implementation of overlaybd based on [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt), and will provide an implementation based on [ublk](https://docs.kernel.org/block/ublk.html) in the future.
 
 This service is based on [PhotonLibOS](https://github.com/alibaba/PhotonLibOS), which is a high-efficiency LibOS framework.
@@ -48,42 +227,19 @@ The LBA lookup algorithm employs a linearized B+ tree and AVX-512 to optimize pe
 [GitHub](https://github.com/containerd/accelerated-container-image)
 [Getting started](https://github.com/containerd/accelerated-container-image/blob/main/docs/QUICKSTART.md)
 
-Sub-project of containerd, which is a solution of remote container image by fetching image data on-demand without downloading and unpacking the whole image before the container starts. This repositry contains a containerd snapshotter and image conversion tools for overlaybd.
+Sub-project of containerd, which is a solution for remote container images by fetching image data on-demand without downloading and unpacking the whole image before the container starts. This repository contains a containerd snapshotter and image conversion tools for overlaybd.
 
 ## P2P data distribution
 
 [GitHub](https://github.com/data-accelerator/dadi-p2proxy)
 
-Use p2p protocol to speed up HTTP file download for registry in large-scale clusters.
+Uses the P2P protocol to speed up HTTP file download for registry in large-scale clusters.
 
-<br>
+# Events
 
-# Key features
+<img src="assets/Scaling_up.jpg" width="400px">
 
-## High Performace
-
-Overlaybd is a block-device-based image format, which has much lower complexity than filesystem-based implementations. For example, cross-layer hardlink and non-copy commands like chown are very complex for filesystem-based image without copying up, but is natively supported by overlaybd.
-
-<style>
-.pic {
-    width: 30%; margin-right: 2%;
-    background-color: #3f3f3f;
-}
-</style>
-
-<img src="assets/cold_startup_latency.png" class="pic"/>
-<img src="assets/warm_startup_latency.png" class="pic"/>
-<img src="assets/startup_latency_with_prefetch.png" class="pic"/>
-<img src="assets/batch_code_startup_latency.png" class="pic"/>
-<img src="assets/time_pull_image.png" class="pic"/>
-<img src="assets/time_launch_app.png" class="pic"/>
-
-## High Reliability
-
-Overlaybd outputs virtual block devices through TCMU, which is a linux kernel module and widely supported in most operation systems.
-Overlaybd backstore can recover from failures or crashes, which is difficult for FUSE-based image formats.
+[Scaling up Without Slowing Down: Accelerating Pod Start Time. KubeCon+CloudNativeCon Europe 2024](https://youtu.be/RJ6Lt9bVNTw)
 
 
-# Community
 
-For sync communication catch us in the #overlaybd slack channels on Cloud Native Computing Foundation's (CNCF) slack - cloud-native.slack.com. Everyone is welcome to join and chat. [Get Invite to CNCF slack.](https://communityinviter.com/apps/cloud-native/cncf)
