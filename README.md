@@ -119,6 +119,42 @@ cmake -D ENABLE_QAT=1 ..
 
 For more information go to `overlaybd/src/overlaybd/zfile/README.md`.
 
+If you want to build the ublk frontend (`overlaybd-ublk`), which exposes an
+image as `/dev/ublkbN` without going through TCMU/SCSI. It is built by default
+(disable with `-D BUILD_UBLK_FRONTEND=off`); building it additionally requires
+`autoconf`, `automake` and `libtool` (liburing and libublksrv are fetched and
+built from source automatically).
+
+```bash
+cmake -D BUILD_UBLK_FRONTEND=on ..
+```
+
+Running it requires a kernel with the `ublk_drv` driver (mainline >= 6.0, or a
+distro kernel with ublk backported):
+
+```bash
+sudo modprobe ublk_drv
+sudo overlaybd-ublk add --config /path/to/config.v1.json   # prints /dev/ublkbN when ready
+sudo overlaybd-ublk list
+sudo overlaybd-ublk del -n 0
+```
+
+Unlike `overlaybd-tcmu`, one `overlaybd-ublk` process serves exactly one
+device; killing the daemon removes the device. Each device can write to its
+own log file via `add --log-path ...` (recommended when running multiple
+devices; daemons otherwise share the global log file and are distinguished
+by a `ublk-<pid>` tag).
+
+Notes:
+
+* Always unmount filesystems on `/dev/ublkbN` before `del` (or before stopping
+  the daemon): the daemon serves the device's IO, so tearing it down with a
+  mounted filesystem aborts in-flight journal writes.
+* Runtime verified on a 5.10 kernel with ublk backported (Alinux
+  5.10.134); a full regression on mainline 6.x kernels is still pending.
+  Known backport-kernel caveats: DISCARD is unavailable there, and `del`
+  takes ~2s instead of milliseconds.
+
 Finally, setup a systemd service for overlaybd-tcmu backstore.
 
 ```bash
