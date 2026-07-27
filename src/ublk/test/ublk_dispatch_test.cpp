@@ -14,6 +14,7 @@
    limitations under the License.
 */
 #include "../cli.h"
+#include "../config_patch.h"
 #include "../io_dispatch.h"
 
 #include <gtest/gtest.h>
@@ -223,3 +224,41 @@ TEST(cli, list_and_missing_subcommand) {
     EXPECT_NE(parse({}, cmd2), 0); // subcommand is mandatory
     EXPECT_EQ(cmd2.kind, UblkCliCmd::Kind::NONE);
 }
+
+// ---------------------------------------------------------------------------
+// config_patch: per-device cache dir rewriting (--cache-dir)
+// ---------------------------------------------------------------------------
+
+TEST(config_patch, rewrites_all_cache_dirs) {
+    std::string base = R"({
+        "logConfig": { "logLevel": 1 },
+        "cacheConfig": { "cacheType": "file", "cacheDir": "/opt/overlaybd/registry_cache" },
+        "gzipCacheConfig": { "enable": true, "cacheDir": "/opt/overlaybd/gzip_cache" }
+    })";
+    std::string out;
+    ASSERT_EQ(ublk_patch_cache_dirs(base, "/var/cache/obd-dev0", out), 0);
+    EXPECT_NE(out.find("/var/cache/obd-dev0/registry_cache"), std::string::npos);
+    EXPECT_NE(out.find("/var/cache/obd-dev0/gzip_cache"), std::string::npos);
+    EXPECT_EQ(out.find("/opt/overlaybd/registry_cache"), std::string::npos);
+    EXPECT_EQ(out.find("/opt/overlaybd/gzip_cache"), std::string::npos);
+    // unrelated fields survive the rewrite
+    EXPECT_NE(out.find("\"cacheType\":\"file\""), std::string::npos);
+    EXPECT_NE(out.find("\"logLevel\":1"), std::string::npos);
+}
+
+TEST(config_patch, legacy_config_without_cache_sections) {
+    std::string out;
+    ASSERT_EQ(ublk_patch_cache_dirs("{}", "/tmp/c", out), 0);
+    // both the legacy field and the new-style section are covered
+    EXPECT_NE(out.find("\"registryCacheDir\":\"/tmp/c/registry_cache\""),
+              std::string::npos);
+    EXPECT_NE(out.find("\"cacheConfig\""), std::string::npos);
+    EXPECT_EQ(out.find("gzipCacheConfig"), std::string::npos); // section not invented
+}
+
+TEST(config_patch, rejects_invalid_json) {
+    std::string out;
+    EXPECT_NE(ublk_patch_cache_dirs("not json", "/tmp/c", out), 0);
+    EXPECT_NE(ublk_patch_cache_dirs("[1,2]", "/tmp/c", out), 0); // array, not object
+}
+

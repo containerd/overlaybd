@@ -14,6 +14,7 @@
    limitations under the License.
 */
 #include "ublk_device.h"
+#include "config_patch.h"
 #include "io_dispatch.h"
 
 #include "../image_file.h"
@@ -33,6 +34,7 @@
 #include <cerrno>
 #include <csignal>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <thread>
 
@@ -332,10 +334,74 @@ static void ctrl_del_and_deinit() {
     g_ctrl_dev = nullptr;
 }
 
+// mkdir -p: ImageService's create_dir only does single-level mkdir, so a
+// fresh --cache-dir path must be created (with subdirs) before the service
+// initializes.
+static int mkdir_p(const std::string &path, mode_t mode) {
+    for (size_t i = 1; i <= path.size(); i++) {
+        if (i == path.size() || path[i] == '/') {
+            std::string cur = path.substr(0, i);
+            if (mkdir(cur.c_str(), mode) != 0 && errno != EEXIST)
+                return -1;
+        }
+    }
+    return 0;
+}
+
+// --cache-dir support: ImageService parses its cache directories deep inside
+// init(), so the override is applied by writing a patched copy of the service
+// config into the run dir and pointing create_image_service at it (keeps the
+// shared image_service code untouched). The temp file is removed right after
+// the service is created.
+static int make_patched_service_config(const UblkDeviceOpts &opts, std::string &out_path) {
+    const char *base_path = opts.service_config_path.empty()
+                                ? "/etc/overlaybd/overlaybd.json" // create_image_service default
+                                : opts.service_config_path.c_str();
+    std::ifstream in(base_path);
+    if (!in) {
+        fprintf(stderr, "overlaybd-ublk: cannot read service config %s\n", base_path);
+        return -1;
+    }
+    std::string base_json((std::istreambuf_iterator<char>(in)),
+                          std::istreambuf_iterator<char>());
+
+    std::string patched;
+    if (ublk_patch_cache_dirs(base_json, opts.cache_dir, patched) != 0) {
+        fprintf(stderr, "overlaybd-ublk: service config %s is not a valid JSON object\n",
+                base_path);
+        return -1;
+    }
+
+    char path[128];
+    snprintf(path, sizeof(path), "%s/%d.service.json", OVERLAYBD_UBLK_RUN_DIR,
+             (int)getpid());
+    std::ofstream out(path, std::ios::trunc);
+    if (!out || !(out << patched)) {
+        fprintf(stderr, "overlaybd-ublk: cannot write %s\n", path);
+        return -1;
+    }
+    out_path = path;
+    return 0;
+}
+
 int run_ublk_device(const UblkDeviceOpts &opts, int ready_fd) {
     if (ublk_check_control_dev() != 0)
         return 1;
     mkdir(OVERLAYBD_UBLK_RUN_DIR, 0755); // pidfile dir for libublksrv
+
+    std::string service_config = opts.service_config_path;
+    std::string patched_config; // temp file, removed after service init
+    if (!opts.cache_dir.empty()) {
+        if (mkdir_p(opts.cache_dir + "/registry_cache", 0755) != 0 ||
+            mkdir_p(opts.cache_dir + "/gzip_cache", 0755) != 0) {
+            fprintf(stderr, "overlaybd-ublk: cannot create cache dir %s: %s\n",
+                    opts.cache_dir.c_str(), strerror(errno));
+            return 1;
+        }
+        if (make_patched_service_config(opts, patched_config) != 0)
+            return 1;
+        service_config = patched_config;
+    }
 
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     photon::block_all_signal();
@@ -343,7 +409,9 @@ int run_ublk_device(const UblkDeviceOpts &opts, int ready_fd) {
     photon::sync_signal(SIGINT, &stop_device_handler);
 
     g_imgservice = create_image_service(
-        opts.service_config_path.empty() ? nullptr : opts.service_config_path.c_str());
+        service_config.empty() ? nullptr : service_config.c_str());
+    if (!patched_config.empty())
+        unlink(patched_config.c_str()); // config parsed, temp copy no longer needed
     if (g_imgservice == nullptr) {
         LOG_ERROR("failed to create image service");
         return 1;

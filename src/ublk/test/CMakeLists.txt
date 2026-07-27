@@ -11,8 +11,10 @@ add_executable(ublk_dispatch_test
     ublk_dispatch_test.cpp
     ../io_dispatch.cpp
     ../cli.cpp
+    ../config_patch.cpp
 )
-target_include_directories(ublk_dispatch_test PUBLIC ${UBLKSRV_INCLUDE_DIRS} ${LIBURING_INCLUDE_DIRS})
+target_include_directories(ublk_dispatch_test PUBLIC
+    ${UBLKSRV_INCLUDE_DIRS} ${LIBURING_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_DIRS})
 target_link_libraries(ublk_dispatch_test gtest gtest_main pthread)
 
 add_test(

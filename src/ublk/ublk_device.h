@@ -30,6 +30,11 @@ struct UblkDeviceOpts {
     // indistinguishable lines and race on rotation, so a dedicated path per
     // device is recommended when running multiple devices.
     std::string log_path;
+    // dedicated cache directory for this device (registry/gzip caches land in
+    // subdirs); empty = shared dirs from the global service config. The file
+    // cache's eviction/refill locking is in-process only, so daemons sharing
+    // one cache directory can race -- REQUIRED when running multiple devices.
+    std::string cache_dir;
     int dev_id = -1;                 // -1: let the kernel allocate
     int queue_depth = 128;
 };

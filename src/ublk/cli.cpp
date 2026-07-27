@@ -37,6 +37,10 @@ int ublk_parse_cli(int argc, char **argv, UblkCliCmd &cmd) {
     add->add_option("--log-path", cmd.opts.log_path,
                     "per-device log file (default: shared log from service config; "
                     "recommended when running multiple devices)");
+    add->add_option("--cache-dir", cmd.opts.cache_dir,
+                    "dedicated cache directory for this device (default: shared cache "
+                    "dirs from service config; required when running multiple devices, "
+                    "cache locking is in-process only)");
     add->add_flag("--foreground", cmd.foreground, "run in foreground (no daemonize)");
 
     auto *del = app.add_subcommand("del", "stop the daemon serving /dev/ublkbN");

@@ -5,6 +5,7 @@ add_library(ublk_frontend_lib
     io_dispatch.cpp
     ublk_device.cpp
     cli.cpp
+    config_patch.cpp
 )
 target_include_directories(ublk_frontend_lib PUBLIC
     ${PHOTON_INCLUDE_DIR}

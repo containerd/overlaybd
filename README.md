@@ -150,6 +150,11 @@ Notes:
 * Always unmount filesystems on `/dev/ublkbN` before `del` (or before stopping
   the daemon): the daemon serves the device's IO, so tearing it down with a
   mounted filesystem aborts in-flight journal writes.
+* When running multiple devices, give each daemon its own cache directory
+  (`add --cache-dir ...`): the file cache's eviction/refill locking is
+  in-process only, so daemons sharing one cache directory can race
+  (accounting drift, cache thrashing, and a small window of serving stale
+  zeroes). A per-device log file (`add --log-path ...`) is also recommended.
 * Runtime verified on a 5.10 kernel with ublk backported (Alinux
   5.10.134); a full regression on mainline 6.x kernels is still pending.
   Known backport-kernel caveats: DISCARD is unavailable there, and `del`
