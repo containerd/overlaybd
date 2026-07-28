@@ -68,6 +68,22 @@ int ublk_daemon_setup_cache(const std::string &cache_base,
                             const std::string &service_config_path,
                             std::string &patched_config, int &lock_fd);
 
+// Kernel-view device access for del/list (A2, ADR-0006 "del 外部化"):
+// STOP/DEL are per-dev_id control commands that any root process may send
+// through /dev/ublk-control -- no owner process needed. Ops therefore work
+// on orphans (owner killed -9) and never rely on pidfiles. Commands are
+// sent ioctl-encoded first with a legacy-opcode retry (old backport
+// kernels may predate UBLK_F_CMD_IOCTL_ENCODE).
+struct UblkKernelDevInfo {
+    int dev_id = -1;
+    int owner_pid = -1;    // the serving process as the KERNEL sees it
+    uint16_t state = 0;    // UBLK_S_DEV_DEAD/LIVE/...
+    uint64_t flags = 0;
+};
+int ublk_kernel_get_dev_info(int dev_id, UblkKernelDevInfo &info); // -ENODEV: gone
+int ublk_kernel_stop_dev(int dev_id);
+int ublk_kernel_del_dev(int dev_id);
+
 class ImageService;
 class ImageFile;
 class ImageFileTarget;
@@ -139,6 +155,7 @@ private:
     const struct ublksrv_dev *dev_ = nullptr;
     std::thread queue_thread_;
     std::atomic<bool> queue_exited_{false};
+    bool stop_requested_ = false; // stop() was called (signal/daemon del)
     unsigned ring_flags_ = 0; // queue io_uring flags, probed in start()
     int cache_lock_fd_ = -1; // held for the device's lifetime
     // human-readable reason of a failed bring-up; relayed to the add

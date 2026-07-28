@@ -224,6 +224,11 @@ TEST(cli, del_requires_dev_id) {
     ASSERT_EQ(parse({"del", "-n", "5"}, cmd2), 0);
     EXPECT_EQ(cmd2.kind, UblkCliCmd::Kind::DEL);
     EXPECT_EQ(cmd2.del_dev_id, 5);
+    EXPECT_FALSE(cmd2.del_force); // default: refuse risky teardown
+
+    UblkCliCmd cmd3;
+    ASSERT_EQ(parse({"del", "-n", "5", "--force"}, cmd3), 0);
+    EXPECT_TRUE(cmd3.del_force);
 }
 
 TEST(cli, list_and_missing_subcommand) {

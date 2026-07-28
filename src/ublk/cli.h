@@ -26,6 +26,7 @@ struct UblkCliCmd {
     bool foreground = false;
 
     int del_dev_id = -1; // DEL
+    bool del_force = false; // DEL: SIGKILL a non-exiting owner, then delete
 };
 
 // Parse argv into cmd. On success returns 0 with cmd.kind set; on

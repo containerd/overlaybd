@@ -108,6 +108,7 @@ private:
 // ---------------------------------------------------------------------------
 
 void UblkDevice::stop() {
+    stop_requested_ = true; // lifecycle stays ours: teardown may self-DEL
     if (ctrl_dev_ != nullptr)
         ublksrv_ctrl_stop_dev(ctrl_dev_);
 }
@@ -750,6 +751,40 @@ static int ublk_raw_ctrl_cmd_buf(uint32_t cmd_op, int dev_id, void *buf, uint16_
     return ublk_raw_ctrl(cmd_op, dev_id, 0, buf, len);
 }
 
+// ioctl-encoded op first, legacy numeric opcode as fallback: backport
+// kernels may predate UBLK_F_CMD_IOCTL_ENCODE and reject _IO*-encoded ops
+static int ublk_ctrl_compat(uint32_t ioctl_op, uint32_t legacy_op, int dev_id,
+                            uint64_t data0, void *buf, uint16_t len) {
+    int r = ublk_raw_ctrl(ioctl_op, dev_id, data0, buf, len);
+    if (r == -EOPNOTSUPP || r == -EINVAL || r == -ENOTTY)
+        r = ublk_raw_ctrl(legacy_op, dev_id, data0, buf, len);
+    return r;
+}
+
+int ublk_kernel_get_dev_info(int dev_id, UblkKernelDevInfo &info) {
+    struct ublksrv_ctrl_dev_info raw;
+    memset(&raw, 0, sizeof(raw));
+    int r = ublk_ctrl_compat(UBLK_U_CMD_GET_DEV_INFO, UBLK_CMD_GET_DEV_INFO, dev_id,
+                             0, &raw, sizeof(raw));
+    if (r < 0)
+        return r;
+    info.dev_id = raw.dev_id;
+    info.owner_pid = raw.ublksrv_pid;
+    info.state = raw.state;
+    info.flags = raw.flags;
+    return 0;
+}
+
+int ublk_kernel_stop_dev(int dev_id) {
+    return ublk_ctrl_compat(UBLK_U_CMD_STOP_DEV, UBLK_CMD_STOP_DEV, dev_id, 0,
+                            nullptr, 0);
+}
+
+int ublk_kernel_del_dev(int dev_id) {
+    return ublk_ctrl_compat(UBLK_U_CMD_DEL_DEV, UBLK_CMD_DEL_DEV, dev_id, 0,
+                            nullptr, 0);
+}
+
 // UBLK_F_UPDATE_SIZE support, probed once per process (GET_FEATURES itself
 // is 6.5+; on kernels without it the probe fails -> no support)
 static bool kernel_supports_update_size() {
@@ -924,8 +959,19 @@ void UblkDevice::teardown() {
     if (torn_down_)
         return;
     torn_down_ = true;
-    if (ctrl_dev_ != nullptr)
-        ctrl_del_and_deinit();
+    if (ctrl_dev_ != nullptr) {
+        if (stop_requested_ || !queue_exited_.load()) {
+            ctrl_del_and_deinit();
+        } else {
+            // The queue died without stop() being called: an external actor
+            // (the new `del`) stopped the device through /dev/ublk-control
+            // and owns the DEL -- doing it here too would race (A2). Just
+            // release our ctrl handle and exit fast.
+            LOG_INFO("externally stopped, leaving DEL_DEV to the external actor");
+            ublksrv_ctrl_deinit(ctrl_dev_);
+            ctrl_dev_ = nullptr;
+        }
+    }
     delete target_;
     target_ = nullptr;
     delete file_;

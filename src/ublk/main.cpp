@@ -29,21 +29,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-static int read_pidfile(int dev_id, pid_t *pid) {
-    char path[128];
-    snprintf(path, sizeof(path), "%s/%d.pid", OVERLAYBD_UBLK_RUN_DIR, dev_id);
-    FILE *fp = fopen(path, "r");
-    if (fp == nullptr)
-        return -1;
-    long v = 0;
-    int n = fscanf(fp, "%ld", &v);
-    fclose(fp);
-    if (n != 1 || v <= 0)
-        return -1;
-    *pid = (pid_t)v;
-    return 0;
-}
-
 // A pidfile under the run dir may belong to a one-device CLI daemon or to
 // overlaybd-ublkd (libublksrv writes <dev_id>.pid with the serving process'
 // pid either way). The distinction matters: SIGTERM to a CLI daemon removes
@@ -62,85 +47,210 @@ static bool pid_is_ublkd(pid_t pid) {
     return strcmp(comm, "overlaybd-ublkd") == 0;
 }
 
-// del: process == device, so a graceful stop is SIGTERM to the
-// daemon, whose signal handler tears the ublk device down before exiting.
-static int cmd_del(int dev_id) {
-    pid_t pid;
-    if (read_pidfile(dev_id, &pid) != 0) {
-        fprintf(stderr, "overlaybd-ublk: no pidfile for dev %d under %s\n", dev_id,
-                OVERLAYBD_UBLK_RUN_DIR);
+// del (A2, "del 外部化"): drive the kernel directly instead of signaling the
+// owner. STOP/DEL go through /dev/ublk-control by dev_id, so orphans (owner
+// killed -9) are deletable and no pidfile is needed. A live CLI owner is
+// stopped externally: its queue dies, it drains and exits WITHOUT deleting
+// (teardown skips DEL when the stop was not its own), then we DEL here.
+static void remove_pidfile(int dev_id) {
+    char path[128];
+    snprintf(path, sizeof(path), "%s/%d.pid", OVERLAYBD_UBLK_RUN_DIR, dev_id);
+    unlink(path);
+}
+
+// owner pid from the pidfile written by libublksrv. Needed by --force: once
+// STOP_DEV has been issued against a device whose owner is frozen, the
+// kernel holds that device's control plane and every further ctrl command
+// (even GET_DEV_INFO) blocks forever -- so --force must learn the pid
+// WITHOUT asking the kernel, kill the owner, and only then touch the
+// control plane. Verified the hard way: --force used to hang in
+// io_cqring_wait on its very first GET_DEV_INFO.
+static pid_t pid_from_pidfile(int dev_id) {
+    char path[128];
+    snprintf(path, sizeof(path), "%s/%d.pid", OVERLAYBD_UBLK_RUN_DIR, dev_id);
+    FILE *fp = fopen(path, "r");
+    if (fp == nullptr)
+        return -1;
+    long v = -1;
+    int n = fscanf(fp, "%ld", &v);
+    fclose(fp);
+    return (n == 1 && v > 0) ? (pid_t)v : -1;
+}
+
+static int cmd_del(int dev_id, bool force) {
+    if (force) {
+        pid_t owner = pid_from_pidfile(dev_id);
+        if (owner > 0 && kill(owner, 0) == 0) {
+            if (pid_is_ublkd(owner)) {
+                fprintf(stderr,
+                        "overlaybd-ublk: refusing --force on a device of a live "
+                        "overlaybd-ublkd (pid %d); stop the daemon instead\n",
+                        (int)owner);
+                return 1;
+            }
+            // SIGCONT first: a SIGSTOPped owner does not act on a queued
+            // SIGKILL until it is resumed (observed on a frozen owner)
+            kill(owner, SIGCONT);
+            kill(owner, SIGKILL);
+            int i;
+            for (i = 0; i < 100 && kill(owner, 0) == 0; i++)
+                usleep(100 * 1000);
+            if (i == 100)
+                fprintf(stderr, "overlaybd-ublk: owner pid %d survived SIGKILL "
+                                "(D state?), trying kernel teardown anyway\n",
+                        (int)owner);
+            else
+                fprintf(stderr, "overlaybd-ublk: killed owner pid %d\n", (int)owner);
+            sleep(1); // let the kernel run its owner-death cleanup
+        }
+    }
+
+    UblkKernelDevInfo info;
+    int r = ublk_kernel_get_dev_info(dev_id, info);
+    if (r == -ENODEV || r == -ENOENT) {
+        fprintf(stderr, "overlaybd-ublk: no ublk device %d in the kernel\n", dev_id);
+        remove_pidfile(dev_id); // stale leftovers
         return 1;
     }
-    if (pid_is_ublkd(pid)) {
+    if (r < 0) {
+        fprintf(stderr, "overlaybd-ublk: GET_DEV_INFO(%d) failed: %s\n", dev_id,
+                strerror(-r));
+        return 1;
+    }
+
+    pid_t pid = info.owner_pid;
+    bool alive = pid > 0 && kill(pid, 0) == 0;
+    if (alive && pid_is_ublkd(pid)) {
         fprintf(stderr,
                 "overlaybd-ublk: /dev/ublkb%d is managed by overlaybd-ublkd "
-                "(pid %d); SIGTERM would tear down ALL of its devices.\n"
+                "(pid %d); deleting it here would rip it out under the daemon.\n"
                 "Use the daemon API instead:\n"
                 "  curl --unix-socket %s/ublkd.sock -X POST "
                 "-d '{\"dev_id\":%d}' http://d/v1/del\n",
                 dev_id, (int)pid, OVERLAYBD_UBLK_RUN_DIR, dev_id);
         return 1;
     }
-    if (kill(pid, SIGTERM) != 0) {
-        if (errno == ESRCH) {
-            fprintf(stderr, "overlaybd-ublk: dev %d daemon (pid %d) not running, "
-                            "removing stale pidfile\n",
-                    dev_id, (int)pid);
-            char path[128];
-            snprintf(path, sizeof(path), "%s/%d.pid", OVERLAYBD_UBLK_RUN_DIR, dev_id);
-            unlink(path);
+
+    if (alive) {
+        // live single-device daemon: external STOP, then wait for its exit
+        // (it drains in-flight IO and releases the device references)
+        r = ublk_kernel_stop_dev(dev_id);
+        if (r < 0 && r != -ENODEV)
+            fprintf(stderr, "overlaybd-ublk: STOP_DEV: %s (continuing)\n",
+                    strerror(-r));
+        int waited;
+        for (waited = 0; waited < 300; waited++) { // up to 30s
+            if (kill(pid, 0) != 0 && errno == ESRCH)
+                break;
+            usleep(100 * 1000);
+        }
+        if (waited == 300) {
+            fprintf(stderr,
+                    "overlaybd-ublk: owner pid %d did not exit in 30s "
+                    "(wedged?). Aborting -- deleting a device with stuck "
+                    "IO can hang the machine on backported kernels. "
+                    "Retry with --force to SIGKILL the owner first.\n",
+                    (int)pid);
             return 1;
         }
-        fprintf(stderr, "overlaybd-ublk: kill pid %d failed: %s\n", (int)pid,
-                strerror(errno));
+    } else {
+        // orphan (or just-killed --force owner): references dropped, kernel
+        // auto-stopped; STOP may fail depending on state -- best effort
+        ublk_kernel_stop_dev(dev_id);
+    }
+
+    r = ublk_kernel_del_dev(dev_id);
+    if (r < 0 && r != -ENODEV && r != -ENOENT) {
+        fprintf(stderr, "overlaybd-ublk: DEL_DEV(%d) failed: %s\n", dev_id,
+                strerror(-r));
         return 1;
     }
-    // wait for the daemon to finish teardown (device gone when it exits)
-    for (int i = 0; i < 300; i++) { // up to 30s
-        if (kill(pid, 0) != 0 && errno == ESRCH) {
-            printf("/dev/ublkb%d removed\n", dev_id);
-            return 0;
-        }
-        usleep(100 * 1000);
-    }
-    fprintf(stderr, "overlaybd-ublk: dev %d daemon (pid %d) did not exit in 30s\n", dev_id,
-            (int)pid);
-    return 1;
+    remove_pidfile(dev_id);
+    printf("/dev/ublkb%d removed\n", dev_id);
+    return 0;
 }
 
+// list (A2): the KERNEL is the source of truth -- scan /sys/block for
+// ublkbN, ask GET_DEV_INFO for the owner, and grade each device:
+// running / [ublkd-managed] / ORPHAN (kernel device without a live owner).
+// Stale pidfiles without a kernel device are reported for cleanup.
 static int cmd_list() {
-    DIR *dir = opendir(OVERLAYBD_UBLK_RUN_DIR);
-    if (dir == nullptr)
-        return 0; // nothing ever started on this host
-    struct dirent *ent;
-    while ((ent = readdir(dir)) != nullptr) {
-        int dev_id;
-        if (sscanf(ent->d_name, "%d.pid", &dev_id) != 1)
-            continue;
-        pid_t pid;
-        if (read_pidfile(dev_id, &pid) != 0)
-            continue;
-        bool alive = (kill(pid, 0) == 0);
-        // best effort: show the image config from the daemon's cmdline
-        std::string cmdline;
-        char proc_path[64], buf[4096];
-        snprintf(proc_path, sizeof(proc_path), "/proc/%d/cmdline", (int)pid);
-        int fd = open(proc_path, O_RDONLY);
-        if (fd >= 0) {
-            ssize_t n = read(fd, buf, sizeof(buf) - 1);
-            close(fd);
-            for (ssize_t i = 0; i < n; i++)
-                buf[i] = buf[i] ? buf[i] : ' ';
-            if (n > 0) {
-                buf[n] = 0;
-                cmdline = buf;
+    bool seen[1024] = {};
+    DIR *bd = opendir("/sys/block");
+    if (bd != nullptr) {
+        struct dirent *ent;
+        while ((ent = readdir(bd)) != nullptr) {
+            int dev_id;
+            if (sscanf(ent->d_name, "ublkb%d", &dev_id) != 1)
+                continue;
+            if (dev_id >= 0 && dev_id < 1024)
+                seen[dev_id] = true;
+            UblkKernelDevInfo info;
+            if (ublk_kernel_get_dev_info(dev_id, info) != 0)
+                continue;
+            pid_t pid = info.owner_pid;
+            bool alive = pid > 0 && kill(pid, 0) == 0;
+            const char *status = !alive              ? "ORPHAN"
+                                 : pid_is_ublkd(pid) ? "[ublkd-managed]"
+                                                     : "running";
+            // best effort: show the image config from the owner's cmdline
+            std::string cmdline;
+            if (alive) {
+                char proc_path[64], buf[4096];
+                snprintf(proc_path, sizeof(proc_path), "/proc/%d/cmdline", (int)pid);
+                int fd = open(proc_path, O_RDONLY);
+                if (fd >= 0) {
+                    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+                    close(fd);
+                    for (ssize_t i = 0; i < n; i++)
+                        buf[i] = buf[i] ? buf[i] : ' ';
+                    if (n > 0) {
+                        buf[n] = 0;
+                        cmdline = buf;
+                    }
+                }
             }
+            printf("/dev/ublkb%-4d pid %-8d %-15s %s\n", dev_id, (int)pid, status,
+                   cmdline.c_str());
         }
-        printf("/dev/ublkb%-4d pid %-8d %-8s %s%s\n", dev_id, (int)pid,
-               alive ? "running" : "dead",
-               pid_is_ublkd(pid) ? "[ublkd-managed] " : "", cmdline.c_str());
+        closedir(bd);
     }
-    closedir(dir);
+    // Residuals: after an owner dies, this kernel auto-STOPs the device
+    // (gendisk gone, invisible in /sys/block) but does NOT free the id --
+    // /dev/ublkcN stays behind. Scan for those, they are reclaimable.
+    DIR *dd = opendir("/dev");
+    if (dd != nullptr) {
+        struct dirent *ent;
+        while ((ent = readdir(dd)) != nullptr) {
+            int dev_id;
+            if (sscanf(ent->d_name, "ublkc%d", &dev_id) != 1)
+                continue;
+            if (dev_id < 0 || dev_id >= 1024 || seen[dev_id])
+                continue;
+            seen[dev_id] = true;
+            UblkKernelDevInfo info;
+            if (ublk_kernel_get_dev_info(dev_id, info) != 0)
+                continue;
+            printf("ublk dev %-6d pid %-8d %-15s (stopped residual, id still "
+                   "allocated; reclaim with: del -n %d)\n",
+                   dev_id, info.owner_pid, "RESIDUAL", dev_id);
+        }
+        closedir(dd);
+    }
+    // pidfiles whose kernel device is gone: stale, worth flagging
+    DIR *rd = opendir(OVERLAYBD_UBLK_RUN_DIR);
+    if (rd != nullptr) {
+        struct dirent *ent;
+        while ((ent = readdir(rd)) != nullptr) {
+            int dev_id;
+            if (sscanf(ent->d_name, "%d.pid", &dev_id) != 1)
+                continue;
+            if (dev_id >= 0 && dev_id < 1024 && !seen[dev_id])
+                printf("(stale pidfile %s/%d.pid: no kernel device)\n",
+                       OVERLAYBD_UBLK_RUN_DIR, dev_id);
+        }
+        closedir(rd);
+    }
     return 0;
 }
 
@@ -220,7 +330,7 @@ int main(int argc, char **argv) {
     case UblkCliCmd::Kind::ADD:
         return cmd_add(cmd.opts, cmd.foreground);
     case UblkCliCmd::Kind::DEL:
-        return cmd_del(cmd.del_dev_id);
+        return cmd_del(cmd.del_dev_id, cmd.del_force);
     case UblkCliCmd::Kind::LIST:
         return cmd_list();
     default:

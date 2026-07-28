@@ -46,8 +46,11 @@ int ublk_parse_cli(int argc, char **argv, UblkCliCmd &cmd) {
                     "image multiple times (default: auto slot instN)");
     add->add_flag("--foreground", cmd.foreground, "run in foreground (no daemonize)");
 
-    auto *del = app.add_subcommand("del", "stop the daemon serving /dev/ublkbN");
+    auto *del = app.add_subcommand("del", "delete /dev/ublkbN (works on orphans too)");
     del->add_option("-n,--dev-id", cmd.del_dev_id, "device id")->required();
+    del->add_flag("--force", cmd.del_force,
+                  "SIGKILL an owner that does not exit after STOP, then delete "
+                  "(risky on wedged devices, see docs)");
 
     app.add_subcommand("list", "list overlaybd-ublk devices on this host");
 
