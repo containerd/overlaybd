@@ -1,4 +1,4 @@
-# Overlaybd — Instant Container Image Pulling, No More Waiting
+# Overlaybd - Instant Image Pulling, No More Waiting
 
 <img src="assets/overlaybd_logo.svg" width="100px"/>
 
@@ -18,14 +18,15 @@ Overlaybd is an open-source sub-project of containerd, the industry-standard con
 [graduated at CNCF](https://www.cncf.io/projects/containerd/).
 The project has been integrated by many organizations world-wide, most notably
 [Azure Kubernetes Service's Artifact Streaming](https://learn.microsoft.com/en-us/azure/aks/artifact-streaming-overview),
-[Databricks](https://www.databricks.com/blog/booting-databricks-vms-7x-faster-serverless-compute),
+[Databricks](https://www.databricks.com/blog/booting-databricks-vms-7x-faster-serverless-compute) +
+[Superhuman](https://www.databricks.com/blog/how-superhuman-and-databricks-built-200k-qps-inference-platform-together),
 [DeepSeek Elastic Compute (DSes)](https://arxiv.org/html/2606.19348v1),
 [fly.io](https://community.fly.io/t/experimental-speedy-machine-creation-with-overlaybd/18958),
 [hocus.dev](https://hocus.dev/blog/virtualizing-development-environments), etc.
+[Kimi AgentEnv](https://kvcache.ai/blog/agentenv-open-sourced/),
 Overlaybd can also be used for virtual machines or micro sandboxes.
 
 <!-- Boss直聘, -->
-<!-- RedNote(小红书), etc. -->
 
 Overlaybd is the official open-sourced implementation of
 two papers published in USENIX Annual Technical Conference:
@@ -43,7 +44,14 @@ Overlaybd achieves fast container startup through the following key designs:
 - **On-demand (lazy) fetching**: Containers start immediately by reading image data remotely as needed,
   without downloading and unpacking the entire image. A 1GB+ image can launch in under 1 second.
   With proper caching / P2P transferring, overlaybd can support [launching 10,000s of containers
-  within seconds](articles/dadi-aliyun-2020-en.md).
+  within seconds](dadi-aliyun-2020-en.md).
+
+- **Prefetching**: On-demand fetching can be combined with prefetching to warm up data
+  before it is needed. Two modes are supported:
+  - *Trace-based*: record the block access pattern of a prior run and replay it to
+    prefetch the same blocks ahead of the next launch.
+  - *File-list-based*: given a list of files required at startup, prefetch the blocks
+    backing those files in advance.
 
 - **Optimized LBA lookup**: Overlaybd operates at the block level with a flat LBA address space, so
   cross-layer lookup is a **single** index query regardless of layer count, whereas filesystem-based
@@ -52,7 +60,7 @@ Overlaybd achieves fast container startup through the following key designs:
   Furthermore, overlaybd's multi-layer block mapping uses a highly optimized linearized B+ tree
   with AVX-512 SIMD batch comparison, achieving 100s of millions of QPS on a single CPU core,
   up to 10X over conventional approaches.
-  [Details](https://github.com/containerd/overlaybd/blob/main/docs/lsmt_lookup.md).
+  See [this](lsmt_lookup.md) for details.
   Note that this algorithm is so fast that it is [even feasible for IP address lookup in
   backbone core routers](https://www.usenix.org/conference/nsdi26/presentation/zhang-zhihao).
 
@@ -65,25 +73,30 @@ Overlaybd achieves fast container startup through the following key designs:
   transfer is reduced enough that compressed random reads are often *faster* than
   uncompressed ones — the decompression cost is less than the I/O saved.
 
-- **High-efficiency I/O runtime**:
-  The service is built on [PhotonLibOS](https://github.com/alibaba/PhotonLibOS),
-  which is probably the fastest coroutine framework in the world.
-
 <style>
+.pic-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 12px 2%;
+    margin-left: 1.5em; /* match docsify's list padding so images align with the list text */
+}
 .pic {
-    width: 30%; margin-right: 2%;
+    width: 30%;
     background-color: #3f3f3f;
 }
 </style>
 
 - **Benchmark results**:
 
+<div class="pic-row">
 <img src="assets/cold_startup_latency.png" class="pic"/>
 <img src="assets/warm_startup_latency.png" class="pic"/>
 <img src="assets/startup_latency_with_prefetch.png" class="pic"/>
 <img src="assets/batch_code_startup_latency.png" class="pic"/>
 <img src="assets/time_pull_image.png" class="pic"/>
 <img src="assets/time_launch_app.png" class="pic"/>
+</div>
 
 
 ## Secure
@@ -182,16 +195,15 @@ the world:
 
 ## Open-source
 
-Overlaybd is developed in the open under neutral governance:
+Overlaybd is an open-source sub-project of [containerd](https://www.cncf.io/projects/containerd/)
+(a CNCF graduated project) since 2021, released under the Apache-2.0 license.
 
 - **Source code repositories on GitHub**:
-  - I/O data path: [containerd/overlaybd](https://github.com/containerd/overlaybd)
+  - Data I/O path: [containerd/overlaybd](https://github.com/containerd/overlaybd)
   - Snapshotter & conversion tools: [containerd/accelerated-container-image](https://github.com/containerd/accelerated-container-image)
   - P2P distribution: [data-accelerator/dadi-p2proxy](https://github.com/data-accelerator/dadi-p2proxy)
 
-- **Neutral governance**: An open-source sub-project of
-  [containerd](https://www.cncf.io/projects/containerd/) (a CNCF graduated project) since
-  2021, released under the Apache-2.0 license. Originally proposed by Alibaba Cloud, it is
+- **Neutral governance**: Originally proposed by Alibaba Cloud, it is
   maintained in the open rather than controlled by a single vendor.
 
 - **Active, broadening community**: Beyond the core maintainers, the project receives
@@ -203,11 +215,14 @@ Overlaybd is developed in the open under neutral governance:
   implementation:
   [LSMT](https://containerd.github.io/overlaybd/#/specs/lsmt.md),
   [ZFile](https://containerd.github.io/overlaybd/#/specs/zfile.md).
+  Actually we already see several re-implementations of overlaybd / zfile, such as
+  [AgentEnv](https://github.com/kvcache-ai/AgentENV/tree/main/storage/overlaybd/src).
 
 - **Join the discussion**: For synchronous communication, catch us in the `#overlaybd`
   channel on the [CNCF slack](https://cloud-native.slack.com) (cloud-native.slack.com).
   Everyone is welcome to join and chat.
   [Get an invite to the CNCF slack.](https://communityinviter.com/apps/cloud-native/cncf)
+  DingTalk Group: 186405011387.
 
 # Components
 
