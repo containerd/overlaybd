@@ -72,6 +72,36 @@ int ublkd_parse_del(const std::string &body, int &dev_id, std::string &err) {
     return 0;
 }
 
+int ublkd_parse_resize(const std::string &body, UblkdResizeRequest &req,
+                       std::string &err) {
+    rapidjson::Document doc;
+    doc.Parse(body.c_str());
+    if (doc.HasParseError() || !doc.IsObject()) {
+        err = "request body is not a JSON object";
+        return -1;
+    }
+    if (!doc.HasMember("dev_id") || !doc["dev_id"].IsInt() || doc["dev_id"].GetInt() < 0) {
+        err = "missing or invalid field: dev_id";
+        return -1;
+    }
+    req.dev_id = doc["dev_id"].GetInt();
+    // 1..1M GB: large enough for any real image, small enough to catch typos
+    if (!doc.HasMember("size_gb") || !doc["size_gb"].IsUint64() ||
+        doc["size_gb"].GetUint64() < 1 || doc["size_gb"].GetUint64() > (1ULL << 20)) {
+        err = "size_gb must be an integer in [1, 1048576]";
+        return -1;
+    }
+    req.size_gb = doc["size_gb"].GetUint64();
+    if (doc.HasMember("resize_fs")) {
+        if (!doc["resize_fs"].IsBool()) {
+            err = "resize_fs must be a boolean";
+            return -1;
+        }
+        req.resize_fs = doc["resize_fs"].GetBool();
+    }
+    return 0;
+}
+
 static std::string dump(const rapidjson::Document &doc) {
     rapidjson::StringBuffer sb;
     rapidjson::Writer<rapidjson::StringBuffer> writer(sb);

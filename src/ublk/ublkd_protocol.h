@@ -45,6 +45,16 @@ int ublkd_parse_add(const std::string &body, UblkdAddRequest &req, std::string &
 // parse POST /v1/del body ({"dev_id":N}); 0 = ok, -1 = malformed
 int ublkd_parse_del(const std::string &body, int &dev_id, std::string &err);
 
+struct UblkdResizeRequest {
+    int dev_id = -1;
+    uint64_t size_gb = 0;   // new virtual size, must grow
+    bool resize_fs = false; // also grow the ext4 inside
+};
+
+// parse POST /v1/resize body; 0 = ok, -1 = malformed
+int ublkd_parse_resize(const std::string &body, UblkdResizeRequest &req,
+                       std::string &err);
+
 // response builders (single-line JSON)
 std::string ublkd_msg_ok();                                       // {"ok":true}
 std::string ublkd_msg_error(const std::string &error);            // {"ok":false,...}

@@ -693,6 +693,109 @@ int UblkDevice::acquire_rw_image_lock(const UblkDeviceOpts &opts) {
     return r == 0 ? 0 : -1;
 }
 
+// ---------------------------------------------------------------------------
+// raw ublk control commands (M2-3)
+// ---------------------------------------------------------------------------
+// libublksrv v1.7 wraps GET_FEATURES but not UPDATE_SIZE, and its generic
+// sender is private -- so send the uring_cmd ourselves on a throwaway ring
+// against /dev/ublk-control, assembled exactly like ublksrv_ctrl_init_cmd
+// (SQE128, payload at sqe->addr3, cmd op at sqe->off). Resize is rare, the
+// per-call ring setup cost is irrelevant.
+static int ublk_raw_ctrl(uint32_t cmd_op, int dev_id, uint64_t data0, void *buf,
+                         uint16_t len) {
+    int cfd = open(UBLK_CONTROL_DEV, O_RDWR);
+    if (cfd < 0)
+        return -errno;
+    struct io_uring ring;
+    struct io_uring_params p;
+    memset(&p, 0, sizeof(p));
+    p.flags = IORING_SETUP_SQE128;
+    int ret = io_uring_queue_init_params(4, &ring, &p);
+    if (ret < 0) {
+        close(cfd);
+        return ret;
+    }
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
+    memset(sqe, 0, 128); // SQE128 slot
+    sqe->fd = cfd;
+    sqe->opcode = IORING_OP_URING_CMD;
+    *(uint32_t *)&sqe->off = cmd_op; // ublksrv_set_sqe_cmd_op equivalent
+    struct ublksrv_ctrl_cmd *cmd = (struct ublksrv_ctrl_cmd *)&sqe->addr3;
+    cmd->dev_id = dev_id;
+    cmd->queue_id = (uint16_t)-1;
+    cmd->data[0] = data0;
+    cmd->addr = (uint64_t)buf;
+    cmd->len = len;
+    do {
+        ret = io_uring_submit_and_wait(&ring, 1);
+    } while (ret == -EINTR);
+    if (ret >= 0) {
+        struct io_uring_cqe *cqe = nullptr;
+        ret = io_uring_peek_cqe(&ring, &cqe);
+        if (ret == 0) {
+            ret = cqe->res;
+            io_uring_cqe_seen(&ring, cqe);
+        }
+    }
+    io_uring_queue_exit(&ring);
+    close(cfd);
+    return ret;
+}
+
+static int ublk_raw_ctrl_cmd(uint32_t cmd_op, int dev_id, uint64_t data0) {
+    return ublk_raw_ctrl(cmd_op, dev_id, data0, nullptr, 0);
+}
+
+static int ublk_raw_ctrl_cmd_buf(uint32_t cmd_op, int dev_id, void *buf, uint16_t len) {
+    return ublk_raw_ctrl(cmd_op, dev_id, 0, buf, len);
+}
+
+// UBLK_F_UPDATE_SIZE support, probed once per process (GET_FEATURES itself
+// is 6.5+; on kernels without it the probe fails -> no support)
+static bool kernel_supports_update_size() {
+    static int cached = -1;
+    if (cached < 0) {
+        uint64_t features = 0;
+        int r = ublk_raw_ctrl_cmd_buf(UBLK_U_CMD_GET_FEATURES, -1, &features,
+                                      sizeof(features));
+        cached = (r >= 0 && (features & UBLK_F_UPDATE_SIZE)) ? 1 : 0;
+        if (!cached)
+            LOG_WARN("UBLK_F_UPDATE_SIZE unavailable (probe `), online resize disabled", r);
+    }
+    return cached == 1;
+}
+
+int UblkDevice::resize(uint64_t new_size_bytes, bool resize_fs, std::string &err) {
+    if (!writable()) {
+        err = "device is read-only; resize applies to writable images only";
+        return -3;
+    }
+    if (new_size_bytes <= image_size()) {
+        err = "new size must be larger than the current " +
+              std::to_string(image_size() >> 30) + " GiB (only growing is supported)";
+        return -3;
+    }
+    if (!kernel_supports_update_size()) {
+        err = "kernel lacks UBLK_F_UPDATE_SIZE (mainline >= 6.11 required)";
+        return -2;
+    }
+    // image layer first (and ext4 if asked): on failure nothing changed
+    if (file_->resize(new_size_bytes, resize_fs) != 0) {
+        err = "image resize failed (see the overlaybd log)";
+        return -1;
+    }
+    // then tell the kernel; sectors of 512
+    int r = ublk_raw_ctrl_cmd(UBLK_U_CMD_UPDATE_SIZE, dev_id_, new_size_bytes >> 9);
+    if (r < 0) {
+        err = "UBLK_U_CMD_UPDATE_SIZE failed (" + std::to_string(r) +
+              "); image already grown, kernel size unchanged";
+        return -1;
+    }
+    LOG_INFO("resized /dev/ublkb` to ` bytes (resize_fs=`)", dev_id_, new_size_bytes,
+             resize_fs);
+    return 0;
+}
+
 int UblkDevice::start(const UblkDeviceOpts &opts) {
     if (imgservice_ == nullptr) {
         LOG_ERROR("no ImageService bound (daemon must inject one)");
@@ -735,7 +838,9 @@ int UblkDevice::start(const UblkDeviceOpts &opts) {
     data.tgt_type = "overlaybd";
     data.tgt_ops = &obd_tgt_type;
     data.run_dir = OVERLAYBD_UBLK_RUN_DIR;
-    data.flags = 0;
+    // request online-resize capability when the kernel has it (the
+    // UPDATE_SIZE command only works on devices created with the flag)
+    data.flags = kernel_supports_update_size() ? UBLK_F_UPDATE_SIZE : 0;
 
     ctrl_dev_ = ublksrv_ctrl_init(&data);
     if (ctrl_dev_ == nullptr) {

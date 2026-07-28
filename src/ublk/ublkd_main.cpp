@@ -77,6 +77,8 @@ public:
             handle_add(body, code, msg);
         } else if (target == "/v1/del" && req.verb() == photon::net::http::Verb::POST) {
             handle_del(body, code, msg);
+        } else if (target == "/v1/resize" && req.verb() == photon::net::http::Verb::POST) {
+            handle_resize(body, code, msg);
         } else if (target == "/v1/list") {
             handle_list(code, msg);
         } else if (target == "/v1/ping") {
@@ -192,6 +194,36 @@ private:
         code = 200;
         msg = ublkd_msg_ok();
         LOG_INFO("ublkd: deleted /dev/ublkb`", id);
+    }
+
+    void handle_resize(const std::string &body, int &code, std::string &msg) {
+        UblkdResizeRequest rreq;
+        std::string err;
+        if (ublkd_parse_resize(body, rreq, err) != 0) {
+            code = 400;
+            msg = ublkd_msg_error(err);
+            return;
+        }
+        auto it = devices_.find(rreq.dev_id);
+        if (it == devices_.end()) {
+            code = 404;
+            msg = ublkd_msg_error("no such device: " + std::to_string(rreq.dev_id));
+            return;
+        }
+        if (it->second.stopping) {
+            code = 409;
+            msg = ublkd_msg_error("device is being deleted");
+            return;
+        }
+        int r = it->second.dev->resize(rreq.size_gb << 30, rreq.resize_fs, err);
+        if (r == 0) {
+            code = 200;
+            msg = ublkd_msg_ok();
+            LOG_INFO("ublkd: resized dev ` to ` GB", rreq.dev_id, rreq.size_gb);
+        } else {
+            code = (r == -2) ? 501 : (r == -3) ? 400 : 500;
+            msg = ublkd_msg_error(err);
+        }
     }
 
     void handle_list(int &code, std::string &msg) {

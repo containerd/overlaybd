@@ -340,6 +340,30 @@ TEST(ublkd_protocol, parse_del) {
     EXPECT_EQ(ublkd_parse_del(R"({})", id, err), -1);
 }
 
+TEST(ublkd_protocol, parse_resize) {
+    UblkdResizeRequest req;
+    std::string err;
+    ASSERT_EQ(ublkd_parse_resize(
+                  R"({"dev_id":2,"size_gb":50,"resize_fs":true})", req, err),
+              0);
+    EXPECT_EQ(req.dev_id, 2);
+    EXPECT_EQ(req.size_gb, 50UL);
+    EXPECT_TRUE(req.resize_fs);
+
+    UblkdResizeRequest defaults;
+    ASSERT_EQ(ublkd_parse_resize(R"({"dev_id":0,"size_gb":1})", defaults, err), 0);
+    EXPECT_FALSE(defaults.resize_fs); // default: block device only
+
+    // malformed: no dev_id / no size / zero / absurd size / bad type
+    EXPECT_EQ(ublkd_parse_resize(R"({"size_gb":10})", req, err), -1);
+    EXPECT_EQ(ublkd_parse_resize(R"({"dev_id":0})", req, err), -1);
+    EXPECT_EQ(ublkd_parse_resize(R"({"dev_id":0,"size_gb":0})", req, err), -1);
+    EXPECT_EQ(ublkd_parse_resize(R"({"dev_id":0,"size_gb":99999999})", req, err), -1);
+    EXPECT_EQ(ublkd_parse_resize(R"({"dev_id":0,"size_gb":1,"resize_fs":"y"})", req,
+                                 err),
+              -1);
+}
+
 TEST(ublkd_protocol, responses_roundtrip) {
     EXPECT_EQ(ublkd_msg_ok(), R"({"ok":true})");
     EXPECT_NE(ublkd_msg_error("boom").find(R"("ok":false)"), std::string::npos);

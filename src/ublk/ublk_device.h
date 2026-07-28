@@ -107,6 +107,13 @@ public:
     void stop(); // request stop; safe from a photon signal coroutine
     void teardown();
 
+    // Online grow (M2-3): image layer (ImageFile::resize, optionally ext4)
+    // + kernel layer (UBLK_U_CMD_UPDATE_SIZE). Writable images only; the
+    // kernel must support UBLK_F_UPDATE_SIZE (mainline >= 6.11).
+    // Returns 0 = ok; -1 = internal error; -2 = kernel lacks the feature;
+    // -3 = invalid request (read-only device / shrink). err says why.
+    int resize(uint64_t new_size_bytes, bool resize_fs, std::string &err);
+
     int dev_id() const {
         return dev_id_;
     }

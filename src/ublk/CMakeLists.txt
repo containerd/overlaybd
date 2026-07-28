@@ -45,6 +45,8 @@ target_link_libraries(overlaybd-ublkd
     ${AIO_LIBRARIES}
 )
 install(TARGETS overlaybd-ublkd DESTINATION /opt/overlaybd/bin)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../example_config/overlaybd-ublkd.service
+        DESTINATION /opt/overlaybd/)
 
 if (BUILD_TESTING)
     add_subdirectory(test)

@@ -145,6 +145,28 @@ own log file via `add --log-path ...` (recommended when running multiple
 devices; daemons otherwise share the global log file and are distinguished
 by a `ublk-<pid>` tag).
 
+For hosting many devices in one process there is also `overlaybd-ublkd`, a
+centralized daemon sharing a single ImageService (and thus one cache tree,
+`<base>/daemon/` under `--cache-dir`, guarded by an exclusive lock). Its
+control API is HTTP over a root-only unix socket, debuggable with curl:
+
+```bash
+sudo overlaybd-ublkd &        # or: systemctl start overlaybd-ublkd
+SOCK=/var/run/overlaybd-ublk/ublkd.sock
+curl --unix-socket $SOCK -X POST -d '{"config":"/path/config.v1.json"}' http://d/v1/add
+curl --unix-socket $SOCK http://d/v1/list
+curl --unix-socket $SOCK -X POST -d '{"dev_id":0}' http://d/v1/del
+curl --unix-socket $SOCK -X POST -d '{"dev_id":0,"size_gb":50,"resize_fs":true}' http://d/v1/resize
+curl --unix-socket $SOCK -X POST http://d/v1/shutdown   # stops all devices
+```
+
+`add` replies once the device is usable; `del` replies after full teardown;
+online `resize` (grow only, writable images) additionally needs a kernel
+with `UBLK_F_UPDATE_SIZE` (mainline >= 6.11). Writable images are mounted
+exclusively across the daemon and CLI processes; devices owned by the
+daemon must be deleted through its API (the CLI `del` refuses them). A
+systemd unit template is installed at /opt/overlaybd/overlaybd-ublkd.service.
+
 Notes:
 
 * Always unmount filesystems on `/dev/ublkbN` before `del` (or before stopping
