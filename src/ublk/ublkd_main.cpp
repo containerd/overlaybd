@@ -77,6 +77,12 @@ public:
             handle_add(body, code, msg);
         } else if (target == "/v1/del" && req.verb() == photon::net::http::Verb::POST) {
             handle_del(body, code, msg);
+        } else if (target == "/v1/acquire" &&
+                   req.verb() == photon::net::http::Verb::POST) {
+            handle_acquire(body, code, msg);
+        } else if (target == "/v1/release" &&
+                   req.verb() == photon::net::http::Verb::POST) {
+            handle_release(body, code, msg);
         } else if (target == "/v1/resize" && req.verb() == photon::net::http::Verb::POST) {
             handle_resize(body, code, msg);
         } else if (target == "/v1/list") {
@@ -177,6 +183,17 @@ private:
             msg = ublkd_msg_error("no such device: " + std::to_string(id));
             return;
         }
+        // del is for exclusive (add-created) devices; shared devices are
+        // reference-counted and must go through release, or a caller would
+        // rip a device out from under other holders (M3-A)
+        if (it->second.mode_shared) {
+            code = 409;
+            msg = ublkd_msg_error("device " + std::to_string(id) +
+                                  " is shared (refcount " +
+                                  std::to_string(it->second.refcount) +
+                                  "); use /v1/release");
+            return;
+        }
         // Deletion state machine (M2-2): del is synchronous and yields while
         // draining, so a concurrent del of the same id would otherwise race
         // on the map iterator (erase invalidates the other handler's it).
@@ -235,10 +252,142 @@ private:
             info.config = kv.second.config;
             info.writable = kv.second.dev->writable();
             info.state = kv.second.stopping ? "stopping" : "running";
+            info.mode = kv.second.mode_shared ? "shared" : "exclusive";
+            info.refcount = kv.second.mode_shared ? kv.second.refcount : 0;
             infos.push_back(std::move(info));
         }
         code = 200;
         msg = ublkd_msg_list(infos);
+    }
+
+    // acquire (M3-A): lease semantics. shared -> reuse one device per image
+    // (refcounted); exclusive -> a fresh device (equivalent to add today,
+    // a hook for the M3-B warm pool). Only read-only images may be shared.
+    void handle_acquire(const std::string &body, int &code, std::string &msg) {
+        UblkdAcquireRequest areq;
+        std::string err;
+        if (ublkd_parse_acquire(body, areq, err) != 0) {
+            code = 400;
+            msg = ublkd_msg_error(err);
+            return;
+        }
+        char resolved[PATH_MAX];
+        if (realpath(areq.config.c_str(), resolved) == nullptr) {
+            code = 400;
+            msg = ublkd_msg_error("image config " + areq.config + ": " +
+                                  strerror(errno));
+            return;
+        }
+        bool shared = (areq.mode == "shared");
+
+        // shared: an already-running device for this image gets one more ref
+        if (shared) {
+            auto sit = shared_.find(resolved);
+            if (sit != shared_.end()) {
+                auto dit = devices_.find(sit->second);
+                if (dit != devices_.end() && !dit->second.stopping) {
+                    dit->second.refcount++;
+                    code = 200;
+                    msg = ublkd_msg_acquired(sit->second,
+                                             "/dev/ublkb" + std::to_string(sit->second),
+                                             "shared", dit->second.refcount);
+                    LOG_INFO("ublkd: acquire(shared) hit dev ` refcount `",
+                             sit->second, dit->second.refcount);
+                    return;
+                }
+                if (dit != devices_.end() && dit->second.stopping) {
+                    code = 409;
+                    msg = ublkd_msg_error("shared device for this image is being "
+                                          "torn down; retry");
+                    return;
+                }
+                shared_.erase(sit); // stale mapping, fall through to create
+            }
+        }
+
+        if (adds_in_flight_.count(resolved)) {
+            code = 409;
+            msg = ublkd_msg_error("an acquire/add of this image is already in progress");
+            return;
+        }
+        adds_in_flight_.insert(resolved);
+        auto dev = std::make_unique<UblkDevice>(service_);
+        UblkDeviceOpts opts;
+        opts.image_config_path = areq.config;
+        opts.cache_dir = cache_base_;
+        int ret = dev->start(opts);
+        adds_in_flight_.erase(resolved);
+        if (ret != 0) {
+            code = 500;
+            msg = ublkd_msg_error("device failed to start (see daemon log)");
+            return;
+        }
+        // shared mode requires a read-only image (concurrent RW would corrupt
+        // the upper); reject after start so writable() is known, then tear down
+        if (shared && dev->writable()) {
+            dev->stop();
+            dev->wait();
+            dev->teardown();
+            code = 400;
+            msg = ublkd_msg_error("cannot share a writable image (only read-only "
+                                  "images may be acquired shared)");
+            return;
+        }
+        int id = dev->dev_id();
+        auto &entry = devices_[id];
+        entry.dev = std::move(dev);
+        entry.config = areq.config;
+        entry.mode_shared = shared;
+        entry.refcount = 1;
+        if (shared)
+            shared_[resolved] = id;
+        code = 200;
+        msg = ublkd_msg_acquired(id, "/dev/ublkb" + std::to_string(id),
+                                 shared ? "shared" : "exclusive", 1);
+        LOG_INFO("ublkd: acquired /dev/ublkb` mode ` image `", id,
+                 areq.mode.c_str(), areq.config.c_str());
+    }
+
+    void handle_release(const std::string &body, int &code, std::string &msg) {
+        int id = -1;
+        std::string err;
+        if (ublkd_parse_del(body, id, err) != 0) { // same body shape as del
+            code = 400;
+            msg = ublkd_msg_error(err);
+            return;
+        }
+        auto it = devices_.find(id);
+        if (it == devices_.end()) {
+            code = 404;
+            msg = ublkd_msg_error("no such device: " + std::to_string(id));
+            return;
+        }
+        if (it->second.stopping) {
+            code = 409;
+            msg = ublkd_msg_error("device " + std::to_string(id) +
+                                  " is being torn down");
+            return;
+        }
+        if (--it->second.refcount > 0) {
+            code = 200;
+            msg = ublkd_msg_released(it->second.refcount);
+            LOG_INFO("ublkd: release dev ` refcount `", id, it->second.refcount);
+            return;
+        }
+        // last reference (or an exclusive lease): tear the device down
+        if (it->second.mode_shared) {
+            char resolved[PATH_MAX];
+            if (realpath(it->second.config.c_str(), resolved) != nullptr)
+                shared_.erase(resolved);
+        }
+        it->second.stopping = true;
+        it->second.dev->stop();
+        it->second.dev->wait();
+        it->second.dev->teardown();
+        devices_.erase(id);
+        code = 200;
+        msg = ublkd_msg_released(0);
+        LOG_INFO("ublkd: released and removed /dev/ublkb`", id);
     }
 
     ImageService *service_;
@@ -247,8 +396,12 @@ private:
         std::unique_ptr<UblkDevice> dev;
         std::string config;
         bool stopping = false;
+        bool mode_shared = false; // acquired shared (refcounted) vs add/exclusive
+        int refcount = 1;         // meaningful when mode_shared
     };
     std::map<int, DevEntry> devices_;
+    // realpath(image config) -> dev_id of its shared device (M3-A)
+    std::map<std::string, int> shared_;
     // realpath'd image configs with an add in progress (UX guard, see above)
     std::set<std::string> adds_in_flight_;
 };

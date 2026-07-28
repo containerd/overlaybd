@@ -37,6 +37,8 @@ struct UblkdDeviceInfo {
     std::string config;
     bool writable = false;
     std::string state; // "running" / "stopping"
+    std::string mode;  // "exclusive" / "shared"
+    int refcount = 0;  // shared devices only (0 for exclusive)
 };
 
 // parse POST /v1/add body; 0 = ok, -1 = malformed (err says why)
@@ -44,6 +46,16 @@ int ublkd_parse_add(const std::string &body, UblkdAddRequest &req, std::string &
 
 // parse POST /v1/del body ({"dev_id":N}); 0 = ok, -1 = malformed
 int ublkd_parse_del(const std::string &body, int &dev_id, std::string &err);
+
+struct UblkdAcquireRequest {
+    std::string config;              // image config path, required
+    std::string mode = "shared";     // "shared" (default) | "exclusive"
+};
+
+// parse POST /v1/acquire body; 0 = ok, -1 = malformed. mode defaults to
+// "shared"; any value other than shared/exclusive is rejected.
+int ublkd_parse_acquire(const std::string &body, UblkdAcquireRequest &req,
+                        std::string &err);
 
 struct UblkdResizeRequest {
     int dev_id = -1;
@@ -59,5 +71,10 @@ int ublkd_parse_resize(const std::string &body, UblkdResizeRequest &req,
 std::string ublkd_msg_ok();                                       // {"ok":true}
 std::string ublkd_msg_error(const std::string &error);            // {"ok":false,...}
 std::string ublkd_msg_added(int dev_id, const std::string &path); // add success
+// acquire success: like added, plus mode and refcount
+std::string ublkd_msg_acquired(int dev_id, const std::string &path,
+                               const std::string &mode, int refcount);
+// release success: {"ok":true,"refcount":n} (0 = device was torn down)
+std::string ublkd_msg_released(int refcount);
 std::string ublkd_msg_list(const std::vector<UblkdDeviceInfo> &devices);
 std::string ublkd_msg_ping(const std::string &version);

@@ -102,6 +102,34 @@ int ublkd_parse_resize(const std::string &body, UblkdResizeRequest &req,
     return 0;
 }
 
+int ublkd_parse_acquire(const std::string &body, UblkdAcquireRequest &req,
+                        std::string &err) {
+    rapidjson::Document doc;
+    doc.Parse(body.c_str());
+    if (doc.HasParseError() || !doc.IsObject()) {
+        err = "request body is not a JSON object";
+        return -1;
+    }
+    if (!doc.HasMember("config") || !doc["config"].IsString() ||
+        doc["config"].GetStringLength() == 0) {
+        err = "missing required field: config";
+        return -1;
+    }
+    req.config = doc["config"].GetString();
+    if (doc.HasMember("mode")) {
+        if (!doc["mode"].IsString()) {
+            err = "mode must be a string";
+            return -1;
+        }
+        req.mode = doc["mode"].GetString();
+        if (req.mode != "shared" && req.mode != "exclusive") {
+            err = "mode must be 'shared' or 'exclusive'";
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static std::string dump(const rapidjson::Document &doc) {
     rapidjson::StringBuffer sb;
     rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
@@ -132,6 +160,28 @@ std::string ublkd_msg_added(int dev_id, const std::string &path) {
     return dump(doc);
 }
 
+std::string ublkd_msg_acquired(int dev_id, const std::string &path,
+                               const std::string &mode, int refcount) {
+    rapidjson::Document doc;
+    doc.SetObject();
+    auto &a = doc.GetAllocator();
+    doc.AddMember("ok", true, a);
+    doc.AddMember("dev_id", dev_id, a);
+    doc.AddMember("dev", rapidjson::Value(path.c_str(), a), a);
+    doc.AddMember("mode", rapidjson::Value(mode.c_str(), a), a);
+    doc.AddMember("refcount", refcount, a);
+    return dump(doc);
+}
+
+std::string ublkd_msg_released(int refcount) {
+    rapidjson::Document doc;
+    doc.SetObject();
+    auto &a = doc.GetAllocator();
+    doc.AddMember("ok", true, a);
+    doc.AddMember("refcount", refcount, a);
+    return dump(doc);
+}
+
 std::string ublkd_msg_list(const std::vector<UblkdDeviceInfo> &devices) {
     rapidjson::Document doc;
     doc.SetObject();
@@ -145,6 +195,8 @@ std::string ublkd_msg_list(const std::vector<UblkdDeviceInfo> &devices) {
         o.AddMember("config", rapidjson::Value(d.config.c_str(), a), a);
         o.AddMember("writable", d.writable, a);
         o.AddMember("state", rapidjson::Value(d.state.c_str(), a), a);
+        o.AddMember("mode", rapidjson::Value(d.mode.c_str(), a), a);
+        o.AddMember("refcount", d.refcount, a);
         arr.PushBack(o, a);
     }
     doc.AddMember("devices", arr, a);

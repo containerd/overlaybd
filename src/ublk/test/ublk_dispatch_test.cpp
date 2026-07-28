@@ -369,6 +369,38 @@ TEST(ublkd_protocol, parse_resize) {
               -1);
 }
 
+TEST(ublkd_protocol, parse_acquire) {
+    UblkdAcquireRequest req;
+    std::string err;
+    // mode defaults to shared
+    ASSERT_EQ(ublkd_parse_acquire(R"({"config":"/tmp/c.json"})", req, err), 0);
+    EXPECT_EQ(req.config, "/tmp/c.json");
+    EXPECT_EQ(req.mode, "shared");
+
+    UblkdAcquireRequest ex;
+    ASSERT_EQ(ublkd_parse_acquire(
+                  R"({"config":"/tmp/c.json","mode":"exclusive"})", ex, err),
+              0);
+    EXPECT_EQ(ex.mode, "exclusive");
+
+    // malformed: no config / bad mode value / bad mode type / not json
+    EXPECT_EQ(ublkd_parse_acquire(R"({"mode":"shared"})", req, err), -1);
+    EXPECT_EQ(ublkd_parse_acquire(R"({"config":"/c","mode":"rw"})", req, err), -1);
+    EXPECT_EQ(ublkd_parse_acquire(R"({"config":"/c","mode":1})", req, err), -1);
+    EXPECT_EQ(ublkd_parse_acquire("nope", req, err), -1);
+}
+
+TEST(ublkd_protocol, acquire_release_responses) {
+    auto acq = ublkd_msg_acquired(3, "/dev/ublkb3", "shared", 2);
+    EXPECT_NE(acq.find(R"("mode":"shared")"), std::string::npos);
+    EXPECT_NE(acq.find(R"("refcount":2)"), std::string::npos);
+    EXPECT_NE(acq.find(R"("dev_id":3)"), std::string::npos);
+
+    EXPECT_NE(ublkd_msg_released(1).find(R"("refcount":1)"), std::string::npos);
+    // refcount 0 means the device was torn down by this release
+    EXPECT_NE(ublkd_msg_released(0).find(R"("refcount":0)"), std::string::npos);
+}
+
 TEST(ublkd_protocol, responses_roundtrip) {
     EXPECT_EQ(ublkd_msg_ok(), R"({"ok":true})");
     EXPECT_NE(ublkd_msg_error("boom").find(R"("ok":false)"), std::string::npos);
@@ -382,8 +414,12 @@ TEST(ublkd_protocol, responses_roundtrip) {
     devs[0].config = "/tmp/c.json";
     devs[0].writable = true;
     devs[0].state = "running";
+    devs[0].mode = "shared";
+    devs[0].refcount = 3;
     auto list = ublkd_msg_list(devs);
     EXPECT_NE(list.find(R"("writable":true)"), std::string::npos);
     EXPECT_NE(list.find(R"("state":"running")"), std::string::npos);
+    EXPECT_NE(list.find(R"("mode":"shared")"), std::string::npos);
+    EXPECT_NE(list.find(R"("refcount":3)"), std::string::npos);
 }
 
