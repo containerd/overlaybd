@@ -33,9 +33,11 @@
 #include <photon/photon.h>
 
 #include <csignal>
+#include <climits>
 #include <fcntl.h>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 
 #include <sys/stat.h>
@@ -47,7 +49,8 @@
 
 class UblkdServer : public photon::net::http::HTTPHandler {
 public:
-    UblkdServer(ImageService *service) : service_(service) {
+    UblkdServer(ImageService *service, std::string cache_base)
+        : service_(service), cache_base_(std::move(cache_base)) {
     }
 
     ~UblkdServer() {
@@ -55,10 +58,10 @@ public:
         // total teardown time is about the slowest device instead of the sum
         // (the bounded-DEL fallback costs 2s per device on backport kernels)
         for (auto &kv : devices_)
-            kv.second->stop();
+            kv.second.dev->stop();
         for (auto &kv : devices_) {
-            kv.second->wait();
-            kv.second->teardown();
+            kv.second.dev->wait();
+            kv.second.dev->teardown();
         }
         devices_.clear();
     }
@@ -117,21 +120,42 @@ private:
             msg = ublkd_msg_error(err);
             return;
         }
+        // Per-image in-flight guard (M2-2). Note: since M2-1 the same-image
+        // RW race is already closed by the inst0 flock (LOCK_EX excludes
+        // between fds of one process too); this guard is UX -- reject the
+        // duplicate immediately instead of failing it after seconds of work.
+        char resolved[PATH_MAX];
+        if (realpath(areq.config.c_str(), resolved) == nullptr) {
+            code = 400;
+            msg = ublkd_msg_error("image config " + areq.config + ": " +
+                                  strerror(errno));
+            return;
+        }
+        if (!adds_in_flight_.insert(resolved).second) {
+            code = 409;
+            msg = ublkd_msg_error("an add of this image is already in progress");
+            return;
+        }
+
         auto dev = std::make_unique<UblkDevice>(service_);
         UblkDeviceOpts opts;
         opts.image_config_path = areq.config;
         opts.dev_id = areq.dev_id;
         opts.queue_depth = areq.queue_depth;
-        // M1: instance_id reserved; cache patching/slots are skipped in the
-        // injected-service path (shared cache, in-process locks -- ADR-0006)
-        if (dev->start(opts) != 0) {
+        // cache tree is shared daemon-wide; cache_dir here only tells the
+        // device where the cross-process RW image locks live (M2-1)
+        opts.cache_dir = cache_base_;
+        int ret = dev->start(opts);
+        adds_in_flight_.erase(resolved);
+        if (ret != 0) {
             code = 500;
             msg = ublkd_msg_error("device failed to start (see daemon log)");
             return;
         }
         int id = dev->dev_id();
-        configs_[id] = areq.config;
-        devices_[id] = std::move(dev);
+        auto &entry = devices_[id];
+        entry.dev = std::move(dev);
+        entry.config = areq.config;
         code = 200;
         msg = ublkd_msg_added(id, "/dev/ublkb" + std::to_string(id));
         LOG_INFO("ublkd: added /dev/ublkb` image `", id, areq.config.c_str());
@@ -151,13 +175,20 @@ private:
             msg = ublkd_msg_error("no such device: " + std::to_string(id));
             return;
         }
-        // M1: synchronous del -- stop, drain, delete, then reply (serial
-        // control plane; concurrent del/list responsiveness is M2)
-        it->second->stop();
-        it->second->wait();
-        it->second->teardown();
-        devices_.erase(it);
-        configs_.erase(id);
+        // Deletion state machine (M2-2): del is synchronous and yields while
+        // draining, so a concurrent del of the same id would otherwise race
+        // on the map iterator (erase invalidates the other handler's it).
+        if (it->second.stopping) {
+            code = 409;
+            msg = ublkd_msg_error("delete of device " + std::to_string(id) +
+                                  " is already in progress");
+            return;
+        }
+        it->second.stopping = true;
+        it->second.dev->stop();
+        it->second.dev->wait();
+        it->second.dev->teardown();
+        devices_.erase(id); // re-lookup by key: `it` may not survive yields
         code = 200;
         msg = ublkd_msg_ok();
         LOG_INFO("ublkd: deleted /dev/ublkb`", id);
@@ -169,9 +200,9 @@ private:
             UblkdDeviceInfo info;
             info.dev_id = kv.first;
             info.dev_path = "/dev/ublkb" + std::to_string(kv.first);
-            info.config = configs_[kv.first];
-            info.writable = kv.second->writable();
-            info.state = "running"; // M1: del is synchronous, no stopping state
+            info.config = kv.second.config;
+            info.writable = kv.second.dev->writable();
+            info.state = kv.second.stopping ? "stopping" : "running";
             infos.push_back(std::move(info));
         }
         code = 200;
@@ -179,8 +210,15 @@ private:
     }
 
     ImageService *service_;
-    std::map<int, std::unique_ptr<UblkDevice>> devices_;
-    std::map<int, std::string> configs_; // dev_id -> image config path
+    std::string cache_base_;
+    struct DevEntry {
+        std::unique_ptr<UblkDevice> dev;
+        std::string config;
+        bool stopping = false;
+    };
+    std::map<int, DevEntry> devices_;
+    // realpath'd image configs with an add in progress (UX guard, see above)
+    std::set<std::string> adds_in_flight_;
 };
 
 // entry-layer signal routing (same pattern & rationale as cli g_signal_device)
@@ -195,6 +233,7 @@ static void sigterm_handler(int signal) {
 int main(int argc, char **argv) {
     std::string socket_path = UBLKD_DEFAULT_SOCK;
     std::string service_config;
+    std::string cache_dir;
 
     CLI::App app{"overlaybd-ublkd: centralized ublk device manager daemon "
                  "(all devices in one process, shared ImageService)"};
@@ -202,6 +241,10 @@ int main(int argc, char **argv) {
                    "unix socket for the control API (default " UBLKD_DEFAULT_SOCK ")");
     app.add_option("--service-config", service_config,
                    "overlaybd service config (default /etc/overlaybd/overlaybd.json)");
+    app.add_option("--cache-dir", cache_dir,
+                   "cache base directory (default /opt/overlaybd/ublk_cache); "
+                   "the daemon uses <base>/daemon/ for all devices and ignores "
+                   "the service config's cacheDir");
     CLI11_PARSE(app, argc, argv);
 
     if (ublk_check_control_dev() != 0)
@@ -218,19 +261,32 @@ int main(int argc, char **argv) {
         close(devnull);
     }
 
+    // shared cache tree + daemon flock + patched service config (M2-1);
+    // plain fs/flock work, safe before photon::init
+    std::string patched_config;
+    int cache_lock_fd = -1; // held until exit; kernel releases on any death
+    if (ublk_daemon_setup_cache(cache_dir, service_config, patched_config,
+                                cache_lock_fd) != 0)
+        return 1;
+
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     photon::block_all_signal();
     photon::sync_signal(SIGTERM, &sigterm_handler);
     photon::sync_signal(SIGINT, &sigterm_handler);
 
-    ImageService *service =
-        create_image_service(service_config.empty() ? nullptr : service_config.c_str());
+    ImageService *service = create_image_service(patched_config.c_str());
     if (service == nullptr) {
+        unlink(patched_config.c_str());
         fprintf(stderr, "overlaybd-ublkd: failed to create image service\n");
         return 1;
     }
+    // patched copy stays for the daemon's lifetime: create_image_file
+    // re-parses this path for the global default download section
+    // photon LOG prints adjacent string literals with quotes, keep one literal
+    LOG_INFO("cache: `/daemon (service config cacheDir is overridden, see --cache-dir)",
+             cache_dir.empty() ? "/opt/overlaybd/ublk_cache" : cache_dir.c_str());
 
-    auto *server = new UblkdServer(service);
+    auto *server = new UblkdServer(service, cache_dir);
     g_shutdown_flag = &server->shutdown_requested;
 
     auto *sock = photon::net::new_uds_server(true /* autoremove */);
@@ -257,6 +313,7 @@ int main(int argc, char **argv) {
     delete server; // parallel-stops and tears down every device
     delete sock;
     delete service;
+    unlink(patched_config.c_str());
     photon::fini();
     return 0;
 }

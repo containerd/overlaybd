@@ -56,6 +56,18 @@ int ublk_check_control_dev();
 // exit code.
 int run_ublk_device(const UblkDeviceOpts &opts, int ready_fd);
 
+// Daemon-side cache setup (ADR-0006 M2-1). All devices of a daemon share
+// one cache tree <base>/daemon/{registry_cache,gzip_cache}: creates it,
+// takes an exclusive flock on <base>/daemon/.lock (a second daemon on the
+// same base is refused), and writes a service config copy patched to that
+// tree (the cacheDir of the original service config is deliberately
+// ignored -- single-valued rule, and the default keeps clear of tcmu's
+// /opt/overlaybd/registry_cache). Returns 0 and the lock fd (held for the
+// daemon's lifetime) or -1 with a message on stderr.
+int ublk_daemon_setup_cache(const std::string &cache_base,
+                            const std::string &service_config_path,
+                            std::string &patched_config, int &lock_fd);
+
 class ImageService;
 class ImageFile;
 class ImageFileTarget;
@@ -105,6 +117,7 @@ private:
     int init_service(const UblkDeviceOpts &opts); // CLI path only
     void cleanup_failed_start(bool dev_added);    // no half-created device stays
     int setup_cache_root(const UblkDeviceOpts &opts, std::string &cache_root);
+    int acquire_rw_image_lock(const UblkDeviceOpts &opts); // daemon path only
     int claim_instance(const std::string &image_root, const std::string &inst,
                        std::string &cache_root);
     void set_dev_parameters();
@@ -121,6 +134,13 @@ private:
     std::atomic<bool> queue_exited_{false};
     unsigned ring_flags_ = 0; // queue io_uring flags, probed in start()
     int cache_lock_fd_ = -1; // held for the device's lifetime
+    // human-readable reason of a failed bring-up; relayed to the add
+    // command's console through the ready pipe (daemonized childs lose
+    // stderr, and alog is not yet redirected during early setup)
+    std::string last_error_;
+    // CLI path: patched service config path, kept alive until teardown
+    // (create_image_file re-parses it for the global download defaults)
+    std::string patched_config_path_;
     int dev_id_ = -1;
     bool owns_service_ = true;
     bool torn_down_ = false;

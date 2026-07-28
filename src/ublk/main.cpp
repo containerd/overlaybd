@@ -44,6 +44,24 @@ static int read_pidfile(int dev_id, pid_t *pid) {
     return 0;
 }
 
+// A pidfile under the run dir may belong to a one-device CLI daemon or to
+// overlaybd-ublkd (libublksrv writes <dev_id>.pid with the serving process'
+// pid either way). The distinction matters: SIGTERM to a CLI daemon removes
+// exactly its device, but SIGTERM to ublkd gracefully tears down ALL its
+// devices -- `del -n N` must never do that by accident.
+static bool pid_is_ublkd(pid_t pid) {
+    char path[64], comm[64] = {};
+    snprintf(path, sizeof(path), "/proc/%d/comm", (int)pid);
+    FILE *fp = fopen(path, "r");
+    if (fp == nullptr)
+        return false;
+    if (fgets(comm, sizeof(comm), fp) == nullptr)
+        comm[0] = 0;
+    fclose(fp);
+    comm[strcspn(comm, "\n")] = 0;
+    return strcmp(comm, "overlaybd-ublkd") == 0;
+}
+
 // del: process == device, so a graceful stop is SIGTERM to the
 // daemon, whose signal handler tears the ublk device down before exiting.
 static int cmd_del(int dev_id) {
@@ -51,6 +69,16 @@ static int cmd_del(int dev_id) {
     if (read_pidfile(dev_id, &pid) != 0) {
         fprintf(stderr, "overlaybd-ublk: no pidfile for dev %d under %s\n", dev_id,
                 OVERLAYBD_UBLK_RUN_DIR);
+        return 1;
+    }
+    if (pid_is_ublkd(pid)) {
+        fprintf(stderr,
+                "overlaybd-ublk: /dev/ublkb%d is managed by overlaybd-ublkd "
+                "(pid %d); SIGTERM would tear down ALL of its devices.\n"
+                "Use the daemon API instead:\n"
+                "  curl --unix-socket %s/ublkd.sock -X POST "
+                "-d '{\"dev_id\":%d}' http://d/v1/del\n",
+                dev_id, (int)pid, OVERLAYBD_UBLK_RUN_DIR, dev_id);
         return 1;
     }
     if (kill(pid, SIGTERM) != 0) {
@@ -108,8 +136,9 @@ static int cmd_list() {
                 cmdline = buf;
             }
         }
-        printf("/dev/ublkb%-4d pid %-8d %-8s %s\n", dev_id, (int)pid,
-               alive ? "running" : "dead", cmdline.c_str());
+        printf("/dev/ublkb%-4d pid %-8d %-8s %s%s\n", dev_id, (int)pid,
+               alive ? "running" : "dead",
+               pid_is_ublkd(pid) ? "[ublkd-managed] " : "", cmdline.c_str());
     }
     closedir(dir);
     return 0;
@@ -155,7 +184,7 @@ static int cmd_add(const UblkDeviceOpts &opts, bool foreground) {
 
     // parent: block until the child reports readiness or dies (pipe EOF)
     close(pipefd[1]);
-    char buf[64];
+    char buf[256];
     ssize_t n = 0, off = 0;
     while (off < (ssize_t)sizeof(buf) - 1 &&
            (n = read(pipefd[0], buf + off, sizeof(buf) - 1 - off)) > 0) {
@@ -164,10 +193,17 @@ static int cmd_add(const UblkDeviceOpts &opts, bool foreground) {
             break;
     }
     close(pipefd[0]);
+    buf[off > 0 ? off : 0] = 0;
 
     if (off > 0 && strncmp(buf, "/dev/", 5) == 0) {
         fwrite(buf, 1, off, stdout); // e.g. "/dev/ublkb0\n"
         return 0;
+    }
+    if (off > 4 && strncmp(buf, "ERR:", 4) == 0) {
+        // failure reason relayed over the ready pipe: the daemonized child
+        // has no stderr and alog may not be file-backed yet at that point
+        fprintf(stderr, "overlaybd-ublk: %s", buf + 4);
+        return 1;
     }
     fprintf(stderr, "overlaybd-ublk: device failed to start "
                     "(check the overlaybd log for details)\n");

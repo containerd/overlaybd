@@ -332,6 +332,22 @@ static void notify_ready(int ready_fd, int dev_id) {
         close(ready_fd);
 }
 
+// failure counterpart of the sync-ready contract: the daemonized child has
+// no usable stderr and alog is not yet file-backed during early setup, so
+// the reason travels to the add command's console through the same pipe
+static void notify_error(int ready_fd, const std::string &reason) {
+    if (ready_fd <= 2) // foreground mode already printed to a live stderr
+        return;
+    std::string msg =
+        "ERR:" +
+        (reason.empty() ? std::string("unknown error, check the overlaybd log")
+                        : reason) +
+        "\n";
+    ssize_t nwritten = write(ready_fd, msg.data(), msg.size());
+    (void)nwritten;
+    close(ready_fd);
+}
+
 // Delete the ublk device and release the ctrl dev, without ever blocking
 // this process forever. Sync DEL_DEV waits in-kernel until every device
 // reference is dropped; on some kernels (observed: 5.10 backport) the last
@@ -388,12 +404,12 @@ static int mkdir_p(const std::string &path, mode_t mode) {
 // config into the run dir and pointing create_image_service at it (keeps the
 // shared image_service code untouched). The temp file is removed right after
 // the service is created.
-static int make_patched_service_config(const UblkDeviceOpts &opts,
+static int make_patched_service_config(const std::string &service_config_path,
                                        const std::string &cache_root,
                                        std::string &out_path) {
-    const char *base_path = opts.service_config_path.empty()
+    const char *base_path = service_config_path.empty()
                                 ? "/etc/overlaybd/overlaybd.json" // create_image_service default
-                                : opts.service_config_path.c_str();
+                                : service_config_path.c_str();
     std::ifstream in(base_path);
     if (!in) {
         fprintf(stderr, "overlaybd-ublk: cannot read service config %s\n", base_path);
@@ -439,6 +455,30 @@ static bool valid_instance_id(const std::string &s) {
     return true;
 }
 
+// lock <dir>/.lock exclusively: 0 = locked (fd_out valid, keep for the
+// holder's lifetime; kernel releases on any process exit), -2 = busy,
+// -1 = hard error
+static int lock_dir(const std::string &dir, int &fd_out) {
+    if (mkdir_p(dir, 0755) != 0) {
+        fprintf(stderr, "overlaybd-ublk: cannot create %s: %s\n", dir.c_str(),
+                strerror(errno));
+        return -1;
+    }
+    std::string lock_path = dir + "/.lock";
+    int fd = open(lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        fprintf(stderr, "overlaybd-ublk: cannot open %s: %s\n", lock_path.c_str(),
+                strerror(errno));
+        return -1;
+    }
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        close(fd);
+        return -2;
+    }
+    fd_out = fd;
+    return 0;
+}
+
 // claim <image_root>/<inst>: 0 = claimed, -2 = busy, -1 = hard error
 int UblkDevice::claim_instance(const std::string &image_root, const std::string &inst,
                                std::string &cache_root) {
@@ -449,20 +489,9 @@ int UblkDevice::claim_instance(const std::string &image_root, const std::string 
                 strerror(errno));
         return -1;
     }
-    std::string lock_path = root + "/.lock";
-    int fd = open(lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0644);
-    if (fd < 0) {
-        fprintf(stderr, "overlaybd-ublk: cannot open %s: %s\n", lock_path.c_str(),
-                strerror(errno));
-        return -1;
-    }
-    // held for the daemon's lifetime; the kernel releases it on any kind of
-    // process exit, so there is no stale-lock handling to do
-    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
-        close(fd);
-        return -2;
-    }
-    cache_lock_fd_ = fd;
+    int r = lock_dir(root, cache_lock_fd_);
+    if (r != 0)
+        return r;
     cache_root = root;
     return 0;
 }
@@ -470,8 +499,8 @@ int UblkDevice::claim_instance(const std::string &image_root, const std::string 
 int UblkDevice::setup_cache_root(const UblkDeviceOpts &opts, std::string &cache_root) {
     char resolved[PATH_MAX];
     if (realpath(opts.image_config_path.c_str(), resolved) == nullptr) {
-        fprintf(stderr, "overlaybd-ublk: realpath(%s) failed: %s\n",
-                opts.image_config_path.c_str(), strerror(errno));
+        last_error_ = "image config " + opts.image_config_path + ": " + strerror(errno);
+        fprintf(stderr, "overlaybd-ublk: %s\n", last_error_.c_str());
         return -1;
     }
 
@@ -496,28 +525,38 @@ int UblkDevice::setup_cache_root(const UblkDeviceOpts &opts, std::string &cache_
 
     if (!opts.instance_id.empty()) {
         if (writable) {
-            fprintf(stderr, "overlaybd-ublk: --instance-id is not allowed for a "
-                            "writable image (it can only be mounted once)\n");
+            last_error_ = "--instance-id is not allowed for a writable image "
+                          "(it can only be mounted once)";
+            fprintf(stderr, "overlaybd-ublk: %s\n", last_error_.c_str());
             return -1;
         }
         if (!valid_instance_id(opts.instance_id)) {
-            fprintf(stderr, "overlaybd-ublk: invalid --instance-id (allowed: "
-                            "[A-Za-z0-9._-], max 64 chars)\n");
+            last_error_ = "invalid --instance-id (allowed: [A-Za-z0-9._-], "
+                          "max 64 chars)";
+            fprintf(stderr, "overlaybd-ublk: %s\n", last_error_.c_str());
             return -1;
         }
         int r = claim_instance(image_root, opts.instance_id, cache_root);
-        if (r == -2)
-            fprintf(stderr, "overlaybd-ublk: instance '%s' of this image is "
-                            "already running\n",
-                    opts.instance_id.c_str());
+        if (r == -2) {
+            last_error_ = "instance '" + opts.instance_id +
+                          "' of this image is already running";
+            fprintf(stderr, "overlaybd-ublk: %s\n", last_error_.c_str());
+        } else if (r == -1) {
+            last_error_ = "cannot create cache directories under " + image_root;
+        }
         return r == 0 ? 0 : -1;
     }
 
     if (writable) {
         int r = claim_instance(image_root, "inst0", cache_root);
-        if (r == -2)
-            fprintf(stderr, "overlaybd-ublk: writable image already mounted "
-                            "(concurrent RW mounts would corrupt the upper layer)\n");
+        if (r == -2) {
+            last_error_ = "writable image already mounted by another daemon "
+                          "or CLI process (concurrent RW mounts would corrupt "
+                          "the upper layer)";
+            fprintf(stderr, "overlaybd-ublk: %s\n", last_error_.c_str());
+        } else if (r == -1) {
+            last_error_ = "cannot create cache directories under " + image_root;
+        }
         return r == 0 ? 0 : -1;
     }
 
@@ -525,11 +564,13 @@ int UblkDevice::setup_cache_root(const UblkDeviceOpts &opts, std::string &cache_
         int r = claim_instance(image_root, "inst" + std::to_string(i), cache_root);
         if (r == 0)
             return 0;
-        if (r == -1)
+        if (r == -1) {
+            last_error_ = "cannot create cache directories under " + image_root;
             return -1;
+        }
     }
-    fprintf(stderr, "overlaybd-ublk: all 64 cache instance slots of this image "
-                    "are busy\n");
+    last_error_ = "all 64 cache instance slots of this image are busy";
+    fprintf(stderr, "overlaybd-ublk: %s\n", last_error_.c_str());
     return -1;
 }
 
@@ -539,15 +580,24 @@ int UblkDevice::init_service(const UblkDeviceOpts &opts) {
     if (setup_cache_root(opts, cache_root) != 0)
         return -1;
     std::string patched_config; // temp file, removed after service init
-    if (make_patched_service_config(opts, cache_root, patched_config) != 0)
+    if (make_patched_service_config(opts.service_config_path, cache_root,
+                                    patched_config) != 0) {
+        last_error_ = "cannot read or patch the service config";
         return -1;
+    }
 
     imgservice_ = create_image_service(patched_config.c_str());
-    unlink(patched_config.c_str()); // config parsed, temp copy no longer needed
     if (imgservice_ == nullptr) {
+        unlink(patched_config.c_str());
+        last_error_ = "failed to create image service (bad service config?)";
         LOG_ERROR("failed to create image service");
         return -1;
     }
+    // keep the patched copy until teardown: create_image_file re-parses the
+    // service config path later (global default download section); deleting
+    // it here silently drops those defaults (seen as "default download
+    // config parse failed" warnings)
+    patched_config_path_ = patched_config;
     owns_service_ = true;
     // per-device log: redirect after create_image_service (which applied the
     // shared logPath from the global config); reuse the global size/rotation
@@ -583,11 +633,75 @@ void UblkDevice::cleanup_failed_start(bool dev_added) {
     dev_id_ = -1;
 }
 
+int ublk_daemon_setup_cache(const std::string &cache_base,
+                            const std::string &service_config_path,
+                            std::string &patched_config, int &lock_fd) {
+    std::string base =
+        cache_base.empty() ? "/opt/overlaybd/ublk_cache" : cache_base;
+    std::string daemon_root = base + "/daemon";
+    // "daemon" can never collide with a CLI image key (16 hex chars)
+    if (mkdir_p(daemon_root + "/registry_cache", 0755) != 0 ||
+        mkdir_p(daemon_root + "/gzip_cache", 0755) != 0) {
+        fprintf(stderr, "overlaybd-ublkd: cannot create cache dir %s: %s\n",
+                daemon_root.c_str(), strerror(errno));
+        return -1;
+    }
+    int r = lock_dir(daemon_root, lock_fd);
+    if (r == -2) {
+        fprintf(stderr,
+                "overlaybd-ublkd: cache dir %s is held by another daemon; "
+                "run a second instance with a different --cache-dir (and "
+                "--socket-path)\n",
+                daemon_root.c_str());
+        return -1;
+    }
+    if (r != 0)
+        return -1;
+    return make_patched_service_config(service_config_path, daemon_root,
+                                       patched_config);
+}
+
+// Daemon path: cross-process exclusion for writable images. The daemon
+// shares one cache tree, so it takes no per-image cache instance -- but a
+// writable image mounted here AND by a single-device CLI process would
+// still corrupt the upper layer. Reuse the ADR-0004 lock file
+// (<base>/<image-key>/inst0/.lock) as lock-only, no cache subdirs, so both
+// worlds exclude each other as long as they share the cache base.
+int UblkDevice::acquire_rw_image_lock(const UblkDeviceOpts &opts) {
+    char resolved[PATH_MAX];
+    if (realpath(opts.image_config_path.c_str(), resolved) == nullptr) {
+        LOG_ERROR("realpath(`) failed: `", opts.image_config_path.c_str(),
+                  strerror(errno));
+        return -1;
+    }
+    std::ifstream in(resolved);
+    std::string image_json((std::istreambuf_iterator<char>(in)),
+                           std::istreambuf_iterator<char>());
+    if (!ublk_config_has_upper(image_json))
+        return 0; // read-only: shared cache, in-process locks suffice
+
+    std::string base =
+        opts.cache_dir.empty() ? "/opt/overlaybd/ublk_cache" : opts.cache_dir;
+    std::string inst0 = base + "/" + ublk_image_cache_key(resolved) + "/inst0";
+    int r = lock_dir(inst0, cache_lock_fd_);
+    if (r == -2) {
+        LOG_ERROR("writable image ` already mounted (another daemon or CLI "
+                  "process holds `/.lock)",
+                  resolved, inst0.c_str());
+        return -1;
+    }
+    return r == 0 ? 0 : -1;
+}
+
 int UblkDevice::start(const UblkDeviceOpts &opts) {
     if (imgservice_ == nullptr) {
         LOG_ERROR("no ImageService bound (daemon must inject one)");
         return -1;
     }
+    // daemon path: writable images need cross-process exclusion before the
+    // upper layer is opened (CLI takes its lock in setup_cache_root instead)
+    if (!owns_service_ && acquire_rw_image_lock(opts) != 0)
+        return -1;
     // registration tag: ImageService keys its device table by this string,
     // so it must be unique. CLI: pid alone (one device per process, matches
     // the log tag). Daemon: many devices share the pid, append a sequence --
@@ -602,6 +716,8 @@ int UblkDevice::start(const UblkDeviceOpts &opts) {
     // init_tgt, and a broken config must fail the add command, not the device
     file_ = imgservice_->create_image_file(opts.image_config_path.c_str(), dev_tag);
     if (file_ == nullptr) {
+        last_error_ = "failed to open image " + opts.image_config_path +
+                      " (bad image config or unreachable layer files)";
         LOG_ERROR("failed to open image `", opts.image_config_path.c_str());
         return -1;
     }
@@ -633,6 +749,8 @@ int UblkDevice::start(const UblkDeviceOpts &opts) {
     int ret = ublksrv_ctrl_add_dev(ctrl_dev_);
     if (ret < 0) {
         LOG_ERROR("ublksrv_ctrl_add_dev failed: `", ret);
+        last_error_ = "UBLK ADD_DEV failed (" + std::to_string(ret) +
+                      "); requested dev id busy or kernel refused";
         cleanup_failed_start(false);
         return -1;
     }
@@ -658,6 +776,7 @@ int UblkDevice::start(const UblkDeviceOpts &opts) {
         queue_thread_.join();
         ublksrv_dev_deinit(dev_);
         dev_ = nullptr;
+        last_error_ = "queue ring init failed (see overlaybd log / syslog)";
         cleanup_failed_start(true);
         return -1;
     }
@@ -709,6 +828,10 @@ void UblkDevice::teardown() {
     if (owns_service_)
         delete imgservice_;
     imgservice_ = nullptr;
+    if (!patched_config_path_.empty()) {
+        unlink(patched_config_path_.c_str());
+        patched_config_path_.clear();
+    }
 }
 
 int UblkDevice::run(const UblkDeviceOpts &opts, int ready_fd) {
@@ -716,9 +839,12 @@ int UblkDevice::run(const UblkDeviceOpts &opts, int ready_fd) {
         return 1;
     mkdir(OVERLAYBD_UBLK_RUN_DIR, 0755); // pidfile dir for libublksrv
 
-    if (init_service(opts) != 0)
+    if (init_service(opts) != 0) {
+        notify_error(ready_fd, last_error_);
         return 1;
+    }
     if (start(opts) != 0) {
+        notify_error(ready_fd, last_error_);
         teardown();
         return 1;
     }
