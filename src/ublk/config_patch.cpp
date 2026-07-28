@@ -15,9 +15,43 @@
 */
 #include "config_patch.h"
 
+#include <cstdint>
+#include <cstdio>
+
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
+
+std::string ublk_image_cache_key(const std::string &canonical_path) {
+    // FNV-1a 64-bit: tiny, dependency-free, stable across runs and platforms;
+    // collision odds are negligible for config paths on a single host
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (unsigned char c : canonical_path) {
+        h ^= c;
+        h *= 0x100000001b3ULL;
+    }
+    char buf[17];
+    snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)h);
+    return buf;
+}
+
+bool ublk_config_has_upper(const std::string &image_json) {
+    rapidjson::Document doc;
+    doc.Parse(image_json.c_str());
+    if (doc.HasParseError() || !doc.IsObject() || !doc.HasMember("upper"))
+        return false;
+    const auto &upper = doc["upper"];
+    if (!upper.IsObject())
+        return false;
+    // mirrors init_image_file(): an upper is effective when any of its
+    // layer paths is set (index/data for LSMT, target for turboOCI)
+    for (const char *key : {"index", "data", "target"}) {
+        if (upper.HasMember(key) && upper[key].IsString() &&
+            upper[key].GetStringLength() > 0)
+            return true;
+    }
+    return false;
+}
 
 int ublk_patch_cache_dirs(const std::string &base_json, const std::string &cache_dir,
                           std::string &out_json) {

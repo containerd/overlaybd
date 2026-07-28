@@ -38,9 +38,12 @@ int ublk_parse_cli(int argc, char **argv, UblkCliCmd &cmd) {
                     "per-device log file (default: shared log from service config; "
                     "recommended when running multiple devices)");
     add->add_option("--cache-dir", cmd.opts.cache_dir,
-                    "dedicated cache directory for this device (default: shared cache "
-                    "dirs from service config; required when running multiple devices, "
-                    "cache locking is in-process only)");
+                    "base directory for the per-device cache (default "
+                    "/opt/overlaybd/ublk_cache); caches are always isolated per "
+                    "image under <base>/<image-key>/<instance>/");
+    add->add_option("--instance-id", cmd.opts.instance_id,
+                    "explicit cache instance name for mounting the same read-only "
+                    "image multiple times (default: auto slot instN)");
     add->add_flag("--foreground", cmd.foreground, "run in foreground (no daemonize)");
 
     auto *del = app.add_subcommand("del", "stop the daemon serving /dev/ublkbN");

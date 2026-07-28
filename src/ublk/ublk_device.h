@@ -30,11 +30,15 @@ struct UblkDeviceOpts {
     // indistinguishable lines and race on rotation, so a dedicated path per
     // device is recommended when running multiple devices.
     std::string log_path;
-    // dedicated cache directory for this device (registry/gzip caches land in
-    // subdirs); empty = shared dirs from the global service config. The file
-    // cache's eviction/refill locking is in-process only, so daemons sharing
-    // one cache directory can race -- REQUIRED when running multiple devices.
+    // base directory for this device's cache; empty = /opt/overlaybd/ublk_cache.
+    // Cache isolation is always on: caches live in <base>/<image-key>/<instance>/
+    // (key = hash of the image config's realpath) guarded by an exclusive
+    // flock, because the file cache's locking is in-process only.
     std::string cache_dir;
+    // explicit cache instance name; empty = auto slot (inst0, inst1, ...).
+    // Lets callers with a stable identity (e.g. a future snapshotter) pin
+    // an instance; only meaningful for read-only images.
+    std::string instance_id;
     int dev_id = -1;                 // -1: let the kernel allocate
     int queue_depth = 128;
 };

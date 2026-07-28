@@ -204,6 +204,17 @@ TEST(cli, add_log_path) {
     EXPECT_EQ(cmd.opts.log_path, "/var/log/obd-ublk0.log");
 }
 
+TEST(cli, add_instance_id) {
+    UblkCliCmd cmd;
+    char self[] = "/proc/self/exe";
+    ASSERT_EQ(parse({"add", "--config", self, "--instance-id", "snap-42"}, cmd), 0);
+    EXPECT_EQ(cmd.opts.instance_id, "snap-42");
+
+    UblkCliCmd cmd2;
+    ASSERT_EQ(parse({"add", "--config", self}, cmd2), 0);
+    EXPECT_TRUE(cmd2.opts.instance_id.empty()); // default: auto slot
+}
+
 TEST(cli, del_requires_dev_id) {
     UblkCliCmd cmd;
     EXPECT_NE(parse({"del"}, cmd), 0);
@@ -260,5 +271,28 @@ TEST(config_patch, rejects_invalid_json) {
     std::string out;
     EXPECT_NE(ublk_patch_cache_dirs("not json", "/tmp/c", out), 0);
     EXPECT_NE(ublk_patch_cache_dirs("[1,2]", "/tmp/c", out), 0); // array, not object
+}
+
+TEST(config_patch, image_cache_key_is_stable_hex16) {
+    auto k1 = ublk_image_cache_key("/tmp/a/config.v1.json");
+    auto k2 = ublk_image_cache_key("/tmp/a/config.v1.json");
+    auto k3 = ublk_image_cache_key("/tmp/b/config.v1.json");
+    EXPECT_EQ(k1, k2); // deterministic: same image -> same (warm) cache dir
+    EXPECT_NE(k1, k3); // different images never share a dir
+    EXPECT_EQ(k1.size(), 16u);
+    EXPECT_EQ(k1.find_first_not_of("0123456789abcdef"), std::string::npos);
+}
+
+TEST(config_patch, detects_writable_upper) {
+    // LSMT upper -> writable, must be mounted exclusively
+    EXPECT_TRUE(ublk_config_has_upper(
+        R"({"lowers":[],"upper":{"index":"/x/idx","data":"/x/data"}})"));
+    // turboOCI-style upper
+    EXPECT_TRUE(ublk_config_has_upper(R"({"upper":{"target":"/x/tgt"}})"));
+    // read-only: lowers only / empty or pathless upper / invalid json
+    EXPECT_FALSE(ublk_config_has_upper(R"({"lowers":[{"file":"/x/l0"}]})"));
+    EXPECT_FALSE(ublk_config_has_upper(R"({"upper":{}})"));
+    EXPECT_FALSE(ublk_config_has_upper(R"({"upper":{"index":""}})"));
+    EXPECT_FALSE(ublk_config_has_upper("not json"));
 }
 

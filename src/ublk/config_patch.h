@@ -26,3 +26,15 @@
 // base_json is not a valid JSON object.
 int ublk_patch_cache_dirs(const std::string &base_json, const std::string &cache_dir,
                           std::string &out_json);
+
+// Derive the per-image cache subdirectory name from the canonicalized
+// (realpath'd) image config path: 16 hex chars of FNV-1a 64. Cache identity
+// follows the image, so remounting the same image hits a warm cache while
+// different images can never share a directory.
+std::string ublk_image_cache_key(const std::string &canonical_path);
+
+// Whether an image config (config.v1.json content) has a writable upper
+// layer. Writable images must be mounted exclusively: concurrent mounts
+// would corrupt the upper layer, so they are restricted to cache instance
+// slot 0 (read-only images may claim further slots concurrently).
+bool ublk_config_has_upper(const std::string &image_json);
