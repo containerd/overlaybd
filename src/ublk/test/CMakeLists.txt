@@ -12,6 +12,7 @@ add_executable(ublk_dispatch_test
     ../io_dispatch.cpp
     ../cli.cpp
     ../config_patch.cpp
+    ../ublkd_protocol.cpp
 )
 target_include_directories(ublk_dispatch_test PUBLIC
     ${UBLKSRV_INCLUDE_DIRS} ${LIBURING_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_DIRS})

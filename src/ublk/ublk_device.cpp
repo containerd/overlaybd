@@ -103,43 +103,32 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// UblkDevice: all state of one device, formerly file-scope globals.
-// One instance == one device; a process may in principle host several
-// instances, which is what the daemon mode (ADR-0005) will build on.
+// UblkDevice small members (the class declaration lives in ublk_device.h;
+// one instance == one device, N instances per process is the daemon mode)
 // ---------------------------------------------------------------------------
 
-class UblkDevice {
-public:
-    // Run the device until stop() is called (usually from a signal handler).
-    // Returns the process exit code.
-    int run(const UblkDeviceOpts &opts, int ready_fd);
+void UblkDevice::stop() {
+    if (ctrl_dev_ != nullptr)
+        ublksrv_ctrl_stop_dev(ctrl_dev_);
+}
 
-    // Ask the device to stop; safe to call from a photon signal coroutine.
-    void stop() {
-        if (ctrl_dev_ != nullptr)
-            ublksrv_ctrl_stop_dev(ctrl_dev_);
-    }
+uint64_t UblkDevice::image_size() const {
+    return file_->num_lbas * (uint64_t)file_->block_size;
+}
 
-    uint64_t image_size() const {
-        return file_->num_lbas * (uint64_t)file_->block_size;
-    }
+bool UblkDevice::writable() const {
+    return file_ != nullptr && !file_->read_only;
+}
 
-private:
-    int setup_cache_root(const UblkDeviceOpts &opts, std::string &cache_root);
-    int claim_instance(const std::string &image_root, const std::string &inst,
-                       std::string &cache_root);
-    void set_dev_parameters();
-    void ctrl_del_and_deinit();
-    void queue_loop(const struct ublksrv_dev *dev, photon::semaphore *started,
-                    int *init_ret);
-
-    ImageService *imgservice_ = nullptr;
-    ImageFile *file_ = nullptr;
-    ImageFileTarget *target_ = nullptr;
-    struct ublksrv_ctrl_dev *ctrl_dev_ = nullptr;
-    std::atomic<bool> queue_exited_{false};
-    int cache_lock_fd_ = -1; // held for the device's lifetime, released on exit
-};
+UblkDevice::~UblkDevice() {
+    // safety net for the daemon path; the normal orders are run(), or
+    // stop() -> wait() -> teardown() -- every step below is idempotent
+    stop();
+    wait();
+    teardown();
+    if (cache_lock_fd_ >= 0)
+        close(cache_lock_fd_);
+}
 
 // ---------------------------------------------------------------------------
 // data plane: per-queue photon-owned hybrid event loop
@@ -201,6 +190,26 @@ static struct ublksrv_tgt_type obd_tgt_type = {
     .name = "overlaybd",
 };
 
+// Probe IORING_SETUP_COOP_TASKRUN (mainline 5.19+) support once per process
+// with a private throwaway ring. Letting ublksrv_queue_init_flags fail and
+// retrying without the flag looks harmless, but libublksrv's failure path
+// runs ublksrv_queue_deinit on a zero-initialized queue whose epollfd/efd
+// are 0 behind `>= 0` guards -- it closes fd 0. With one process per device
+// the victim is just stdin (and the retried ring lands on fd 0, working by
+// luck); in the daemon, fd 0 IS the previous device's queue ring, so every
+// add silently wedged the device added before it. Never let the first
+// attempt fail.
+static unsigned probe_queue_ring_flags() {
+    struct io_uring probe;
+    int r = io_uring_queue_init(2, &probe, IORING_SETUP_COOP_TASKRUN);
+    if (r == 0) {
+        io_uring_queue_exit(&probe);
+        return IORING_SETUP_COOP_TASKRUN;
+    }
+    LOG_WARN("IORING_SETUP_COOP_TASKRUN unsupported (`), queues run without it", r);
+    return 0;
+}
+
 // The queue thread owns its own photon env and acts as the event-loop master:
 // poll the io_uring ring fd via photon epoll, reap CQEs only when readable
 // (never enter ublksrv_process_io's blocking wait), submit queued SQEs after
@@ -221,17 +230,11 @@ void UblkDevice::queue_loop(const struct ublksrv_dev *dev, photon::semaphore *st
     ctx.pool = &pool;
     ctx.target = target_;
 
-    // IORING_SETUP_COOP_TASKRUN (mainline 5.19+) is a pure optimization, but
-    // ublksrv_queue_init() hardcodes it. Backport kernels shipping ublk_drv on
-    // older baselines (e.g. Alinux 5.10.134) may lack it and fail with EINVAL,
-    // so retry without the flag before giving up.
     const struct ublksrv_queue *q =
-        ublksrv_queue_init_flags(dev, 0, &ctx, IORING_SETUP_COOP_TASKRUN);
+        ublksrv_queue_init_flags(dev, 0, &ctx, ring_flags_);
     if (q == nullptr) {
-        LOG_WARN("queue init with IORING_SETUP_COOP_TASKRUN failed, retrying without it");
-        q = ublksrv_queue_init_flags(dev, 0, &ctx, 0);
-    }
-    if (q == nullptr) {
+        // no blind retry: every failed init runs the library's broken
+        // cleanup path (closes fd 0), see probe_queue_ring_flags()
         LOG_ERROR("ublksrv_queue_init failed (see syslog for libublksrv details)");
         *init_ret = -1;
         queue_exited_.store(true);
@@ -530,27 +533,22 @@ int UblkDevice::setup_cache_root(const UblkDeviceOpts &opts, std::string &cache_
     return -1;
 }
 
-int UblkDevice::run(const UblkDeviceOpts &opts, int ready_fd) {
-    if (ublk_check_control_dev() != 0)
-        return 1;
-    mkdir(OVERLAYBD_UBLK_RUN_DIR, 0755); // pidfile dir for libublksrv
-
+// CLI path only: mandatory cache isolation (ADR-0004) + own ImageService
+int UblkDevice::init_service(const UblkDeviceOpts &opts) {
     std::string cache_root;
     if (setup_cache_root(opts, cache_root) != 0)
-        return 1;
+        return -1;
     std::string patched_config; // temp file, removed after service init
     if (make_patched_service_config(opts, cache_root, patched_config) != 0)
-        return 1;
-    std::string service_config = patched_config;
+        return -1;
 
-    imgservice_ = create_image_service(
-        service_config.empty() ? nullptr : service_config.c_str());
-    if (!patched_config.empty())
-        unlink(patched_config.c_str()); // config parsed, temp copy no longer needed
+    imgservice_ = create_image_service(patched_config.c_str());
+    unlink(patched_config.c_str()); // config parsed, temp copy no longer needed
     if (imgservice_ == nullptr) {
         LOG_ERROR("failed to create image service");
-        return 1;
+        return -1;
     }
+    owns_service_ = true;
     // per-device log: redirect after create_image_service (which applied the
     // shared logPath from the global config); reuse the global size/rotation
     if (!opts.log_path.empty()) {
@@ -564,16 +562,53 @@ int UblkDevice::run(const UblkDeviceOpts &opts, int ready_fd) {
         else
             LOG_INFO("per-device log: `", opts.log_path.c_str());
     }
-    // tag with pid so that daemons sharing one log remain distinguishable
+    return 0;
+}
+
+// start() failed mid-way: remove whatever was created so that neither the
+// kernel nor this object keeps a half-created device (ADR-0006 hard rule)
+void UblkDevice::cleanup_failed_start(bool dev_added) {
+    if (ctrl_dev_ != nullptr) {
+        if (dev_added) {
+            ctrl_del_and_deinit();
+        } else {
+            ublksrv_ctrl_deinit(ctrl_dev_);
+            ctrl_dev_ = nullptr;
+        }
+    }
+    delete target_;
+    target_ = nullptr;
+    delete file_;
+    file_ = nullptr;
+    dev_id_ = -1;
+}
+
+int UblkDevice::start(const UblkDeviceOpts &opts) {
+    if (imgservice_ == nullptr) {
+        LOG_ERROR("no ImageService bound (daemon must inject one)");
+        return -1;
+    }
+    // registration tag: ImageService keys its device table by this string,
+    // so it must be unique. CLI: pid alone (one device per process, matches
+    // the log tag). Daemon: many devices share the pid, append a sequence --
+    // a colliding tag fails the second create_image_file outright
+    // (register_image_file: "dev id exists").
     std::string dev_tag = "ublk-" + std::to_string(getpid());
+    if (!owns_service_) {
+        static std::atomic<int> seq{0};
+        dev_tag += "-" + std::to_string(seq.fetch_add(1));
+    }
     // open the image before anything ublk-related: dev_size is needed by
     // init_tgt, and a broken config must fail the add command, not the device
     file_ = imgservice_->create_image_file(opts.image_config_path.c_str(), dev_tag);
     if (file_ == nullptr) {
         LOG_ERROR("failed to open image `", opts.image_config_path.c_str());
-        return 1;
+        return -1;
     }
     target_ = new ImageFileTarget(file_);
+
+    // probe once, main-thread serialized, before any queue thread exists
+    ring_flags_ = probe_queue_ring_flags();
 
     struct ublksrv_dev_data data;
     memset(&data, 0, sizeof(data));
@@ -589,7 +624,8 @@ int UblkDevice::run(const UblkDeviceOpts &opts, int ready_fd) {
     ctrl_dev_ = ublksrv_ctrl_init(&data);
     if (ctrl_dev_ == nullptr) {
         LOG_ERROR("ublksrv_ctrl_init failed");
-        return 1;
+        cleanup_failed_start(false);
+        return -1;
     }
     // route the owning device into libublksrv callbacks (obd_init_tgt)
     ublksrv_ctrl_set_priv_data(ctrl_dev_, this);
@@ -597,70 +633,100 @@ int UblkDevice::run(const UblkDeviceOpts &opts, int ready_fd) {
     int ret = ublksrv_ctrl_add_dev(ctrl_dev_);
     if (ret < 0) {
         LOG_ERROR("ublksrv_ctrl_add_dev failed: `", ret);
-        ublksrv_ctrl_deinit(ctrl_dev_);
-        ctrl_dev_ = nullptr;
-        return 1;
+        cleanup_failed_start(false);
+        return -1;
     }
-    int dev_id = ublksrv_ctrl_get_dev_info(ctrl_dev_)->dev_id;
+    dev_id_ = ublksrv_ctrl_get_dev_info(ctrl_dev_)->dev_id;
 
     ret = ublksrv_ctrl_get_affinity(ctrl_dev_);
     if (ret < 0)
         LOG_WARN("ublksrv_ctrl_get_affinity failed: `", ret);
 
-    {
-        const struct ublksrv_dev *dev = ublksrv_dev_init(ctrl_dev_);
-        if (dev == nullptr) {
-            LOG_ERROR("ublksrv_dev_init failed");
-            goto fail_del_dev;
-        }
-
-        photon::semaphore queue_started;
-        int queue_init_ret = -1;
-        std::thread queue_thread(&UblkDevice::queue_loop, this, dev, &queue_started,
-                                 &queue_init_ret);
-        queue_started.wait(1);
-        if (queue_init_ret != 0) {
-            queue_thread.join();
-            ublksrv_dev_deinit(dev);
-            goto fail_del_dev;
-        }
-
-        set_dev_parameters();
-
-        ret = ublksrv_ctrl_start_dev(ctrl_dev_, getpid());
-        if (ret < 0) {
-            LOG_ERROR("ublksrv_ctrl_start_dev failed: `", ret);
-            ublksrv_ctrl_stop_dev(ctrl_dev_); // unblock the queue thread
-            while (!queue_exited_.load())
-                photon::thread_usleep(10 * 1000);
-            queue_thread.join();
-            ublksrv_dev_deinit(dev);
-            goto fail_del_dev;
-        }
-
-        LOG_INFO("overlaybd-ublk device /dev/ublkb` ready, image: `", dev_id,
-                 opts.image_config_path.c_str());
-        notify_ready(ready_fd, dev_id);
-
-        // photon-sleep instead of a bare join: sync_signal handlers run as
-        // photon coroutines in this thread and must keep getting scheduled
-        while (!queue_exited_.load())
-            photon::thread_usleep(200 * 1000);
-        queue_thread.join();
-        ublksrv_dev_deinit(dev);
+    dev_ = ublksrv_dev_init(ctrl_dev_);
+    if (dev_ == nullptr) {
+        LOG_ERROR("ublksrv_dev_init failed");
+        cleanup_failed_start(true);
+        return -1;
     }
 
-    ctrl_del_and_deinit();
+    photon::semaphore queue_started;
+    int queue_init_ret = -1;
+    queue_thread_ = std::thread(&UblkDevice::queue_loop, this, dev_, &queue_started,
+                                &queue_init_ret);
+    queue_started.wait(1);
+    if (queue_init_ret != 0) {
+        queue_thread_.join();
+        ublksrv_dev_deinit(dev_);
+        dev_ = nullptr;
+        cleanup_failed_start(true);
+        return -1;
+    }
 
+    set_dev_parameters();
+
+    ret = ublksrv_ctrl_start_dev(ctrl_dev_, getpid());
+    if (ret < 0) {
+        LOG_ERROR("ublksrv_ctrl_start_dev failed: `", ret);
+        ublksrv_ctrl_stop_dev(ctrl_dev_); // unblock the queue thread
+        while (!queue_exited_.load())
+            photon::thread_usleep(10 * 1000);
+        queue_thread_.join();
+        ublksrv_dev_deinit(dev_);
+        dev_ = nullptr;
+        cleanup_failed_start(true);
+        return -1;
+    }
+
+    LOG_INFO("overlaybd-ublk device /dev/ublkb` ready, image: `", dev_id_,
+             opts.image_config_path.c_str());
+    return 0;
+}
+
+void UblkDevice::wait() {
+    if (!queue_thread_.joinable())
+        return;
+    // photon-sleep instead of a bare join: photon coroutines of this thread
+    // (signal handlers, daemon control requests) must keep getting scheduled
+    while (!queue_exited_.load())
+        photon::thread_usleep(200 * 1000);
+    queue_thread_.join();
+    if (dev_ != nullptr) {
+        ublksrv_dev_deinit(dev_);
+        dev_ = nullptr;
+    }
+}
+
+void UblkDevice::teardown() {
+    if (torn_down_)
+        return;
+    torn_down_ = true;
+    if (ctrl_dev_ != nullptr)
+        ctrl_del_and_deinit();
     delete target_;
+    target_ = nullptr;
     delete file_;
-    delete imgservice_;
+    file_ = nullptr;
+    if (owns_service_)
+        delete imgservice_;
+    imgservice_ = nullptr;
+}
+
+int UblkDevice::run(const UblkDeviceOpts &opts, int ready_fd) {
+    if (ublk_check_control_dev() != 0)
+        return 1;
+    mkdir(OVERLAYBD_UBLK_RUN_DIR, 0755); // pidfile dir for libublksrv
+
+    if (init_service(opts) != 0)
+        return 1;
+    if (start(opts) != 0) {
+        teardown();
+        return 1;
+    }
+    notify_ready(ready_fd, dev_id_);
+    wait();
+    teardown();
     LOG_INFO("overlaybd-ublk exited");
     return 0;
-
-fail_del_dev:
-    ctrl_del_and_deinit();
-    return 1;
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ add_library(ublk_frontend_lib
     ublk_device.cpp
     cli.cpp
     config_patch.cpp
+    ublkd_protocol.cpp
 )
 target_include_directories(ublk_frontend_lib PUBLIC
     ${PHOTON_INCLUDE_DIR}
@@ -30,6 +31,20 @@ target_link_libraries(overlaybd-ublk
 )
 
 install(TARGETS overlaybd-ublk DESTINATION /opt/overlaybd/bin)
+
+# overlaybd-ublkd: daemon mode, all devices in one process (ADR-0006)
+add_executable(overlaybd-ublkd ublkd_main.cpp)
+target_link_libraries(overlaybd-ublkd
+    ublk_frontend_lib
+    photon_static
+    overlaybd_image_lib
+    libublksrv_static
+    ${CURL_LIBRARIES}
+    ${OPENSSL_SSL_LIBRARY}
+    ${OPENSSL_CRYPTO_LIBRARY}
+    ${AIO_LIBRARIES}
+)
+install(TARGETS overlaybd-ublkd DESTINATION /opt/overlaybd/bin)
 
 if (BUILD_TESTING)
     add_subdirectory(test)

@@ -15,7 +15,9 @@
 */
 #pragma once
 
+#include <atomic>
 #include <string>
+#include <thread>
 
 // pidfiles (<dev_id>.pid, created by libublksrv) live here; `del` and `list`
 // discover overlaybd-ublk daemons through this directory only.
@@ -53,3 +55,73 @@ int ublk_check_control_dev();
 // is closed afterwards unless it is stdout/stderr. Returns the process
 // exit code.
 int run_ublk_device(const UblkDeviceOpts &opts, int ready_fd);
+
+class ImageService;
+class ImageFile;
+class ImageFileTarget;
+struct ublksrv_ctrl_dev;
+struct ublksrv_dev;
+namespace photon {
+class semaphore;
+}
+
+// One ublk device: image open, ctrl dev lifecycle, queue event-loop thread.
+// Two construction paths (ADR-0006):
+//  - CLI (default ctor + run()): owns its ImageService, with the mandatory
+//    per-image cache isolation of ADR-0004 (image key + instance slots);
+//  - daemon (inject a shared ImageService + start/wait/stop): cache patching
+//    and instance slots are skipped -- all devices of the daemon share one
+//    cache directory, whose concurrency is covered by in-process locks.
+class UblkDevice {
+public:
+    UblkDevice() = default;
+    explicit UblkDevice(ImageService *shared_service)
+        : imgservice_(shared_service), owns_service_(false) {
+    }
+    ~UblkDevice();
+
+    UblkDevice(const UblkDevice &) = delete;
+    UblkDevice &operator=(const UblkDevice &) = delete;
+
+    // CLI blocking path: init_service + start + readiness + wait + teardown.
+    int run(const UblkDeviceOpts &opts, int ready_fd);
+
+    // Daemon path. start() brings the device up (0 = ready, dev_id() valid);
+    // a partial device is cleaned up internally on failure (no leftovers in
+    // the kernel). wait() blocks until the queue exits and releases the
+    // queue/dev resources; teardown() deletes the ublk device and the image.
+    int start(const UblkDeviceOpts &opts);
+    void wait();
+    void stop(); // request stop; safe from a photon signal coroutine
+    void teardown();
+
+    int dev_id() const {
+        return dev_id_;
+    }
+    bool writable() const;
+    uint64_t image_size() const; // needed by the init_tgt callback
+
+private:
+    int init_service(const UblkDeviceOpts &opts); // CLI path only
+    void cleanup_failed_start(bool dev_added);    // no half-created device stays
+    int setup_cache_root(const UblkDeviceOpts &opts, std::string &cache_root);
+    int claim_instance(const std::string &image_root, const std::string &inst,
+                       std::string &cache_root);
+    void set_dev_parameters();
+    void ctrl_del_and_deinit();
+    void queue_loop(const struct ublksrv_dev *dev, photon::semaphore *started,
+                    int *init_ret);
+
+    ImageService *imgservice_ = nullptr;
+    ImageFile *file_ = nullptr;
+    ImageFileTarget *target_ = nullptr;
+    struct ublksrv_ctrl_dev *ctrl_dev_ = nullptr;
+    const struct ublksrv_dev *dev_ = nullptr;
+    std::thread queue_thread_;
+    std::atomic<bool> queue_exited_{false};
+    unsigned ring_flags_ = 0; // queue io_uring flags, probed in start()
+    int cache_lock_fd_ = -1; // held for the device's lifetime
+    int dev_id_ = -1;
+    bool owns_service_ = true;
+    bool torn_down_ = false;
+};

@@ -296,3 +296,65 @@ TEST(config_patch, detects_writable_upper) {
     EXPECT_FALSE(ublk_config_has_upper("not json"));
 }
 
+// ---------------------------------------------------------------------------
+// ublkd control protocol codec (ADR-0006): pure JSON, no daemon needed
+// ---------------------------------------------------------------------------
+#include "../ublkd_protocol.h"
+
+TEST(ublkd_protocol, parse_add_full_and_defaults) {
+    UblkdAddRequest req;
+    std::string err;
+    ASSERT_EQ(ublkd_parse_add(
+                  R"({"config":"/tmp/c.json","dev_id":3,"queue_depth":64,)"
+                  R"("instance_id":"snap-1","future_field":true})",
+                  req, err),
+              0); // unknown fields ignored: forward compatibility
+    EXPECT_EQ(req.config, "/tmp/c.json");
+    EXPECT_EQ(req.dev_id, 3);
+    EXPECT_EQ(req.queue_depth, 64);
+    EXPECT_EQ(req.instance_id, "snap-1");
+
+    UblkdAddRequest defaults;
+    ASSERT_EQ(ublkd_parse_add(R"({"config":"/tmp/c.json"})", defaults, err), 0);
+    EXPECT_EQ(defaults.dev_id, -1);       // kernel allocates
+    EXPECT_EQ(defaults.queue_depth, 128); // CLI default kept
+}
+
+TEST(ublkd_protocol, parse_add_rejects_malformed) {
+    UblkdAddRequest req;
+    std::string err;
+    EXPECT_EQ(ublkd_parse_add("not json", req, err), -1);
+    EXPECT_EQ(ublkd_parse_add(R"({"dev_id":1})", req, err), -1); // no config
+    EXPECT_EQ(ublkd_parse_add(R"({"config":""})", req, err), -1);
+    EXPECT_EQ(ublkd_parse_add(R"({"config":"/c","queue_depth":0})", req, err), -1);
+    EXPECT_EQ(ublkd_parse_add(R"({"config":"/c","dev_id":"x"})", req, err), -1);
+    EXPECT_FALSE(err.empty());
+}
+
+TEST(ublkd_protocol, parse_del) {
+    int id = -1;
+    std::string err;
+    ASSERT_EQ(ublkd_parse_del(R"({"dev_id":7})", id, err), 0);
+    EXPECT_EQ(id, 7);
+    EXPECT_EQ(ublkd_parse_del(R"({"dev_id":-1})", id, err), -1);
+    EXPECT_EQ(ublkd_parse_del(R"({})", id, err), -1);
+}
+
+TEST(ublkd_protocol, responses_roundtrip) {
+    EXPECT_EQ(ublkd_msg_ok(), R"({"ok":true})");
+    EXPECT_NE(ublkd_msg_error("boom").find(R"("ok":false)"), std::string::npos);
+    auto added = ublkd_msg_added(2, "/dev/ublkb2");
+    EXPECT_NE(added.find(R"("dev_id":2)"), std::string::npos);
+    EXPECT_NE(added.find("/dev/ublkb2"), std::string::npos);
+
+    std::vector<UblkdDeviceInfo> devs(1);
+    devs[0].dev_id = 0;
+    devs[0].dev_path = "/dev/ublkb0";
+    devs[0].config = "/tmp/c.json";
+    devs[0].writable = true;
+    devs[0].state = "running";
+    auto list = ublkd_msg_list(devs);
+    EXPECT_NE(list.find(R"("writable":true)"), std::string::npos);
+    EXPECT_NE(list.find(R"("state":"running")"), std::string::npos);
+}
+
