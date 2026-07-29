@@ -56,7 +56,7 @@ int ublk_check_control_dev();
 // exit code.
 int run_ublk_device(const UblkDeviceOpts &opts, int ready_fd);
 
-// Daemon-side cache setup (ADR-0006 M2-1). All devices of a daemon share
+// Daemon-side cache setup. All devices of a daemon share
 // one cache tree <base>/daemon/{registry_cache,gzip_cache}: creates it,
 // takes an exclusive flock on <base>/daemon/.lock (a second daemon on the
 // same base is refused), and writes a service config copy patched to that
@@ -68,7 +68,7 @@ int ublk_daemon_setup_cache(const std::string &cache_base,
                             const std::string &service_config_path,
                             std::string &patched_config, int &lock_fd);
 
-// Kernel-view device access for del/list (A2, ADR-0006 "del 外部化"):
+// Kernel-view device access for del/list:
 // STOP/DEL are per-dev_id control commands that any root process may send
 // through /dev/ublk-control -- no owner process needed. Ops therefore work
 // on orphans (owner killed -9) and never rely on pidfiles. Commands are
@@ -87,6 +87,11 @@ int ublk_kernel_del_dev(int dev_id);
 class ImageService;
 class ImageFile;
 class ImageFileTarget;
+
+// Build the dispatch target wrapping an ImageFile: the adapter type
+// lives in ublk_device.cpp, so hot-swap callers need this factory. Caller
+// owns the result and hands it to UblkDevice::swap_image().
+ImageFileTarget *ublk_make_image_target(ImageFile *file);
 struct ublksrv_ctrl_dev;
 struct ublksrv_dev;
 namespace photon {
@@ -94,9 +99,9 @@ class semaphore;
 }
 
 // One ublk device: image open, ctrl dev lifecycle, queue event-loop thread.
-// Two construction paths (ADR-0006):
+// Two construction paths:
 //  - CLI (default ctor + run()): owns its ImageService, with the mandatory
-//    per-image cache isolation of ADR-0004 (image key + instance slots);
+//    per-image cache isolation (image key + instance slots);
 //  - daemon (inject a shared ImageService + start/wait/stop): cache patching
 //    and instance slots are skipped -- all devices of the daemon share one
 //    cache directory, whose concurrency is covered by in-process locks.
@@ -123,12 +128,30 @@ public:
     void stop(); // request stop; safe from a photon signal coroutine
     void teardown();
 
-    // Online grow (M2-3): image layer (ImageFile::resize, optionally ext4)
+    // Online grow: image layer (ImageFile::resize, optionally ext4)
     // + kernel layer (UBLK_U_CMD_UPDATE_SIZE). Writable images only; the
     // kernel must support UBLK_F_UPDATE_SIZE (mainline >= 6.11).
     // Returns 0 = ok; -1 = internal error; -2 = kernel lacks the feature;
     // -3 = invalid request (read-only device / shrink). err says why.
     int resize(uint64_t new_size_bytes, bool resize_fs, std::string &err);
+
+    // Hot-swap the backing image (warm pool). The queue thread is the
+    // only reader of the dispatch target and runs on a single photon vcpu,
+    // so the swap is performed by the queue thread itself at a moment when
+    // inflight == 0 -- no atomics, no reader/writer race. Callers (the
+    // daemon's control coroutine) block until the queue thread acknowledges,
+    // with a bounded wait. The device keeps its ublk identity (dev_id,
+    // block size, RO/RW attrs, capacity), so only images matching the
+    // pool key may be swapped in. Takes ownership of both objects and
+    // returns the previous ImageFile/target through the out params for the
+    // caller to release. Returns 0, or -1 on timeout/teardown.
+    int swap_image(ImageFile *new_file, ImageFileTarget *new_target,
+                   ImageFile **old_file, ImageFileTarget **old_target);
+
+    // Pool key components: what the kernel fixed at creation time and thus
+    // constrains which images may be swapped in.
+    uint64_t dev_sectors() const;
+    uint32_t block_size() const;
 
     int dev_id() const {
         return dev_id_;
@@ -151,6 +174,16 @@ private:
     ImageService *imgservice_ = nullptr;
     ImageFile *file_ = nullptr;
     ImageFileTarget *target_ = nullptr;
+    // hot-swap handshake with the queue thread; owned by the caller
+    // of swap_image, published to the queue thread through swap_pending_
+    struct SwapRequest;
+    std::atomic<SwapRequest *> swap_pending_{nullptr};
+    // Wakes the queue loop when a swap is posted: the loop otherwise sleeps up
+    // to a second on the ring fd, which would make a hot swap slower than
+    // creating a device from scratch. Cross-thread signalling goes through the
+    // eventfd only; the interrupt itself happens inside the queue thread's own
+    // vcpu (this photon build has no cross-vcpu safe_thread_interrupt).
+    int swap_efd_ = -1;
     struct ublksrv_ctrl_dev *ctrl_dev_ = nullptr;
     const struct ublksrv_dev *dev_ = nullptr;
     std::thread queue_thread_;

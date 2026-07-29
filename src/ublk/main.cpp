@@ -47,7 +47,7 @@ static bool pid_is_ublkd(pid_t pid) {
     return strcmp(comm, "overlaybd-ublkd") == 0;
 }
 
-// del (A2, "del 外部化"): drive the kernel directly instead of signaling the
+// del: drive the kernel directly instead of signaling the
 // owner. STOP/DEL go through /dev/ublk-control by dev_id, so orphans (owner
 // killed -9) are deletable and no pidfile is needed. A live CLI owner is
 // stopped externally: its queue dies, it drains and exits WITHOUT deleting
@@ -170,7 +170,7 @@ static int cmd_del(int dev_id, bool force) {
     return 0;
 }
 
-// list (A2): the KERNEL is the source of truth -- scan /sys/block for
+// list: the KERNEL is the source of truth -- scan /sys/block for
 // ublkbN, ask GET_DEV_INFO for the owner, and grade each device:
 // running / [ublkd-managed] / ORPHAN (kernel device without a live owner).
 // Stale pidfiles without a kernel device are reported for cleanup.

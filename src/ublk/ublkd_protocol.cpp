@@ -211,3 +211,19 @@ std::string ublkd_msg_ping(const std::string &version) {
     doc.AddMember("version", rapidjson::Value(version.c_str(), a), a);
     return dump(doc);
 }
+
+std::string ublkd_msg_pool(int low, int high, int idle, uint64_t size_gb,
+                           uint64_t hits, uint64_t misses) {
+    rapidjson::Document doc;
+    doc.SetObject();
+    auto &a = doc.GetAllocator();
+    doc.AddMember("ok", true, a);
+    doc.AddMember("enabled", low > 0, a);
+    doc.AddMember("low", low, a);
+    doc.AddMember("high", high, a);
+    doc.AddMember("idle", idle, a);
+    doc.AddMember("size_gb", size_gb, a);
+    doc.AddMember("hits", hits, a);
+    doc.AddMember("misses", misses, a);
+    return dump(doc);
+}

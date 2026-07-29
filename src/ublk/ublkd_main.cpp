@@ -14,15 +14,18 @@
    limitations under the License.
 */
 
-// overlaybd-ublkd: the centralized ublk device manager daemon (ADR-0006 M1).
+// overlaybd-ublkd: the centralized ublk device manager daemon.
 // All devices live in this process (one queue thread each) and share one
 // ImageService; control plane is HTTP over a unix domain socket
-// (docker.sock style), M1 handles requests globally serialized.
+// (docker.sock style), requests are handled globally serialized.
 
 #include "ublk_device.h"
 #include "ublkd_protocol.h"
+#include "pool_placeholder.h"
+#include "blkdev_hygiene.h"
 
 #include "../image_service.h"
+#include "../image_file.h"
 #include "../version.h"
 
 #include <photon/common/alog.h>
@@ -49,8 +52,33 @@
 
 class UblkdServer : public photon::net::http::HTTPHandler {
 public:
+    struct DevEntry {
+        std::unique_ptr<UblkDevice> dev;
+        std::string config;
+        bool stopping = false;
+        bool mode_shared = false; // acquired shared (refcounted) vs add/exclusive
+        int refcount = 1;         // meaningful when mode_shared
+        bool pooled = false;      // came from the warm pool, can be recycled
+        int pool_slot = -1;       // which placeholder image to swap back in
+    };
+
     UblkdServer(ImageService *service, std::string cache_base)
         : service_(service), cache_base_(std::move(cache_base)) {
+    }
+
+    // warm pool: off unless low > 0. Pooled devices are pre-created on
+    // daemon-owned placeholder images and handed out by hot-swapping the real
+    // image in, saving the ~8ms device-shell creation. Only writable images
+    // are pooled for now: the attrs set at creation time (block size, RO/RW)
+    // cannot change afterwards.
+    void configure_pool(int low, int high, uint64_t size_gb) {
+        pool_low_ = low;
+        pool_high_ = high > low ? high : low;
+        pool_size_gb_ = size_gb;
+    }
+
+    void prewarm_pool() {
+        refill_pool();
     }
 
     ~UblkdServer() {
@@ -59,10 +87,18 @@ public:
         // (the bounded-DEL fallback costs 2s per device on backport kernels)
         for (auto &kv : devices_)
             kv.second.dev->stop();
+        for (auto &p : pool_idle_)
+            p.dev->stop();
         for (auto &kv : devices_) {
             kv.second.dev->wait();
             kv.second.dev->teardown();
         }
+        for (auto &p : pool_idle_) {
+            p.dev->wait();
+            p.dev->teardown();
+            delete p.dev;
+        }
+        pool_idle_.clear();
         devices_.clear();
     }
 
@@ -87,6 +123,10 @@ public:
             handle_resize(body, code, msg);
         } else if (target == "/v1/list") {
             handle_list(code, msg);
+        } else if (target == "/v1/pool") {
+            code = 200;
+            msg = ublkd_msg_pool(pool_low_, pool_high_, (int)pool_idle_.size(),
+                                 pool_size_gb_, pool_hits_, pool_misses_);
         } else if (target == "/v1/ping") {
             code = 200;
             msg = ublkd_msg_ping(OVERLAYBD_VERSION);
@@ -128,9 +168,9 @@ private:
             msg = ublkd_msg_error(err);
             return;
         }
-        // Per-image in-flight guard (M2-2). Note: since M2-1 the same-image
-        // RW race is already closed by the inst0 flock (LOCK_EX excludes
-        // between fds of one process too); this guard is UX -- reject the
+        // Per-image in-flight guard. Note: the same-image RW race is already
+        // closed by the inst0 flock (LOCK_EX excludes between fds of one
+        // process too); this guard is UX -- reject the
         // duplicate immediately instead of failing it after seconds of work.
         char resolved[PATH_MAX];
         if (realpath(areq.config.c_str(), resolved) == nullptr) {
@@ -151,7 +191,7 @@ private:
         opts.dev_id = areq.dev_id;
         opts.queue_depth = areq.queue_depth;
         // cache tree is shared daemon-wide; cache_dir here only tells the
-        // device where the cross-process RW image locks live (M2-1)
+        // device where the cross-process RW image locks live
         opts.cache_dir = cache_base_;
         int ret = dev->start(opts);
         adds_in_flight_.erase(resolved);
@@ -185,7 +225,7 @@ private:
         }
         // del is for exclusive (add-created) devices; shared devices are
         // reference-counted and must go through release, or a caller would
-        // rip a device out from under other holders (M3-A)
+        // rip a device out from under other holders
         if (it->second.mode_shared) {
             code = 409;
             msg = ublkd_msg_error("device " + std::to_string(id) +
@@ -194,7 +234,7 @@ private:
                                   "); use /v1/release");
             return;
         }
-        // Deletion state machine (M2-2): del is synchronous and yields while
+        // Deletion state machine: del is synchronous and yields while
         // draining, so a concurrent del of the same id would otherwise race
         // on the map iterator (erase invalidates the other handler's it).
         if (it->second.stopping) {
@@ -260,9 +300,9 @@ private:
         msg = ublkd_msg_list(infos);
     }
 
-    // acquire (M3-A): lease semantics. shared -> reuse one device per image
-    // (refcounted); exclusive -> a fresh device (equivalent to add today,
-    // a hook for the M3-B warm pool). Only read-only images may be shared.
+    // acquire: lease semantics. shared -> reuse one device per image
+    // (refcounted); exclusive -> a fresh device (equivalent to add unless the
+    // warm pool is enabled). Only read-only images may be shared.
     void handle_acquire(const std::string &body, int &code, std::string &msg) {
         UblkdAcquireRequest areq;
         std::string err;
@@ -311,17 +351,46 @@ private:
             return;
         }
         adds_in_flight_.insert(resolved);
-        auto dev = std::make_unique<UblkDevice>(service_);
-        UblkDeviceOpts opts;
-        opts.image_config_path = areq.config;
-        opts.cache_dir = cache_base_;
-        int ret = dev->start(opts);
-        adds_in_flight_.erase(resolved);
-        if (ret != 0) {
-            code = 500;
-            msg = ublkd_msg_error("device failed to start (see daemon log)");
-            return;
+
+        // warm pool fast path: exclusive leases may come from the pool
+        std::unique_ptr<UblkDevice> dev;
+        bool from_pool = false;
+        int pool_slot = -1;
+        if (!shared && pool_low_ > 0 && !pool_idle_.empty()) {
+            ImageFile *real = service_->create_image_file(areq.config.c_str(),
+                                                         next_dev_tag());
+            if (real == nullptr) {
+                adds_in_flight_.erase(resolved);
+                code = 500;
+                msg = ublkd_msg_error("cannot open image (see daemon log)");
+                return;
+            }
+            UblkDevice *pooled = take_pooled(real, &pool_slot);
+            if (pooled != nullptr) {
+                dev.reset(pooled);
+                from_pool = true;
+                pool_hits_++;
+            } else {
+                delete real; // no pooled device matched; fall back to a new one
+                pool_misses_++;
+            }
+        } else if (!shared && pool_low_ > 0) {
+            pool_misses_++;
         }
+
+        if (!from_pool) {
+            dev = std::make_unique<UblkDevice>(service_);
+            UblkDeviceOpts opts;
+            opts.image_config_path = areq.config;
+            opts.cache_dir = cache_base_;
+            if (dev->start(opts) != 0) {
+                adds_in_flight_.erase(resolved);
+                code = 500;
+                msg = ublkd_msg_error("device failed to start (see daemon log)");
+                return;
+            }
+        }
+        adds_in_flight_.erase(resolved);
         // shared mode requires a read-only image (concurrent RW would corrupt
         // the upper); reject after start so writable() is known, then tear down
         if (shared && dev->writable()) {
@@ -339,13 +408,17 @@ private:
         entry.config = areq.config;
         entry.mode_shared = shared;
         entry.refcount = 1;
+        entry.pooled = from_pool;
+        entry.pool_slot = pool_slot;
         if (shared)
             shared_[resolved] = id;
         code = 200;
         msg = ublkd_msg_acquired(id, "/dev/ublkb" + std::to_string(id),
                                  shared ? "shared" : "exclusive", 1);
-        LOG_INFO("ublkd: acquired /dev/ublkb` mode ` image `", id,
-                 areq.mode.c_str(), areq.config.c_str());
+        LOG_INFO("ublkd: acquired /dev/ublkb` mode ` pooled ` image `", id,
+                 areq.mode.c_str(), from_pool ? 1 : 0, areq.config.c_str());
+        if (pool_low_ > 0)
+            refill_pool();
     }
 
     void handle_release(const std::string &body, int &code, std::string &msg) {
@@ -374,11 +447,19 @@ private:
             LOG_INFO("ublkd: release dev ` refcount `", id, it->second.refcount);
             return;
         }
-        // last reference (or an exclusive lease): tear the device down
+        // last reference (or an exclusive lease): back to the pool if it came
+        // from there and can be recycled safely, otherwise tear it down
         if (it->second.mode_shared) {
             char resolved[PATH_MAX];
             if (realpath(it->second.config.c_str(), resolved) != nullptr)
                 shared_.erase(resolved);
+        }
+        if (it->second.pooled && return_to_pool(id, it->second)) {
+            devices_.erase(id);
+            code = 200;
+            msg = ublkd_msg_released(0);
+            LOG_INFO("ublkd: released /dev/ublkb` back to the pool", id);
+            return;
         }
         it->second.stopping = true;
         it->second.dev->stop();
@@ -390,20 +471,150 @@ private:
         LOG_INFO("ublkd: released and removed /dev/ublkb`", id);
     }
 
+    // ---- warm pool internals ------------------------------------------------
+
+    std::string next_dev_tag() {
+        return "ublk-" + std::to_string(getpid()) + "-p" + std::to_string(tag_seq_++);
+    }
+
+    // Take an idle pooled device whose fixed attributes match the image and
+    // hot-swap the image in. Returns nullptr when nothing matches (caller
+    // falls back to creating a device). Ownership of `real` transfers on
+    // success; on failure the caller releases it.
+    UblkDevice *take_pooled(ImageFile *real, int *slot_out) {
+        for (auto it = pool_idle_.begin(); it != pool_idle_.end(); ++it) {
+            UblkDevice *cand = it->dev;
+            // fixed-at-creation attributes must match (see the pool key)
+            if (cand->block_size() != real->block_size)
+                continue;
+            if (cand->dev_sectors() !=
+                (real->num_lbas * (uint64_t)real->block_size) >> 9)
+                continue;
+            if (!cand->writable()) // first version pools writable devices only
+                continue;
+            ImageFile *old_file = nullptr;
+            ImageFileTarget *old_target = nullptr;
+            auto *new_target = ublk_make_image_target(real);
+            if (cand->swap_image(real, new_target, &old_file, &old_target) != 0) {
+                delete new_target;
+                // a device we cannot swap is not trustworthy: drop it
+                int slot = it->slot;
+                pool_idle_.erase(it);
+                cand->stop();
+                cand->wait();
+                cand->teardown();
+                delete cand;
+                free_slots_.push_back(slot);
+                return nullptr;
+            }
+            *slot_out = it->slot;
+            pool_idle_.erase(it);
+            delete old_target;
+            delete old_file; // placeholder image released
+            return cand;
+        }
+        return nullptr;
+    }
+
+    // Recycle a device: invalidate the block device's page cache, swap the
+    // placeholder image back in, and park it. Any doubt -> return false and
+    // let the caller tear the device down (safety over reuse).
+    bool return_to_pool(int dev_id, DevEntry &entry) {
+        if ((int)pool_idle_.size() >= pool_high_)
+            return false;
+        if (ublk_device_is_mounted(dev_id)) {
+            LOG_WARN("dev ` still mounted, not recycling it", dev_id);
+            return false;
+        }
+        if (ublk_device_flush_buffers(dev_id) != 0)
+            return false; // stale pages could leak to the next tenant
+        std::string ph_config;
+        if (ublk_pool_placeholder(placeholder_dir(), pool_size_gb_, entry.pool_slot,
+                                  ph_config) != 0)
+            return false;
+        ImageFile *ph = service_->create_image_file(ph_config.c_str(), next_dev_tag());
+        if (ph == nullptr)
+            return false;
+        ImageFile *old_file = nullptr;
+        ImageFileTarget *old_target = nullptr;
+        auto *ph_target = ublk_make_image_target(ph);
+        UblkDevice *dev = entry.dev.release();
+        if (dev->swap_image(ph, ph_target, &old_file, &old_target) != 0) {
+            delete ph_target;
+            delete ph;
+            entry.dev.reset(dev); // give it back so the caller tears it down
+            return false;
+        }
+        delete old_target;
+        delete old_file; // the tenant's image
+        pool_idle_.push_back({dev, entry.pool_slot});
+        return true;
+    }
+
+    std::string placeholder_dir() const {
+        std::string base =
+            (cache_base_.empty() ? "/opt/overlaybd/ublk_cache" : cache_base_) +
+            "/daemon/placeholders";
+        mkdir(base.c_str(), 0755);
+        return base;
+    }
+
+    // Bring the idle pool up to the low watermark. Synchronous and
+    // best-effort: creating a device is ~8ms, and this runs after a request
+    // has already been answered.
+    void refill_pool() {
+        while ((int)pool_idle_.size() < pool_low_) {
+            // each pooled device needs its own placeholder files
+            int slot;
+            if (!free_slots_.empty()) {
+                slot = free_slots_.back();
+                free_slots_.pop_back();
+            } else {
+                slot = next_slot_++;
+            }
+            std::string ph_config;
+            if (ublk_pool_placeholder(placeholder_dir(), pool_size_gb_, slot,
+                                      ph_config) != 0) {
+                free_slots_.push_back(slot);
+                return;
+            }
+            auto *dev = new UblkDevice(service_);
+            UblkDeviceOpts opts;
+            opts.image_config_path = ph_config;
+            opts.cache_dir = cache_base_;
+            if (dev->start(opts) != 0) {
+                delete dev;
+                free_slots_.push_back(slot);
+                LOG_WARN("pool refill: device start failed, pool stays at `",
+                         (int)pool_idle_.size());
+                return;
+            }
+            LOG_INFO("pool refill: /dev/ublkb` parked (slot `, idle `)",
+                     dev->dev_id(), slot, (int)pool_idle_.size() + 1);
+            pool_idle_.push_back({dev, slot});
+        }
+    }
+
     ImageService *service_;
     std::string cache_base_;
-    struct DevEntry {
-        std::unique_ptr<UblkDevice> dev;
-        std::string config;
-        bool stopping = false;
-        bool mode_shared = false; // acquired shared (refcounted) vs add/exclusive
-        int refcount = 1;         // meaningful when mode_shared
-    };
     std::map<int, DevEntry> devices_;
-    // realpath(image config) -> dev_id of its shared device (M3-A)
+    // realpath(image config) -> dev_id of its shared device
     std::map<std::string, int> shared_;
     // realpath'd image configs with an add in progress (UX guard, see above)
     std::set<std::string> adds_in_flight_;
+    // warm pool: idle devices parked on placeholder images
+    struct PooledDev {
+        UblkDevice *dev;
+        int slot; // its own placeholder file set
+    };
+    std::vector<PooledDev> pool_idle_;
+    std::vector<int> free_slots_; // slots of devices that went away
+    int next_slot_ = 0;
+    int pool_low_ = 0; // 0 = pooling disabled
+    int pool_high_ = 0;
+    uint64_t pool_size_gb_ = 0;
+    uint64_t pool_hits_ = 0, pool_misses_ = 0;
+    uint64_t tag_seq_ = 0;
 };
 
 // entry-layer signal routing (same pattern & rationale as cli g_signal_device)
@@ -430,7 +641,24 @@ int main(int argc, char **argv) {
                    "cache base directory (default /opt/overlaybd/ublk_cache); "
                    "the daemon uses <base>/daemon/ for all devices and ignores "
                    "the service config's cacheDir");
+    int pool_low = 0, pool_high = 0;
+    uint64_t pool_size_gb = 0;
+    app.add_option("--pool-low", pool_low,
+                   "warm pool: keep at least N idle devices ready (0 = pooling "
+                   "disabled, the default); exclusive acquires are then served "
+                   "by hot-swapping the image into a pre-created device");
+    app.add_option("--pool-high", pool_high,
+                   "warm pool: never park more than N idle devices (default = low)");
+    app.add_option("--pool-size-gb", pool_size_gb,
+                   "warm pool: virtual size of pooled devices in GB; only images "
+                   "of exactly this size (and matching block size, writable) can "
+                   "be served from the pool");
     CLI11_PARSE(app, argc, argv);
+
+    if (pool_low > 0 && pool_size_gb == 0) {
+        fprintf(stderr, "overlaybd-ublkd: --pool-low requires --pool-size-gb\n");
+        return 1;
+    }
 
     if (ublk_check_control_dev() != 0)
         return 1;
@@ -446,7 +674,7 @@ int main(int argc, char **argv) {
         close(devnull);
     }
 
-    // shared cache tree + daemon flock + patched service config (M2-1);
+    // shared cache tree + daemon flock + patched service config;
     // plain fs/flock work, safe before photon::init
     std::string patched_config;
     int cache_lock_fd = -1; // held until exit; kernel releases on any death
@@ -473,6 +701,12 @@ int main(int argc, char **argv) {
 
     auto *server = new UblkdServer(service, cache_dir);
     g_shutdown_flag = &server->shutdown_requested;
+    if (pool_low > 0) {
+        server->configure_pool(pool_low, pool_high, pool_size_gb);
+        server->prewarm_pool();
+        LOG_INFO("warm pool enabled: low ` high ` size ` GB", pool_low,
+                 pool_high > pool_low ? pool_high : pool_low, pool_size_gb);
+    }
 
     auto *sock = photon::net::new_uds_server(true /* autoremove */);
     if (sock->bind(socket_path.c_str()) != 0 || sock->listen() != 0) {

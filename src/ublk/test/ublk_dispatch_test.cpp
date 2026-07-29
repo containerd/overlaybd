@@ -302,7 +302,7 @@ TEST(config_patch, detects_writable_upper) {
 }
 
 // ---------------------------------------------------------------------------
-// ublkd control protocol codec (ADR-0006): pure JSON, no daemon needed
+// ublkd control protocol codec: pure JSON, no daemon needed
 // ---------------------------------------------------------------------------
 #include "../ublkd_protocol.h"
 

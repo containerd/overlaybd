@@ -19,14 +19,14 @@
 #include <vector>
 
 // Request/response codec of the overlaybd-ublkd control protocol
-// (HTTP over UDS, /v1/* endpoints -- ADR-0006). Pure JSON logic on
+// (HTTP over UDS, /v1/* endpoints). Pure JSON logic on
 // rapidjson, deliberately free of photon/ublksrv so it unit-tests like
 // cli.cpp/config_patch.cpp. Unknown JSON fields are ignored (forward
 // compatibility).
 
 struct UblkdAddRequest {
     std::string config;      // image config path, required
-    std::string instance_id; // reserved (unused until M2 cache work)
+    std::string instance_id; // reserved (unused)
     int dev_id = -1;         // -1: kernel allocates
     int queue_depth = 128;
 };
@@ -78,3 +78,6 @@ std::string ublkd_msg_acquired(int dev_id, const std::string &path,
 std::string ublkd_msg_released(int refcount);
 std::string ublkd_msg_list(const std::vector<UblkdDeviceInfo> &devices);
 std::string ublkd_msg_ping(const std::string &version);
+// GET /v1/pool: warm pool state; low == 0 means pooling is disabled
+std::string ublkd_msg_pool(int low, int high, int idle, uint64_t size_gb,
+                           uint64_t hits, uint64_t misses);

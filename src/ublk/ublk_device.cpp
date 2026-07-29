@@ -41,6 +41,7 @@
 
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/eventfd.h>
 #include <fcntl.h>
 #include <climits>
 #include <unistd.h>
@@ -107,6 +108,10 @@ private:
 // one instance == one device, N instances per process is the daemon mode)
 // ---------------------------------------------------------------------------
 
+ImageFileTarget *ublk_make_image_target(ImageFile *file) {
+    return new ImageFileTarget(file);
+}
+
 void UblkDevice::stop() {
     stop_requested_ = true; // lifecycle stays ours: teardown may self-DEL
     if (ctrl_dev_ != nullptr)
@@ -129,6 +134,8 @@ UblkDevice::~UblkDevice() {
     teardown();
     if (cache_lock_fd_ >= 0)
         close(cache_lock_fd_);
+    if (swap_efd_ >= 0)
+        close(swap_efd_);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +228,17 @@ static unsigned probe_queue_ring_flags() {
 // Runtime-verified on a 5.10 kernel with ublk backported (startup sequence,
 // idle wakeup, full-queue fio pressure); a regression pass on mainline 6.x
 // kernels is still pending.
+// Hot-swap handshake: the control coroutine fills a request and waits;
+// the queue thread applies it at inflight == 0. Only the queue thread writes
+// ctx.target, and it is the only reader too, so the exchange needs no atomics
+// beyond publishing the request pointer itself.
+struct UblkDevice::SwapRequest {
+    UblkIOTarget *new_target = nullptr; // ctx.target is the base type
+    UblkIOTarget *old_target = nullptr;
+    photon::semaphore done;
+    bool applied = false;
+};
+
 void UblkDevice::queue_loop(const struct ublksrv_dev *dev, photon::semaphore *started,
                             int *init_ret) {
     photon::init(photon::INIT_EVENT_EPOLL, photon::INIT_IO_LIBCURL);
@@ -251,18 +269,50 @@ void UblkDevice::queue_loop(const struct ublksrv_dev *dev, photon::semaphore *st
     *init_ret = 0;
     started->signal(1);
 
+    // waker coroutine: turns a cross-thread eventfd write into an in-vcpu
+    // interrupt of this loop, so a posted swap is picked up immediately
+    // instead of after the next ring-fd timeout (see swap_efd_ in the header)
+    photon::thread *loop_th = photon::CURRENT;
+    bool waker_stop = false;
+    photon::semaphore waker_done;
+    photon::thread_create11([&] {
+        while (!waker_stop) {
+            if (photon::wait_for_fd_readable(swap_efd_, 200UL * 1000) == 0) {
+                uint64_t v = 0;
+                ssize_t n = read(swap_efd_, &v, sizeof(v));
+                (void)n;
+                if (!waker_stop)
+                    photon::thread_interrupt(loop_th, EINTR); // same vcpu
+            }
+        }
+        waker_done.signal(1);
+    });
+
     while (true) {
         int ret = photon::wait_for_fd_readable(q->ring_ptr->ring_fd, 1000UL * 1000);
         if (ret == 0) {
             // CQEs pending: reap without waiting; this drives handle_io_async
             // and the internal queue state machine (STOPPING etc.)
             ublksrv_queue_reap_events(q);
-        } else if (errno != ETIMEDOUT) {
+        } else if (errno != ETIMEDOUT && errno != EINTR) {
+            // EINTR is the waker telling us a swap is pending
             LOG_ERROR("wait on ring fd failed: `", strerror(errno));
             break;
         }
         // submit FETCH/COMMIT SQEs queued during the reap round
         io_uring_submit(q->ring_ptr);
+
+        // hot-swap point: applied by this thread only, and only while
+        // no IO is in flight -- the dispatch target has no other reader
+        SwapRequest *swap = swap_pending_.load(std::memory_order_acquire);
+        if (swap != nullptr && ctx.inflight == 0) {
+            swap->old_target = ctx.target;
+            ctx.target = swap->new_target;
+            swap->applied = true;
+            swap_pending_.store(nullptr, std::memory_order_release);
+            swap->done.signal(1);
+            LOG_INFO("ublk dev ` image hot-swapped", dev_id_);
+        }
 
         if ((ublksrv_queue_state(q) & UBLKSRV_QUEUE_STOPPING) && ctx.inflight == 0)
             break;
@@ -278,6 +328,13 @@ void UblkDevice::queue_loop(const struct ublksrv_dev *dev, photon::semaphore *st
     // only cancellation CQEs remain.
     while (ublksrv_process_io(q) >= 0)
         ;
+
+    // stop the waker before this thread's photon env goes away
+    waker_stop = true;
+    uint64_t one = 1;
+    ssize_t nw = write(swap_efd_, &one, sizeof(one));
+    (void)nw;
+    waker_done.wait(1, 2UL * 1000 * 1000);
 
     LOG_INFO("ublk queue exited");
     ublksrv_queue_deinit(q);
@@ -575,7 +632,7 @@ int UblkDevice::setup_cache_root(const UblkDeviceOpts &opts, std::string &cache_
     return -1;
 }
 
-// CLI path only: mandatory cache isolation (ADR-0004) + own ImageService
+// CLI path only: mandatory cache isolation + own ImageService
 int UblkDevice::init_service(const UblkDeviceOpts &opts) {
     std::string cache_root;
     if (setup_cache_root(opts, cache_root) != 0)
@@ -617,7 +674,7 @@ int UblkDevice::init_service(const UblkDeviceOpts &opts) {
 }
 
 // start() failed mid-way: remove whatever was created so that neither the
-// kernel nor this object keeps a half-created device (ADR-0006 hard rule)
+// kernel nor this object keeps a half-created device (hard rule)
 void UblkDevice::cleanup_failed_start(bool dev_added) {
     if (ctrl_dev_ != nullptr) {
         if (dev_added) {
@@ -665,7 +722,7 @@ int ublk_daemon_setup_cache(const std::string &cache_base,
 // Daemon path: cross-process exclusion for writable images. The daemon
 // shares one cache tree, so it takes no per-image cache instance -- but a
 // writable image mounted here AND by a single-device CLI process would
-// still corrupt the upper layer. Reuse the ADR-0004 lock file
+// still corrupt the upper layer. Reuse the per-image lock file
 // (<base>/<image-key>/inst0/.lock) as lock-only, no cache subdirs, so both
 // worlds exclude each other as long as they share the cache base.
 int UblkDevice::acquire_rw_image_lock(const UblkDeviceOpts &opts) {
@@ -695,7 +752,7 @@ int UblkDevice::acquire_rw_image_lock(const UblkDeviceOpts &opts) {
 }
 
 // ---------------------------------------------------------------------------
-// raw ublk control commands (M2-3)
+// raw ublk control commands
 // ---------------------------------------------------------------------------
 // libublksrv v1.7 wraps GET_FEATURES but not UPDATE_SIZE, and its generic
 // sender is private -- so send the uring_cmd ourselves on a throwaway ring
@@ -831,6 +888,58 @@ int UblkDevice::resize(uint64_t new_size_bytes, bool resize_fs, std::string &err
     return 0;
 }
 
+uint64_t UblkDevice::dev_sectors() const {
+    return image_size() >> 9;
+}
+
+uint32_t UblkDevice::block_size() const {
+    return file_ != nullptr ? file_->block_size : 0;
+}
+
+// See the header for the concurrency argument. The wait is bounded because a
+// wedged queue thread must not hang a control request; on timeout the request
+// is retracted and the caller keeps its new objects (and should drop the
+// device instead of reusing it).
+int UblkDevice::swap_image(ImageFile *new_file, ImageFileTarget *new_target,
+                           ImageFile **old_file, ImageFileTarget **old_target) {
+    if (queue_exited_.load() || !queue_thread_.joinable()) {
+        LOG_ERROR("cannot swap image on a stopped device");
+        return -1;
+    }
+    SwapRequest req;
+    req.new_target = new_target;
+    SwapRequest *expected = nullptr;
+    if (!swap_pending_.compare_exchange_strong(expected, &req)) {
+        LOG_ERROR("another image swap is already pending");
+        return -1;
+    }
+    // wake the queue loop now instead of waiting out its ring-fd timeout
+    if (swap_efd_ >= 0) {
+        uint64_t one = 1;
+        ssize_t n = write(swap_efd_, &one, sizeof(one));
+        (void)n;
+    }
+    // the queue loop wakes at least once per second even when idle
+    if (req.done.wait(1, 3UL * 1000 * 1000) != 0 || !req.applied) {
+        // retract: only safe while the queue thread has not taken it
+        SwapRequest *mine = &req;
+        if (swap_pending_.compare_exchange_strong(mine, nullptr)) {
+            LOG_ERROR("image swap timed out, request retracted");
+            return -1;
+        }
+        // raced with the queue thread applying it: wait a little more
+        if (req.done.wait(1, 1UL * 1000 * 1000) != 0 || !req.applied) {
+            LOG_ERROR("image swap timed out after retraction race");
+            return -1;
+        }
+    }
+    *old_target = static_cast<ImageFileTarget *>(req.old_target);
+    *old_file = file_;
+    file_ = new_file;
+    target_ = new_target;
+    return 0;
+}
+
 int UblkDevice::start(const UblkDeviceOpts &opts) {
     if (imgservice_ == nullptr) {
         LOG_ERROR("no ImageService bound (daemon must inject one)");
@@ -863,6 +972,12 @@ int UblkDevice::start(const UblkDeviceOpts &opts) {
 
     // probe once, main-thread serialized, before any queue thread exists
     ring_flags_ = probe_queue_ring_flags();
+    // swap wakeup channel; harmless if the device is never hot-swapped
+    if (swap_efd_ < 0) {
+        swap_efd_ = eventfd(0, EFD_CLOEXEC);
+        if (swap_efd_ < 0)
+            LOG_WARN("eventfd for hot-swap wakeup unavailable: `", strerror(errno));
+    }
 
     struct ublksrv_dev_data data;
     memset(&data, 0, sizeof(data));
@@ -965,7 +1080,7 @@ void UblkDevice::teardown() {
         } else {
             // The queue died without stop() being called: an external actor
             // (the new `del`) stopped the device through /dev/ublk-control
-            // and owns the DEL -- doing it here too would race (A2). Just
+            // and owns the DEL -- doing it here too would race. Just
             // release our ctrl handle and exit fast.
             LOG_INFO("externally stopped, leaving DEL_DEV to the external actor");
             ublksrv_ctrl_deinit(ctrl_dev_);
@@ -1012,8 +1127,8 @@ int UblkDevice::run(const UblkDeviceOpts &opts, int ready_fd) {
 
 // Signal routing for the one-device-per-process binary: POSIX handlers can't
 // carry a closure, so the current device is parked in a file-scope pointer.
-// This is entry-layer plumbing, not device state -- a future daemon
-// (ADR-0005) installs its own handler that walks its device table instead.
+// This is entry-layer plumbing, not device state -- the daemon binary
+// installs its own handler that walks its device table instead.
 static UblkDevice *g_signal_device = nullptr;
 
 static void stop_device_handler(int signal) {
