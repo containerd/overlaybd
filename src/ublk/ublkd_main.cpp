@@ -66,6 +66,14 @@ public:
         : service_(service), cache_base_(std::move(cache_base)) {
     }
 
+    // Shared read-only device leases: off unless enabled. When disabled,
+    // acquire(mode=shared) is not an error -- it degrades to an independent
+    // device per caller (the same thing add would give), and the response
+    // reports mode "exclusive" so the caller can tell sharing did not happen.
+    void enable_shared_devices(bool on) {
+        shared_devices_enabled_ = on;
+    }
+
     // warm pool: off unless low > 0. Pooled devices are pre-created on
     // daemon-owned placeholder images and handed out by hot-swapping the real
     // image in, saving the ~8ms device-shell creation. Only writable images
@@ -318,7 +326,13 @@ private:
                                   strerror(errno));
             return;
         }
-        bool shared = (areq.mode == "shared");
+        // shared leases only when the feature is enabled; otherwise the
+        // request degrades to an independent device (see enable_shared_devices)
+        bool shared = (areq.mode == "shared") && shared_devices_enabled_;
+        if (areq.mode == "shared" && !shared_devices_enabled_)
+            LOG_INFO("ublkd: shared device leases disabled, serving `"
+                     " an independent device",
+                     areq.config.c_str());
 
         // shared: an already-running device for this image gets one more ref
         if (shared) {
@@ -416,7 +430,8 @@ private:
         msg = ublkd_msg_acquired(id, "/dev/ublkb" + std::to_string(id),
                                  shared ? "shared" : "exclusive", 1);
         LOG_INFO("ublkd: acquired /dev/ublkb` mode ` pooled ` image `", id,
-                 areq.mode.c_str(), from_pool ? 1 : 0, areq.config.c_str());
+                 shared ? "shared" : "exclusive", from_pool ? 1 : 0,
+                 areq.config.c_str());
         if (pool_low_ > 0)
             refill_pool();
     }
@@ -610,6 +625,7 @@ private:
     std::vector<PooledDev> pool_idle_;
     std::vector<int> free_slots_; // slots of devices that went away
     int next_slot_ = 0;
+    bool shared_devices_enabled_ = false; // --enable-shared-devices
     int pool_low_ = 0; // 0 = pooling disabled
     int pool_high_ = 0;
     uint64_t pool_size_gb_ = 0;
@@ -643,6 +659,12 @@ int main(int argc, char **argv) {
                    "the service config's cacheDir");
     int pool_low = 0, pool_high = 0;
     uint64_t pool_size_gb = 0;
+    bool enable_shared = false;
+    app.add_flag("--enable-shared-devices", enable_shared,
+                 "let /v1/acquire with mode=shared hand the SAME device to "
+                 "every consumer of a read-only image (reference counted). "
+                 "Off by default: shared requests then get an independent "
+                 "device each, exactly like add");
     app.add_option("--pool-low", pool_low,
                    "warm pool: keep at least N idle devices ready (0 = pooling "
                    "disabled, the default); exclusive acquires are then served "
@@ -701,6 +723,10 @@ int main(int argc, char **argv) {
 
     auto *server = new UblkdServer(service, cache_dir);
     g_shutdown_flag = &server->shutdown_requested;
+    server->enable_shared_devices(enable_shared);
+    LOG_INFO("shared read-only device leases: `",
+             enable_shared ? "enabled" : "disabled (each shared acquire gets "
+                                         "its own device)");
     if (pool_low > 0) {
         server->configure_pool(pool_low, pool_high, pool_size_gb);
         server->prewarm_pool();
