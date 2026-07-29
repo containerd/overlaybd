@@ -250,6 +250,21 @@ Sub-project of containerd, which is a solution for remote container images by fe
 
 Uses the P2P protocol to speed up HTTP file download for registry in large-scale clusters.
 
+# Scenarios
+
+## Agent Sandbox
+
+Agent sandboxes must boot in milliseconds, fork cheaply along exploratory
+execution paths, isolate untrusted code, scale to thousands of concurrent
+instances, and support diverse guest operating systems. Traditional image
+formats — OCI tarballs, qcow2 backing-file chains, overlayfs, and
+filesystem-sharing protocols like virtio-fs — each fall short on one or
+more of these axes. Overlaybd's layered, lazily-loaded, seekably-compressed
+block-device design meets all of them at once, and is already powering
+agent-sandbox products in production.
+
+[Read the full article: Why Agent Sandboxes Should Use Overlaybd](sbimg.md)
+
 # Events
 
 <img src="assets/Scaling_up.jpg" width="400px">
