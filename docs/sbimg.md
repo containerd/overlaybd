@@ -42,8 +42,10 @@ technology. Taken together, they rule out most conventional approaches.
 Filesystem-sharing mechanisms (virtio-fs, 9p, fscache) assume a Linux
 guest with a compatible kernel; they cannot serve a Windows or Android
 guest without a completely different data path. OCI tar layers assume a
-Linux filesystem layout for extraction. overlayfs is a Linux kernel
-feature with no equivalent on other operating systems. Any image format
+Linux filesystem layout for extraction. overlayfs and EROFS are Linux
+kernel features with no equivalent on other operating systems. Nydus's
+RAFS format is no different: its nydusd daemon serves the guest over
+FUSE or virtiofs, assuming a Linux filesystem stack. Any image format
 that embeds filesystem semantics, requires a specific guest kernel
 module, or assumes Linux-specific infrastructure is disqualified as a
 universal substrate from the start.
@@ -60,7 +62,10 @@ from the guest's perspective.
 virtio-fs is a stateful protocol: the guest and host share FUSE session
 state, inode mappings, open file descriptors, and lock tables. A VM
 snapshot cannot be restored on a different host because that state lives
-in the original host's virtiofsd process. overlayfs has a similar
+in the original host's virtiofsd process. Nydus's RAFS format has the
+same issue: it is served by a nydusd daemon that holds the FUSE session
+and cache state, so a virtiofs-mounted Nydus guest cannot be restored
+elsewhere without that daemon. overlayfs has a similar
 problem: a running sandbox's filesystem state — the overlay mount, its
 upper directory, and kernel-internal mount structures — cannot be
 atomically captured and resumed on another machine. For agent sandboxes
@@ -91,7 +96,10 @@ instances amplify every inefficiency:
 - **O(n) lookup cost with layer depth.** overlayfs resolves each file
   access (open, stat, readdir, etc.) by searching
   every layer's directory tree top-down — O(n) in
-  the number of layers. qcow2's native internal snapshots avoid this
+  the number of layers. EROFS is a single-layer read-only filesystem,
+  so a multi-layer image built from EROFS must stack mounts with
+  overlayfs and inherits the same O(n) walk. qcow2's native internal
+  snapshots avoid this
   (all data lives in one file), but to conform to the layered-image
   model that container ecosystems expect (one image file per layer,
   shared and composable), operators must instead chain separate qcow2
@@ -127,11 +135,15 @@ instances amplify every inefficiency:
   five or more round-trips, each paying virtio notification and context-
   switch latency. The operations themselves are cheap; the cost is doing
   them one-at-a-time across a VM boundary instead of in-batch locally.
+  RAFS served through nydusd over FUSE or virtiofs incurs the same
+  per-operation round-trips.
 
 - **Copy-on-write penalty (overlayfs, qcow2).** The first modification
   to data residing in a lower layer triggers a full copy before the
   write can proceed — overlayfs copies the entire file to the upper
-  layer; qcow2 allocates a new cluster and copies the original content.
+  layer; qcow2 allocates a new cluster and copies the original content;
+  and EROFS, being read-only, places writes in an overlayfs upper layer
+  and incurs the same file-level copy-up.
   Agents frequently edit existing files (source code, configs), so this
   is a recurring cost proportional to file/cluster size, not write size.
 
@@ -252,13 +264,23 @@ greater scale, demonstrating maturity and reliability:
   also adopted Databricks' infrastructure to build a 200K QPS inference
   platform.
 
-- **Peer-reviewed research.** The DADI system
-  ([USENIX ATC '20](https://www.usenix.org/conference/atc20/presentation/li-huiba))
-  and FaaSNet
-  ([USENIX ATC '21](https://www.usenix.org/conference/atc21/presentation/wang-ao))
+- **Peer-reviewed research.** The
+  [DADI system](https://www.usenix.org/conference/atc20/presentation/li-huiba) and
+  [FaaSNet](https://www.usenix.org/conference/atc21/presentation/wang-ao)
   validate the architecture under rigorous academic review.
 
 ## Conclusion
+
+How the mainstream image stacks compare on these four requirements:
+
+| Image stack | Multi-OS support | VM snapshot & restore | Security | Efficiency |
+| --- | --- | --- | --- | --- |
+| OCI tar+gzip (overlayfs) | ✗ Linux only | ✗ overlay-mount state cannot be atomically captured or restored | ✗ serving the guest requires virtio-fs; known [virtio-fs security vulnerabilities](https://github.com/kata-containers/kata-containers/issues/12203) | ✗ full download and unpack; O(n) layer walk; copy-up |
+| eStargz / SOCI | ✗ Linux only | ✗ overlay-mount and FUSE session state | ✗ FUSE snapshotter; serving the guest requires virtio-fs with the same [security vulnerabilities](https://github.com/kata-containers/kata-containers/issues/12203) | ~ lazy pull, but stacking and copy-up remain |
+| qcow2 | ✓ Linux, Windows, Android, macOS alike | ✓ stateless device; sync and restore anywhere | ✓ strong isolation with thin interface | ✗ multi-MB index per VM; O(n) backing chains; cluster CoW |
+| EROFS | ✗ Linux kernel feature | ✗ layered via overlayfs; same mount-state problem | ✗ serving the guest requires virtio-fs; known [virtio-fs security vulnerabilities](https://github.com/kata-containers/kata-containers/issues/12203) | ✗ full image required; read-only, stacks via overlayfs |
+| Nydus (RAFS) | ✗ assumes a Linux fs stack | ✗ FUSE session and cache state live in nydusd | ✗ userspace daemon (nydusd); known [virtio-fs security vulnerabilities](https://github.com/kata-containers/kata-containers/issues/12203) | ~ lazy chunks, but per-operation FUSE/virtio-fs round-trips |
+| **overlaybd** | ✓ Linux, Windows, Android, macOS alike | ✓ stateless device; sync and restore anywhere | ✓ strong isolation with thin interface | ✓ on-demand fetch; O(1) lookup; small memory footprint; no copy-up |
 
 Agent sandboxes need to start fast, isolate untrusted code, fork cheaply,
 scale to thousands of instances, and support diverse operating systems.
