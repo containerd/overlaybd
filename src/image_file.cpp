@@ -266,19 +266,18 @@ void *do_parallel_open_files(ImageFile *imgfile, ParallelOpenTask &tm) {
 }
 
 IFile *ImageFile::open_localfile(ImageConfigNS::LayerConfig &layer, std::string &opened) {
-    if (layer.file() != "") {
-        opened = layer.file();
-        return __open_ro_file(opened);
-    }
-    if (BKDL::check_downloaded(layer.dir())) {
-        opened = layer.dir() + "/" + COMMIT_FILE_NAME;
-        return __open_ro_file(opened);
-    }
-    auto sealed = layer.dir() + "/" + SEALED_FILE_NAME;
-    if (::access(sealed.c_str(), 0) == 0) {
-        // open sealed blob
-        opened = sealed;
-        return __open_ro_file(opened);
+    const std::string candidates[] = {
+        layer.file(),
+        layer.dir() + "/" + COMMIT_FILE_NAME,
+        layer.dir() + "/" + LEGACY_COMMIT_FILE_NAME,
+        layer.dir() + "/" + SEALED_FILE_NAME
+    };
+
+    for (const auto &path : candidates) {
+        if (::access(path.c_str(), F_OK) == 0) {
+            opened = path;
+            return __open_ro_file(opened);
+        }
     }
     return nullptr;
 }
@@ -583,10 +582,10 @@ int ImageFile::create_snapshot(const char *new_config_path) {
     upper_file = open_upper(upper);
     if (!upper_file)
         LOG_ERROR_RETURN(0, -1, "Open upper layer failed.");
-    
+
     if(((LSMT::IFileRW *)m_file)->restack(upper_file) != 0)
         LOG_ERRNO_RETURN(0, -1, "Restack new rwlayer failed.");
-    
+
     if(m_upper_file) {
         // transfer the sealed layer from m_upper_file to m_lower_file before m_upper_file is destructed
         auto sealed = ((LSMT::IFileRW *)m_upper_file)->get_file(0);
@@ -614,7 +613,7 @@ int ImageFile::create_snapshot(const char *new_config_path) {
         LOG_ERRNO_RETURN(0, -1, "rename(`,`) failed", new_config_path, this->config_path);
     }
     LOG_INFO("rename(`,`) success", new_config_path, this->config_path);
-    
+
     return 0;
 }
 

@@ -38,6 +38,7 @@
 
 static std::string COMMIT_FILE_NAME = "overlaybd.commit";
 static std::string SEALED_FILE_NAME = "overlaybd.sealed";
+static std::string LEGACY_COMMIT_FILE_NAME = ".commit";
 
 class ImageFile : public photon::fs::ForwardFile {
 public:
