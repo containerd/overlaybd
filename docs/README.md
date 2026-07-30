@@ -224,35 +224,6 @@ Overlaybd is an open-source sub-project of [containerd](https://www.cncf.io/proj
   [Get an invite to the CNCF slack.](https://communityinviter.com/apps/cloud-native/cncf)
   DingTalk Group: 186405011387.
 
-# Why Overlaybd
-
-## for Containers
-
-Containers and secure containers must deliver sub-second cold starts,
-pack densely by the thousands, share a layered OCI image model, isolate
-VM-backed guests cleanly, and run from a single format across runc and
-secure-container runtimes. Traditional image formats — OCI tar+gzip
-layers, overlayfs, qcow2, and filesystem-sharing protocols like
-virtio-fs — each fall short on one or more of these axes. Overlaybd's
-layered, lazily-loaded, seekably-compressed block-device design meets
-all of them at once, and already powers some of the largest container
-fleets in the world.
-
-Read the full article: [Why Containers and Secure Containers Should Use Overlaybd Images](ctimg.md)
-
-## for Agent Sandbox
-
-Agent sandboxes must boot in milliseconds, fork cheaply along exploratory
-execution paths, isolate untrusted code, scale to thousands of concurrent
-instances, and support diverse guest operating systems. Traditional image
-formats — OCI tarballs, qcow2 backing-file chains, overlayfs, and
-filesystem-sharing protocols like virtio-fs — each fall short on one or
-more of these axes. Overlaybd's layered, lazily-loaded, seekably-compressed
-block-device design meets all of them at once, and is already powering
-agent-sandbox products in production.
-
-Read the full article: [Why Agent Sandboxes Should Use Overlaybd](sbimg.md)
-
 # Components
 
 ## Overlaybd service
@@ -278,6 +249,21 @@ Sub-project of containerd, which is a solution for remote container images by fe
 [GitHub](https://github.com/data-accelerator/dadi-p2proxy)
 
 Uses the P2P protocol to speed up HTTP file download for registry in large-scale clusters.
+
+# Scenarios
+
+## Agent Sandbox
+
+Agent sandboxes must boot in milliseconds, fork cheaply along exploratory
+execution paths, isolate untrusted code, scale to thousands of concurrent
+instances, and support diverse guest operating systems. Traditional image
+formats — OCI tarballs, qcow2 backing-file chains, overlayfs, and
+filesystem-sharing protocols like virtio-fs — each fall short on one or
+more of these axes. Overlaybd's layered, lazily-loaded, seekably-compressed
+block-device design meets all of them at once, and is already powering
+agent-sandbox products in production.
+
+[Read the full article: Why Agent Sandboxes Should Use Overlaybd](sbimg.md)
 
 # Events
 
