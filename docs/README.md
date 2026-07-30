@@ -18,6 +18,7 @@ Overlaybd is an open-source sub-project of containerd, the industry-standard con
 [graduated at CNCF](https://www.cncf.io/projects/containerd/).
 The project has been integrated by many organizations world-wide, most notably
 [Azure Kubernetes Service's Artifact Streaming](https://learn.microsoft.com/en-us/azure/aks/artifact-streaming-overview),
+[Colab (from Google)](https://medium.com/@gogasca_/using-overlaybd-to-improve-startup-time-6c5f90f23345),
 [Databricks](https://www.databricks.com/blog/booting-databricks-vms-7x-faster-serverless-compute) +
 [Superhuman](https://www.databricks.com/blog/how-superhuman-and-databricks-built-200k-qps-inference-platform-together),
 [DeepSeek Elastic Compute (DSes)](https://arxiv.org/html/2606.19348v1),
@@ -224,6 +225,49 @@ Overlaybd is an open-source sub-project of [containerd](https://www.cncf.io/proj
   [Get an invite to the CNCF slack.](https://communityinviter.com/apps/cloud-native/cncf)
   DingTalk Group: 186405011387.
 
+# Why Overlaybd
+
+## for Containers
+
+Container platforms benefit from low cold-start latency, efficient
+resource usage at high density, OCI-compatible layered distribution,
+and consistent image delivery across runc and VM-based
+secure-container runtimes.
+
+The conventional OCI image stack is mature and works well for
+general-purpose containers. However, for large images and bursty
+scale-out workloads, downloading, decompressing, and unpacking the
+entire image can become a significant part of startup latency.
+VM-isolated containers also require an efficient way to expose image
+data across the VM boundary.
+
+OverlayBD complements the existing container filesystem stack with an
+OCI-compatible, layered block image that supports on-demand loading and
+seekable compression. It is designed to reduce image download and
+startup costs while providing a block-device-based image path for both
+runc and VM-based secure containers. OverlayBD has been deployed at
+scale in production container platforms.
+
+Read the full article: [Why Containers and Secure Containers Should Use Overlaybd Images](ctimg.md)
+
+## for Agent Sandbox
+
+Agent-sandbox platforms often require low-latency environment startup,
+efficient creation from shared base images, strong isolation, high
+concurrency, and support for different guest operating systems. Meeting
+these requirements involves the runtime, virtualization, and image
+storage layers together.
+
+OverlayBD provides an OCI-compatible, layered block-image substrate with
+on-demand loading, seekable compression, and writable layers. It is
+designed to reduce image transfer and startup costs, support efficient
+*compute-side* snapshot and clone workflows with a *writable* block-device
+data path for VM-based sandboxes. Separate OS-specific images can use the
+same OverlayBD format and OCI distribution pipeline. OverlayBD is already
+used by agent-sandbox systems in production.
+
+Read the full article: [Why Agent Sandboxes Should Use Overlaybd](sbimg.md)
+
 # Components
 
 ## Overlaybd service
@@ -249,21 +293,6 @@ Sub-project of containerd, which is a solution for remote container images by fe
 [GitHub](https://github.com/data-accelerator/dadi-p2proxy)
 
 Uses the P2P protocol to speed up HTTP file download for registry in large-scale clusters.
-
-# Scenarios
-
-## Agent Sandbox
-
-Agent sandboxes must boot in milliseconds, fork cheaply along exploratory
-execution paths, isolate untrusted code, scale to thousands of concurrent
-instances, and support diverse guest operating systems. Traditional image
-formats — OCI tarballs, qcow2 backing-file chains, overlayfs, and
-filesystem-sharing protocols like virtio-fs — each fall short on one or
-more of these axes. Overlaybd's layered, lazily-loaded, seekably-compressed
-block-device design meets all of them at once, and is already powering
-agent-sandbox products in production.
-
-[Read the full article: Why Agent Sandboxes Should Use Overlaybd](sbimg.md)
 
 # Events
 
