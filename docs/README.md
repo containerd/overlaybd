@@ -287,3 +287,35 @@ Uses the P2P protocol to speed up HTTP file download for registry in large-scale
 
 
 
+# Who Uses Overlaybd
+
+<div class="users-grid">
+<a href="https://kvcache.ai" target="_blank"><img src="assets/logos/agentenv.svg" alt="AgentEnv"></a>
+<a href="https://www.aliyun.com" target="_blank"><img src="assets/logos/aliyun.svg" alt="Alibaba Cloud"></a>
+<a href="https://www.alibabagroup.com" target="_blank"><img src="assets/logos/alibaba-group.svg" alt="Alibaba Group"></a>
+<a href="https://www.amap.com" target="_blank"><img src="assets/logos/amap.png" alt="Amap"></a>
+<a href="https://www.antgroup.com" target="_blank"><img src="assets/logos/antgroup.png" alt="Ant Group"></a>
+<a href="https://azure.microsoft.com" target="_blank"><img src="assets/logos/azure.svg" alt="Azure"></a>
+<!-- <a href="https://www.bmw.com" target="_blank"><img src="assets/logos/bmw.svg" alt="BMW"></a> -->
+<!-- <a href="https://www.byd.com" target="_blank"><img src="assets/logos/byd.svg" alt="BYD"></a> -->
+<a href="https://www.cainiao.com" target="_blank"><img src="assets/logos/cainiao.png" alt="Cainiao"></a>
+<a href="https://www.databricks.com" target="_blank"><img src="assets/logos/databricks.svg" alt="Databricks"></a>
+<a href="https://www.deepseek.com" target="_blank"><img src="assets/logos/deepseek.svg" alt="DeepSeek"></a>
+<!-- <a href="https://www.dewu.com" target="_blank"><img src="assets/logos/dewu.png" alt="Dewu"></a> -->
+<a href="https://www.ele.me" target="_blank"><img src="assets/logos/eleme.svg" alt="Ele.me"></a>
+<a href="https://fly.io" target="_blank"><img src="assets/logos/flyio.svg" alt="Fly.io"></a>
+<a href="https://hocus.dev" target="_blank"><img src="assets/logos/hocus.png" alt="Hocus"></a>
+<a href="https://www.kimi.com" target="_blank"><img src="assets/logos/kimi.png" alt="Kimi"></a>
+<a href="https://www.lazada.com" target="_blank"><img src="assets/logos/lazada.svg" alt="Lazada"></a>
+<!-- <a href="https://www.lilith.com" target="_blank"><img src="assets/logos/lilith.png" alt="Lilith Games"></a> -->
+<!-- <a href="https://metabit-trading.com" target="_blank"><img src="assets/logos/qianxiang.png" alt="Metabit Capital"></a> -->
+<!-- <a href="https://www.163.com" target="_blank"><img src="assets/logos/netease.svg" alt="NetEase"></a> -->
+<!-- <a href="https://www.recruit.co.jp" target="_blank"><img src="assets/logos/recruit.svg" alt="Recruit"></a> -->
+<!-- <a href="https://www.sinopec.com" target="_blank"><img src="assets/logos/sinopec.svg" alt="Sinopec"></a> -->
+<a href="https://www.superhuman.com" target="_blank"><img src="assets/logos/superhuman.svg" alt="Superhuman"></a>
+<a href="https://www.taobao.com" target="_blank"><img src="assets/logos/taobao.svg" alt="Taobao"></a>
+<a href="https://www.tmall.com" target="_blank"><img src="assets/logos/tmall.svg" alt="Tmall"></a>
+<!-- <a href="https://www.xiaohongshu.com" target="_blank"><img src="assets/logos/xiaohongshu.png" alt="Xiaohongshu"></a> -->
+<!-- <a href="https://www.xiaopeng.com" target="_blank"><img src="assets/logos/xpeng.svg" alt="XPeng"></a> -->
+</div>
+
