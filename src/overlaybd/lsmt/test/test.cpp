@@ -62,6 +62,30 @@ void lookup_test(const SegmentMapping (&mapping)[N1], Segment s,
     lookup_test<IDX>(mapping, N1, s, stdrst, N2);
 }
 
+TEST_F(FileTest, reject_oversized_index) {
+    const char *filename = "oversized-index.lsmt";
+    auto file = lfs->open(filename, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    ASSERT_NE(file, nullptr);
+
+    LayerInfo info;
+    info.virtual_size = HeaderTrailer::SPACE;
+    ASSERT_EQ(write_header_trailer(file, true, true, true, 0, 0, info),
+              (int)HeaderTrailer::SPACE);
+
+    const uint64_t index_size = MAX_LSMT_INDEX_SIZE + 1;
+    const uint64_t index_offset = HeaderTrailer::SPACE;
+    const uint64_t trailer_offset =
+        index_offset + index_size * sizeof(SegmentMapping);
+    ASSERT_EQ(file->lseek(trailer_offset, SEEK_SET), (off_t)trailer_offset);
+    ASSERT_EQ(write_header_trailer(file, false, true, true, index_offset,
+                                   index_size, info),
+              (int)HeaderTrailer::SPACE);
+
+    EXPECT_EQ(LSMT::open_file_ro(file), nullptr);
+    delete file;
+    lfs->unlink(filename);
+}
+
 void lookup_test(IMemoryIndex &idx);
 
 TEST(Index, lookup) {

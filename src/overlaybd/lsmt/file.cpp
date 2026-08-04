@@ -45,6 +45,7 @@ using namespace photon::fs;
 typedef atomic<uint64_t> atomic_uint64_t;
 
 namespace LSMT {
+static const uint64_t MAX_LSMT_INDEX_SIZE = 1000000;
 LogBuffer &operator<<(LogBuffer &log, Segment s) {
     return log.printf("Segment[", s.offset + 0, ',', s.length + 0, ']');
 }
@@ -1376,6 +1377,9 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
         }
         auto trailer_offset = stat.st_size - HeaderTrailer::SPACE;
         LOG_DEBUG("index_size: `, trailer offset: `", pht->index_size + 0, trailer_offset);
+        if (pht->index_size > MAX_LSMT_INDEX_SIZE)
+            LOG_ERROR_RETURN(0, nullptr, "LSMT index size ` exceeds maximum `",
+                                    pht->index_size + 0, MAX_LSMT_INDEX_SIZE);
         index_bytes = pht->index_size * sizeof(SegmentMapping);
         if (index_bytes > trailer_offset - pht->index_offset)
             LOG_ERROR_RETURN(0, nullptr, "invalid index bytes or size");
@@ -1387,6 +1391,9 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
             LOG_ERROR_RETURN(0, nullptr, "index offset wrong");
         index_bytes = stat.st_size - HeaderTrailer::SPACE;
         pht->index_size = index_bytes / sizeof(SegmentMapping);
+        if (pht->index_size > MAX_LSMT_INDEX_SIZE)
+            LOG_ERROR_RETURN(0, nullptr, "LSMT index size ` exceeds maximum `",
+                                    pht->index_size + 0, MAX_LSMT_INDEX_SIZE);
     }
 
     SegmentMapping *ibuf = nullptr;
