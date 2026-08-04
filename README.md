@@ -119,6 +119,73 @@ cmake -D ENABLE_QAT=1 ..
 
 For more information go to `overlaybd/src/overlaybd/zfile/README.md`.
 
+If you want to build the ublk frontend (`overlaybd-ublk`), which exposes an
+image as `/dev/ublkbN` without going through TCMU/SCSI. It is built by default
+(disable with `-D BUILD_UBLK_FRONTEND=off`); building it additionally requires
+`autoconf`, `automake` and `libtool` (liburing and libublksrv are fetched and
+built from source automatically).
+
+```bash
+cmake -D BUILD_UBLK_FRONTEND=on ..
+```
+
+Running it requires a kernel with the `ublk_drv` driver (mainline >= 6.0, or a
+distro kernel with ublk backported):
+
+```bash
+sudo modprobe ublk_drv
+sudo overlaybd-ublk add --config /path/to/config.v1.json   # prints /dev/ublkbN when ready
+sudo overlaybd-ublk list
+sudo overlaybd-ublk del -n 0
+```
+
+Unlike `overlaybd-tcmu`, one `overlaybd-ublk` process serves exactly one
+device; killing the daemon removes the device. Each device can write to its
+own log file via `add --log-path ...` (recommended when running multiple
+devices; daemons otherwise share the global log file and are distinguished
+by a `ublk-<pid>` tag).
+
+For hosting many devices in one process there is also `overlaybd-ublkd`, a
+centralized daemon sharing a single ImageService (and thus one cache tree,
+`<base>/daemon/` under `--cache-dir`, guarded by an exclusive lock). Its
+control API is HTTP over a root-only unix socket, debuggable with curl:
+
+```bash
+sudo overlaybd-ublkd &        # or: systemctl start overlaybd-ublkd
+SOCK=/var/run/overlaybd-ublk/ublkd.sock
+curl --unix-socket $SOCK -X POST -d '{"config":"/path/config.v1.json"}' http://d/v1/add
+curl --unix-socket $SOCK http://d/v1/list
+curl --unix-socket $SOCK -X POST -d '{"dev_id":0}' http://d/v1/del
+curl --unix-socket $SOCK -X POST -d '{"dev_id":0,"size_gb":50,"resize_fs":true}' http://d/v1/resize
+curl --unix-socket $SOCK -X POST http://d/v1/shutdown   # stops all devices
+```
+
+`add` replies once the device is usable; `del` replies after full teardown;
+online `resize` (grow only, writable images) additionally needs a kernel
+with `UBLK_F_UPDATE_SIZE` (mainline >= 6.11). Writable images are mounted
+exclusively across the daemon and CLI processes; devices owned by the
+daemon must be deleted through its API (the CLI `del` refuses them). A
+systemd unit template is installed at /opt/overlaybd/overlaybd-ublkd.service.
+
+Notes:
+
+* Always unmount filesystems on `/dev/ublkbN` before `del` (or before stopping
+  the daemon): the daemon serves the device's IO, so tearing it down with a
+  mounted filesystem aborts in-flight journal writes.
+* Caches are always isolated per device: each daemon uses
+  `/opt/overlaybd/ublk_cache/<image-key>/<instance>/` (override the base
+  directory with `add --cache-dir ...`), guarded by an exclusive lock -- the
+  file cache's locking is in-process only, so daemons must never share a
+  cache directory. Mounting the same read-only image multiple times gets
+  automatically numbered instances (or pin one with `--instance-id`);
+  remounting an image reuses its warm cache; mounting a writable image twice
+  is rejected to protect its upper layer. A per-device log file
+  (`add --log-path ...`) is recommended when running multiple devices.
+* Runtime verified on a 5.10 kernel with ublk backported (Alinux
+  5.10.134); a full regression on mainline 6.x kernels is still pending.
+  Known backport-kernel caveats: DISCARD is unavailable there, and `del`
+  takes ~2s instead of milliseconds.
+
 Finally, setup a systemd service for overlaybd-tcmu backstore.
 
 ```bash
