@@ -291,6 +291,27 @@ inline void test_merge_combo(const IMemoryIndex *indexes[], size_t ni, // num of
     test_combo(indexes, ni, stdrst, NR);
 }
 
+TEST(Index, reject_oversized_merge) {
+    const size_t per_index_size = MAX_LSMT_INDEX_SIZE / 2 + 1;
+    vector<SegmentMapping> mapping0;
+    vector<SegmentMapping> mapping1;
+    mapping0.reserve(per_index_size);
+    mapping1.reserve(per_index_size);
+
+    for (size_t i = 0; i < per_index_size; ++i) {
+        mapping0.emplace_back(i * 2, 1, i * 2);
+        mapping1.emplace_back(i * 2 + 1, 1, i * 2 + 1);
+    }
+
+    Index index0(mapping0.data(), mapping0.size(), false);
+    Index index1(mapping1.data(), mapping1.size(), false);
+    const IMemoryIndex *indexes[] = {&index0, &index1};
+
+    auto merged = merge_memory_indexes(indexes, LEN(indexes));
+    EXPECT_EQ(merged, nullptr);
+    delete merged;
+}
+
 TEST(Index, merge) {
     const static SegmentMapping mapping0[] = {{5, 5, 0}, {10, 10, 50}, {100, 10, 20}};
     const static SegmentMapping mapping1[] = {{0, 1, 7},    {2, 4, 5},    {15, 10, 22},
