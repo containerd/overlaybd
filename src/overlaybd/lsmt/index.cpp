@@ -954,6 +954,11 @@ IMemoryIndex *merge_memory_indexes(const IMemoryIndex **pindexes, size_t n) {
     mapping.reserve(pi[0]->size());
     merge_indexes(0, mapping, pi, n, 0, UINT64_MAX);
 
+    if (mapping.size() > MAX_LSMT_INDEX_SIZE)
+        LOG_ERROR_RETURN(0, nullptr,
+                         "Merged LSMT index size ` exceeds maximum `",
+                         mapping.size(), MAX_LSMT_INDEX_SIZE);
+
     if (pindexes[0]->vsize() < static_cast<uint64_t>(UINT32_MAX) * ALIGNMENT
         && mapping.size() < NODES_PER_LEVEL_32[MAX_LEVEL_32-1]) {
         return new_index_with_lineriazed_bptree<uint32_t>(std::move(mapping), pindexes[0]->vsize());

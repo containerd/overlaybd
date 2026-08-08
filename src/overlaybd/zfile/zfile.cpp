@@ -47,6 +47,7 @@ uint64_t zfile_blk_cnt = 0;
 namespace ZFile {
 
 const static size_t BUF_SIZE = 512;
+const static uint64_t MAX_ZFILE_INDEX_SIZE = 1000000000;
 const static uint32_t NOI_WELL_KNOWN_PRIME = 100007;
 const static uint8_t FLAG_VALID_FALSE = 0;
 const static uint8_t FLAG_VALID_TRUE = 1;
@@ -1095,6 +1096,9 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
                              "trailer magic, trailer type, file type or sealedness doesn't match");
         }
 
+        if (pht->index_size > MAX_ZFILE_INDEX_SIZE)
+            LOG_ERROR_RETURN(0, false, "ZFile index size ` exceeds maximum `",
+                             pht->index_size + 0, MAX_ZFILE_INDEX_SIZE);
         index_bytes = pht->index_size * sizeof(uint32_t);
         LOG_INFO("trailer_offset: `, idx_offset: `, idx_bytes: `, dict_size: `, use_dict: `",
                  trailer_offset, pht->index_offset, index_bytes, pht->opt.dict_size,
@@ -1103,6 +1107,9 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
         if (index_bytes > trailer_offset - pht->index_offset)
             LOG_ERROR_RETURN(0, false, "invalid index bytes or size. ");
     } else {
+        if (pht->index_size > MAX_ZFILE_INDEX_SIZE)
+            LOG_ERROR_RETURN(0, false, "ZFile index size ` exceeds maximum `",
+                             pht->index_size + 0, MAX_ZFILE_INDEX_SIZE);
         index_bytes = pht->index_size * sizeof(uint32_t);
         LOG_INFO("read overwrite header. idx_offset: `, idx_bytes: `, dict_size: `, use_dict: `",
                  pht->index_offset, index_bytes, pht->opt.dict_size, pht->opt.use_dict);
