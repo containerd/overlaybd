@@ -145,14 +145,23 @@ private:
     photon::rwlock m_io_lock;
 
     int init_image_file();
-    template<typename...Ts> void set_failed(const Ts&...xs);
+    template <typename... Ts>
+    void set_failed(const Ts &...xs) {
+        if (m_status == 0) // only set exit in image boot phase
+        {
+            m_status = -1;
+            m_exception = estring().appends(xs...);
+        }
+    }
     LSMT::IFileRO *open_lowers(std::vector<ImageConfigNS::LayerConfig> &, bool &);
     LSMT::IFileRW *open_upper(ImageConfigNS::UpperConfig &);
 
-    static bool layer_config_match(const ImageConfigNS::LayerConfig &a,
-                                   const ImageConfigNS::LayerConfig &b);
-    static bool configs_match(const ImageConfigNS::ImageConfig &a,
-                              const ImageConfigNS::ImageConfig &b);
+    // LayerConfig/ImageConfig accessors are non-const in the generated config
+    // helpers, so these helpers take mutable refs.
+    static bool layer_config_match(ImageConfigNS::LayerConfig &a,
+                                   ImageConfigNS::LayerConfig &b);
+    static bool configs_match(ImageConfigNS::ImageConfig &a,
+                              ImageConfigNS::ImageConfig &b);
     static int read_text_file(const std::string &path, std::string &out);
     static int write_text_file_fsync(const std::string &path, const std::string &data);
     int install_canonical_config(const std::string &src_path);

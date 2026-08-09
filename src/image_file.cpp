@@ -549,25 +549,16 @@ void ImageFile::set_auth_failed() {
     }
 }
 
-template <typename... Ts>
-void ImageFile::set_failed(const Ts &...xs) {
-    if (m_status == 0) // only set exit in image boot phase
-    {
-        m_status = -1;
-        m_exception = estring().appends(xs...);
-    }
-}
-
-bool ImageFile::layer_config_match(const ImageConfigNS::LayerConfig &a,
-                                   const ImageConfigNS::LayerConfig &b) {
+bool ImageFile::layer_config_match(ImageConfigNS::LayerConfig &a,
+                                   ImageConfigNS::LayerConfig &b) {
     return a.gzipIndex() == b.gzipIndex() && a.file() == b.file() &&
            a.targetFile() == b.targetFile() && a.dir() == b.dir() &&
            a.digest() == b.digest() && a.targetDigest() == b.targetDigest() &&
            a.size() == b.size();
 }
 
-bool ImageFile::configs_match(const ImageConfigNS::ImageConfig &a,
-                              const ImageConfigNS::ImageConfig &b) {
+bool ImageFile::configs_match(ImageConfigNS::ImageConfig &a,
+                              ImageConfigNS::ImageConfig &b) {
     auto a_lowers = a.lowers();
     auto b_lowers = b.lowers();
     if (a_lowers.size() != b_lowers.size())
