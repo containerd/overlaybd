@@ -22,10 +22,11 @@ The project has been integrated by many organizations world-wide, most notably
 [Databricks](https://www.databricks.com/blog/booting-databricks-vms-7x-faster-serverless-compute) +
 [Superhuman](https://www.databricks.com/blog/how-superhuman-and-databricks-built-200k-qps-inference-platform-together),
 [DeepSeek Elastic Compute (DSes)](https://arxiv.org/html/2606.19348v1),
+[Flatcar Container Linux](https://www.flatcar.org/docs/latest/os-config/network/overlaybd-artifact-streaming/),
 [fly.io](https://community.fly.io/t/experimental-speedy-machine-creation-with-overlaybd/18958),
-[hocus.dev](https://hocus.dev/blog/virtualizing-development-environments), etc.
+[hocus.dev](https://hocus.dev/blog/virtualizing-development-environments),
 [Kimi AgentEnv](https://kvcache.ai/blog/agentenv-open-sourced/),
-Overlaybd can also be used for virtual machines or micro sandboxes.
+etc. Overlaybd can also be used for virtual machines or micro sandboxes.
 
 <!-- Boss直聘, -->
 
@@ -183,12 +184,14 @@ the world:
   portfolio — Taobao, TMall, AlibabaCloud and more — and commercialized on AlibabaCloud as
   its container image acceleration offering, adopted by major customers worldwide.
 
-- **Adopted across the industry**: Integrated by organizations including
+- **Adopted across the industry**: Integrated by organizations including (but not limited to)
   [Azure Kubernetes Service (Artifact Streaming)](https://learn.microsoft.com/en-us/azure/aks/artifact-streaming-overview),
   [Databricks](https://www.databricks.com/blog/booting-databricks-vms-7x-faster-serverless-compute),
   [DeepSeek Elastic Compute](https://arxiv.org/html/2606.19348v1),
+  [Flatcar Container Linux](https://www.flatcar.org/docs/latest/os-config/network/overlaybd-artifact-streaming/),
   [fly.io](https://community.fly.io/t/experimental-speedy-machine-creation-with-overlaybd/18958),
-  and [hocus.dev](https://hocus.dev/blog/virtualizing-development-environments).
+  [hocus.dev](https://hocus.dev/blog/virtualizing-development-environments),
+  etc.
 
 - **Peer-reviewed research**: The design is documented in two USENIX Annual Technical
   Conference papers — [DADI](https://www.usenix.org/conference/atc20/presentation/li-huiba)
@@ -268,6 +271,28 @@ used by agent-sandbox systems in production.
 
 Read the full article: [Why Agent Sandboxes Should Use Overlaybd](sbimg.md)
 
+## for Virtual Machines
+
+VM platforms need fast boot from shared base images, low per-VM
+metadata memory at high density, cheap snapshot and clone, and
+registry-style layered distribution.
+
+The incumbent VM disk formats — qcow2, VHD/VHDX, and VMDK — all rely
+on per-file allocation tables chained one file per snapshot. Reads
+walk the chain, per-file index caches multiply with chain depth, and write
+cost is set by a fixed cluster size that trades directly against
+index size.
+
+OverlayBD replaces the per-file tables with a single merged,
+extent-based index per device: O(1) lookup at any chain depth, an
+index small enough to stay memory-resident regardless of snapshot
+count, and 512-byte-granularity writes with no copy-on-write. Its
+image layout follows the OCI image spec — a base image is stored
+once, shared by every derivative VM, and distributed through the
+existing registry ecosystem.
+
+Read the full article: [Why Virtual Machines Should Use Overlaybd Images](vmimg.md)
+
 # Components
 
 ## Overlaybd service
@@ -318,6 +343,7 @@ Uses the P2P protocol to speed up HTTP file download for registry in large-scale
 <a href="https://www.deepseek.com" target="_blank"><img src="assets/logos/deepseek.svg" alt="DeepSeek"></a>
 <!-- <a href="https://www.dewu.com" target="_blank"><img src="assets/logos/dewu.png" alt="Dewu"></a> -->
 <a href="https://www.ele.me" target="_blank"><img src="assets/logos/eleme.svg" alt="Ele.me"></a>
+<a href="https://www.flatcar.org" target="_blank"><img src="assets/logos/flatcar.svg" alt="Flatcar"></a>
 <a href="https://fly.io" target="_blank"><img src="assets/logos/flyio.svg" alt="Fly.io"></a>
 <a href="https://hocus.dev" target="_blank"><img src="assets/logos/hocus.png" alt="Hocus"></a>
 <a href="https://www.kimi.com" target="_blank"><img src="assets/logos/kimi.png" alt="Kimi"></a>
