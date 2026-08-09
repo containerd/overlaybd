@@ -607,24 +607,38 @@ ImageFile *ImageService::create_image_file(const char *config_path, const std::s
 int ImageService::register_image_file(const std::string& dev_id, ImageFile* file) {
     if (dev_id.empty())
         return 0;
-    if(find_image_file(dev_id) != nullptr)
-        LOG_ERROR_RETURN(0, -1, "dev id exists: `", dev_id);
+    photon::scoped_rwlock lock(m_files_lock, photon::WLOCK);
+    if (m_image_files.find(dev_id) != m_image_files.end())
+        LOG_ERROR_RETURN(0, -1, "dev id already registered");
     m_image_files[dev_id] = file;
-    LOG_INFO("Registered image file for dev_id: `", dev_id);
+    LOG_INFO("Registered image file for device");
     return 0;
 }
 
 int ImageService::unregister_image_file(const std::string& dev_id) {
     if (dev_id.empty())
         return 0;
+    photon::scoped_rwlock lock(m_files_lock, photon::WLOCK);
     m_image_files.erase(dev_id);
-    LOG_INFO("Unregistered image file for dev_id: `", dev_id);
+    LOG_INFO("Unregistered image file for device");
     return 0;
 }
 
 ImageFile* ImageService::find_image_file(const std::string& dev_id) {
+    photon::scoped_rwlock lock(m_files_lock, photon::RLOCK);
     auto it = m_image_files.find(dev_id);
     return (it != m_image_files.end()) ? it->second : nullptr;
+}
+
+int ImageService::create_snapshot_for_device(const std::string& dev_id,
+                                            const char *config_path) {
+    // Exclusive lock: prevent unregister/delete while restack holds a raw pointer.
+    photon::scoped_rwlock lock(m_files_lock, photon::WLOCK);
+    auto it = m_image_files.find(dev_id);
+    if (it == m_image_files.end() || it->second == nullptr) {
+        LOG_ERROR_RETURN(0, -2, "Image file not found for device");
+    }
+    return it->second->create_snapshot(config_path);
 }
 
 ImageService::ImageService(const char *config_path) {

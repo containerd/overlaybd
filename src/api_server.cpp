@@ -27,28 +27,37 @@
 class ApiHandler : public photon::net::http::HTTPHandler {
 public:
     ImageService *imgservice;
-    std::map<std::string, std::string> params;
 
     ApiHandler(ImageService *imgservice) : imgservice(imgservice) {}
     int handle_request(photon::net::http::Request& req,
                        photon::net::http::Response& resp,
                        std::string_view) override {
+        if (req.verb() != photon::net::http::Verb::POST) {
+            resp.set_result(405);
+            std::string msg = R"({"success":false,"message":"Method not allowed"})";
+            resp.headers.content_length(msg.size());
+            return resp.write((void *)msg.data(), msg.size()) == (ssize_t)msg.size() ? 0 : -1;
+        }
+
         auto target = req.target(); // string view, format: /snapshot?dev_id=${devID}&config=${config}
         std::string_view query("");
         auto pos = target.find('?');
         if (pos != std::string_view::npos) {
             query = target.substr(pos + 1);
         }
-        // auto query = req.query();
-        LOG_INFO("Snapshot query: `", query); // string view, format: dev_id=${devID}&config=${config}
-        parse_params(query);
+        LOG_INFO("Snapshot request received");
+        std::map<std::string, std::string> params;
+        if (!parse_params(query, params)) {
+            resp.set_result(400);
+            std::string msg = R"({"success":false,"message":"Malformed or duplicate query parameters"})";
+            resp.headers.content_length(msg.size());
+            return resp.write((void *)msg.data(), msg.size()) == (ssize_t)msg.size() ? 0 : -1;
+        }
         auto dev_id = params["dev_id"];
         auto config_path = params["config"];
-        LOG_DEBUG("dev_id: `, config: `", dev_id, config_path);
-        
+
         int code;
         std::string msg;
-        ImageFile* img_file = nullptr;
 
         if (dev_id.empty() || config_path.empty()) {
             code = 400;
@@ -59,23 +68,24 @@ public:
             goto EXIT;
         }
 
-        img_file = imgservice->find_image_file(dev_id);
-        if (!img_file) {
-            code = 404;
-            msg = std::string(R"delimiter({
+        {
+            int snap_ret = imgservice->create_snapshot_for_device(dev_id, config_path.c_str());
+            if (snap_ret == -2) {
+                code = 404;
+                msg = std::string(R"delimiter({
         "success": false,
         "message": "Image file not found"
 })delimiter");
-            goto EXIT;
-        }
-
-        if (img_file->create_snapshot(config_path.c_str()) < 0) {
-            code = 500;
-            msg = std::string(R"delimiter({
+                goto EXIT;
+            }
+            if (snap_ret < 0) {
+                code = 500;
+                msg = std::string(R"delimiter({
         "success": false,
-        "message": "Failed to create snapshot`"
+        "message": "Failed to create snapshot"
 })delimiter");
-            goto EXIT;
+                goto EXIT;
+            }
         }
 
         code = 200;
@@ -90,40 +100,46 @@ EXIT:
         resp.keep_alive(true);
         auto ret_w = resp.write((void*)msg.c_str(), msg.size());
         if (ret_w != (ssize_t)msg.size()) {
-            LOG_ERRNO_RETURN(0, -1, "send body failed, target: `, `", req.target(), VALUE(ret_w));
+            LOG_ERRNO_RETURN(0, -1, "send body failed, target path /snapshot, `", VALUE(ret_w));
         }
         LOG_DEBUG("send body done");
         return 0;
     }
 
-    void parse_params(std::string_view query) { // format: dev_id=${devID}&config=${config}...
+    // Returns false on malformed input or duplicate keys.
+    static bool parse_params(std::string_view query,
+                             std::map<std::string, std::string> &params) {
         if (query.empty())
-            return;
-        
+            return true;
+
         size_t start = 0;
         while (start < query.length()) {
             auto end = query.find('&', start);
             if (end == std::string_view::npos) { // last one
                 end = query.length();
             }
-            
+
             auto param = query.substr(start, end - start);
             auto eq_pos = param.find('=');
+            std::string decoded_key;
+            std::string decoded_value;
             if (eq_pos != std::string_view::npos) {
                 auto key = param.substr(0, eq_pos);
                 auto value = param.substr(eq_pos + 1);
-                
-                // url decode
-                auto decoded_key = photon::net::http::url_unescape(key);
-                auto decoded_value = photon::net::http::url_unescape(value);
-                params[decoded_key] = decoded_value;
+                decoded_key = photon::net::http::url_unescape(key);
+                decoded_value = photon::net::http::url_unescape(value);
             } else {
-                // key without value
-                auto key = photon::net::http::url_unescape(param);
-                params[key] = "";
+                decoded_key = photon::net::http::url_unescape(param);
+                decoded_value = "";
             }
+            if (decoded_key.empty())
+                return false;
+            if (params.find(decoded_key) != params.end())
+                return false;
+            params[decoded_key] = decoded_value;
             start = end + 1;
         }
+        return true;
     }
 };
 

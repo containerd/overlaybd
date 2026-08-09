@@ -46,7 +46,8 @@ public:
         conf.CopyFrom(_conf, conf.GetAllocator());
         m_exception = "";
         if(image_service.register_image_file(dev_id, this) != 0) { // register itself
-            set_failed("duplicated dev id: " + dev_id);
+            // Do not echo the device ID; registration is a global selector.
+            set_failed("duplicated live-snapshot device id");
             return;
         }
         m_dev_id = dev_id;
@@ -73,6 +74,7 @@ public:
     }
 
     int fstat(struct stat *buf) override {
+        photon::scoped_rwlock lock(m_io_lock, photon::RLOCK);
         int ret = m_file->fstat(buf);
         block_size = buf->st_blksize;
         size = buf->st_size;
@@ -83,6 +85,7 @@ public:
     }
 
     ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override {
+        photon::scoped_rwlock lock(m_io_lock, photon::RLOCK);
         if (read_only) {
             LOG_ERROR_RETURN(EROFS, -1, "writing read only file");
         }
@@ -90,14 +93,17 @@ public:
     }
 
     ssize_t preadv(const struct iovec *iov, int iovcnt, off_t offset) override {
+        photon::scoped_rwlock lock(m_io_lock, photon::RLOCK);
         return m_file->preadv(iov, iovcnt, offset);
     }
 
     int fdatasync() override {
+        photon::scoped_rwlock lock(m_io_lock, photon::RLOCK);
         return m_file->fdatasync();
     }
 
     int fallocate(int mode, off_t offset, off_t len) override {
+        photon::scoped_rwlock lock(m_io_lock, photon::RLOCK);
         return m_file->fallocate(mode, offset, len);
     }
 
@@ -136,11 +142,20 @@ private:
     photon::fs::IFile *m_lower_file = nullptr;
     photon::fs::IFile *m_upper_file = nullptr;
     std::string m_dev_id = "";
+    photon::rwlock m_io_lock;
 
     int init_image_file();
     template<typename...Ts> void set_failed(const Ts&...xs);
     LSMT::IFileRO *open_lowers(std::vector<ImageConfigNS::LayerConfig> &, bool &);
     LSMT::IFileRW *open_upper(ImageConfigNS::UpperConfig &);
+
+    static bool layer_config_match(const ImageConfigNS::LayerConfig &a,
+                                   const ImageConfigNS::LayerConfig &b);
+    static bool configs_match(const ImageConfigNS::ImageConfig &a,
+                              const ImageConfigNS::ImageConfig &b);
+    static int read_text_file(const std::string &path, std::string &out);
+    static int write_text_file_fsync(const std::string &path, const std::string &data);
+    int install_canonical_config(const std::string &src_path);
 
     IFile *open_localfile(ImageConfigNS::LayerConfig &layer, std::string &opened);
     IFile *__open_ro_file(const std::string &);
