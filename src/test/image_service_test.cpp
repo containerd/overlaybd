@@ -30,6 +30,7 @@
 
 #include <unistd.h>
 #include <fcntl.h>
+#include <cstring>
 
 #include "../image_service.cpp"
 #include "../image_service.h"
@@ -278,7 +279,8 @@ public:
 
         DevIDRegisterTest::SetUp();
     }
-    int request_snapshot(const char* request_url) {
+    int request_snapshot(const char* request_url,
+                         photon::net::http::Verb verb = photon::net::http::Verb::POST) {
         // auto request = new photon::net::cURL();
         // DEFER({ delete request; });
 
@@ -290,7 +292,7 @@ public:
 
         auto client = photon::net::http::new_http_client();
         DEFER(delete client);
-        auto op = client->new_operation(photon::net::http::Verb::GET, request_url);
+        auto op = client->new_operation(verb, request_url);
         DEFER(delete op);
         op->req.headers.content_length(0);
         // std::cout << "op->req.target(): " << op->req.target() << " op->req.query(): " << op->req.query() << std::endl;
@@ -309,10 +311,13 @@ TEST_F(HTTPServerTest, http_server) {
     ImageFile* imgfile = imgservice->create_image_file(image_config_path.c_str(), "123");
     EXPECT_NE(imgfile, nullptr);
 
+    EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot",
+                               photon::net::http::Verb::GET), 405);
     EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot"), 400);
     EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?V#RNWQC&*@#"), 400);
     EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?dev_id=&config=/tmp/overlaybd/config.json"), 400);
     EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?dev_id=456&config=/tmp/overlaybd/config.json"), 404);
+    EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?dev_id=123"), 400);
     EXPECT_EQ(request_snapshot("http://localhost:9862/snapshot?dev_id=123&config=/tmp/overlaybd/config.json"), 500);
 
     delete imgfile;
@@ -367,7 +372,7 @@ public:
         srand(154574045);
     }
 
-    void create_file_rw(char *data_name, char *index_name, bool sparse = false) {
+    void create_file_rw(const char *data_name, const char *index_name, bool sparse = false) {
         auto fdata = photon::fs::open_localfile_adaptor(data_name, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         auto findex = photon::fs::open_localfile_adaptor(index_name, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         LSMT::LayerInfo args(fdata, findex);
@@ -377,6 +382,124 @@ public:
         delete file;
     }
 };
+
+TEST_F(CreateSnapshotTest, create_snapshot_twice_preserves_delta_chain) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+    create_file_rw("/tmp/overlaybd/data2.lsmt", "/tmp/overlaybd/index2.lsmt");
+
+    ImageFile* image = imgservice->create_image_file(image_config_path.c_str(), "");
+    ASSERT_NE(image, nullptr);
+
+    ALIGNED_MEM4K(first, 4096);
+    ALIGNED_MEM4K(second, 4096);
+    ALIGNED_MEM4K(third, 4096);
+    ALIGNED_MEM4K(actual, 4096);
+    memset(first, 0x11, 4096);
+    memset(second, 0x22, 4096);
+    memset(third, 0x33, 4096);
+
+    ASSERT_EQ(PWRITEV_SINGLE(image, first, 4096, 0), 4096);
+    ASSERT_EQ(image->create_snapshot(new_image_config_path.c_str()), 0);
+
+    ASSERT_EQ(PWRITEV_SINGLE(image, second, 4096, 4096), 4096);
+    new_image_config_content = R"delimiter({
+    "lowers" : [
+        {
+            "file" : "/opt/overlaybd/baselayers/ext4_64"
+        },
+        {
+            "file" : "/tmp/overlaybd/data0.lsmt"
+        },
+        {
+            "file" : "/tmp/overlaybd/data1.lsmt"
+        }
+    ],
+    "upper": {
+        "index": "/tmp/overlaybd/index2.lsmt",
+        "data": "/tmp/overlaybd/data2.lsmt"
+    }
+})delimiter";
+    ASSERT_EQ(system(("echo '" + new_image_config_content + "' > " + new_image_config_path).c_str()), 0);
+    ASSERT_EQ(image->create_snapshot(new_image_config_path.c_str()), 0);
+
+    ASSERT_EQ(PWRITEV_SINGLE(image, third, 4096, 8192), 4096);
+    ASSERT_EQ(PREADV_SINGLE(image, actual, 4096, 0), 4096);
+    EXPECT_EQ(memcmp(actual, first, 4096), 0);
+    ASSERT_EQ(PREADV_SINGLE(image, actual, 4096, 4096), 4096);
+    EXPECT_EQ(memcmp(actual, second, 4096), 0);
+    ASSERT_EQ(PREADV_SINGLE(image, actual, 4096, 8192), 4096);
+    EXPECT_EQ(memcmp(actual, third, 4096), 0);
+
+    ImageFile* reopened = imgservice->create_image_file(image_config_path.c_str(), "");
+    ASSERT_NE(reopened, nullptr);
+    ASSERT_EQ(PREADV_SINGLE(reopened, actual, 4096, 0), 4096);
+    EXPECT_EQ(memcmp(actual, first, 4096), 0);
+    ASSERT_EQ(PREADV_SINGLE(reopened, actual, 4096, 4096), 4096);
+    EXPECT_EQ(memcmp(actual, second, 4096), 0);
+    ASSERT_EQ(PREADV_SINGLE(reopened, actual, 4096, 8192), 4096);
+    EXPECT_EQ(memcmp(actual, third, 4096), 0);
+
+    delete reopened;
+    delete image;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_idempotent_retry) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+
+    ImageFile* image = imgservice->create_image_file(image_config_path.c_str(), "");
+    ASSERT_NE(image, nullptr);
+
+    ALIGNED_MEM4K(buf, 4096);
+    memset(buf, 0xab, 4096);
+    ASSERT_EQ(PWRITEV_SINGLE(image, buf, 4096, 0), 4096);
+    ASSERT_EQ(image->create_snapshot(new_image_config_path.c_str()), 0);
+
+    // Replay the same next-config after success (lost-response retry).
+    ASSERT_EQ(system(("echo '" + new_image_config_content + "' > " + new_image_config_path).c_str()), 0);
+    ASSERT_EQ(image->create_snapshot(new_image_config_path.c_str()), 0);
+
+    ALIGNED_MEM4K(actual, 4096);
+    ASSERT_EQ(PREADV_SINGLE(image, actual, 4096, 0), 4096);
+    EXPECT_EQ(memcmp(actual, buf, 4096), 0);
+    delete image;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_rejects_lower_reordering) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+
+    ImageFile* image = imgservice->create_image_file(image_config_path.c_str(), "");
+    ASSERT_NE(image, nullptr);
+
+    std::string bad = R"delimiter({
+    "lowers" : [
+        {
+            "file" : "/tmp/overlaybd/data0.lsmt"
+        },
+        {
+            "file" : "/opt/overlaybd/baselayers/ext4_64"
+        }
+    ],
+    "upper": {
+        "index": "/tmp/overlaybd/index1.lsmt",
+        "data": "/tmp/overlaybd/data1.lsmt"
+    }
+})delimiter";
+    ASSERT_EQ(system(("echo '" + bad + "' > " + new_image_config_path).c_str()), 0);
+    EXPECT_EQ(image->create_snapshot(new_image_config_path.c_str()), -1);
+    delete image;
+}
+
+TEST_F(HTTPServerTest, rejects_duplicate_query_params) {
+    ImageFile* imgfile = imgservice->create_image_file(image_config_path.c_str(), "123");
+    EXPECT_NE(imgfile, nullptr);
+    EXPECT_EQ(request_snapshot(
+                  "http://localhost:9862/snapshot?dev_id=123&dev_id=456&config=/tmp/overlaybd/config.json"),
+              400);
+    delete imgfile;
+}
 
 TEST_F(CreateSnapshotTest, create_snapshot) {
     // imagefile0->pwrite( buf, 0, 1MB)

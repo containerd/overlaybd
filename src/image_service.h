@@ -22,6 +22,7 @@
 #include "overlaybd/cache/gzip_cache/cached_fs.h"
 #include <photon/fs/filesystem.h>
 #include <photon/common/io-alloc.h>
+#include <photon/thread/thread11.h>
 #include <unordered_map>
 
 using namespace photon::fs;
@@ -62,6 +63,9 @@ public:
     int register_image_file(const std::string& dev_id, ImageFile* file);
     int unregister_image_file(const std::string& dev_id);
     ImageFile* find_image_file(const std::string& dev_id);
+    // Holds the device registry lock for the duration of the restack so the
+    // ImageFile* cannot be unregistered/freed mid-call.
+    int create_snapshot_for_device(const std::string& dev_id, const char *config_path);
 
 
     ImageConfigNS::GlobalConfig global_conf;
@@ -76,6 +80,7 @@ private:
     void set_result_file(std::string &filename, std::string &data);
     std::string m_config_path;
     std::unordered_map<std::string, ImageFile*> m_image_files; // dev_id -> ImageFile*
+    photon::rwlock m_files_lock;
 };
 
 ImageService *create_image_service(const char *config_path = nullptr);

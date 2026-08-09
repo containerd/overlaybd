@@ -549,44 +549,222 @@ void ImageFile::set_auth_failed() {
     }
 }
 
-template <typename... Ts>
-void ImageFile::set_failed(const Ts &...xs) {
-    if (m_status == 0) // only set exit in image boot phase
-    {
-        m_status = -1;
-        m_exception = estring().appends(xs...);
+bool ImageFile::layer_config_match(ImageConfigNS::LayerConfig &a,
+                                   ImageConfigNS::LayerConfig &b) {
+    return a.gzipIndex() == b.gzipIndex() && a.file() == b.file() &&
+           a.targetFile() == b.targetFile() && a.dir() == b.dir() &&
+           a.digest() == b.digest() && a.targetDigest() == b.targetDigest() &&
+           a.size() == b.size();
+}
+
+bool ImageFile::configs_match(ImageConfigNS::ImageConfig &a,
+                              ImageConfigNS::ImageConfig &b) {
+    auto a_lowers = a.lowers();
+    auto b_lowers = b.lowers();
+    if (a_lowers.size() != b_lowers.size())
+        return false;
+    for (size_t i = 0; i < a_lowers.size(); ++i) {
+        if (!layer_config_match(a_lowers[i], b_lowers[i]))
+            return false;
     }
+    return a.upper().index() == b.upper().index() && a.upper().data() == b.upper().data();
+}
+
+int ImageFile::read_text_file(const std::string &path, std::string &out) {
+    int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0)
+        return -1;
+    DEFER(::close(fd));
+    out.clear();
+    char buf[4096];
+    for (;;) {
+        ssize_t n = ::read(fd, buf, sizeof(buf));
+        if (n < 0)
+            return -1;
+        if (n == 0)
+            break;
+        out.append(buf, n);
+    }
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r'))
+        out.pop_back();
+    return 0;
+}
+
+int ImageFile::write_text_file_fsync(const std::string &path, const std::string &data) {
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0)
+        return -1;
+    size_t off = 0;
+    while (off < data.size()) {
+        ssize_t n = ::write(fd, data.data() + off, data.size() - off);
+        if (n < 0) {
+            ::close(fd);
+            return -1;
+        }
+        off += (size_t)n;
+    }
+    if (::fsync(fd) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    ::close(fd);
+
+    // Fsync the parent directory so the create/replace is durable.
+    auto slash = path.find_last_of('/');
+    std::string dir = (slash == std::string::npos) ? "." : path.substr(0, slash);
+    int dfd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    if (dfd >= 0) {
+        ::fsync(dfd);
+        ::close(dfd);
+    }
+    return 0;
+}
+
+int ImageFile::install_canonical_config(const std::string &src_path) {
+    auto lfs = photon::fs::new_localfs_adaptor();
+    if (lfs == nullptr)
+        return -1;
+    DEFER(delete lfs);
+    std::string tmp = config_path + ".restack.tmp";
+    // Copy intent bytes to a same-dir temp then rename over canonical config.
+    std::string bytes;
+    if (read_text_file(src_path, bytes) != 0)
+        return -1;
+    if (write_text_file_fsync(tmp, bytes) != 0) {
+        unlink(tmp.c_str());
+        return -1;
+    }
+    if (lfs->rename(tmp.c_str(), config_path.c_str()) != 0) {
+        unlink(tmp.c_str());
+        return -1;
+    }
+    return 0;
 }
 
 int ImageFile::create_snapshot(const char *new_config_path) {
     // load new config file to get the snapshot layer path
     // open new upper layer
     // restack() current RW layer as snapshot layer
+    photon::scoped_rwlock lock(m_io_lock, photon::WLOCK);
+
     if(!m_lower_file || !m_upper_file)
         LOG_ERROR_RETURN(0, -1, "Lower or upper layer is NULL.");
+
+    const std::string intent_path = config_path + ".restack.intent";
+    const std::string phase_path = config_path + ".restack.phase";
+
+    // Finish a previously mutated restack whose canonical config publish may
+    // have been interrupted (lost response / crash after restack).
+    {
+        std::string phase;
+        if (read_text_file(phase_path, phase) == 0 && phase == "mutated") {
+            ImageConfigNS::ImageConfig intent_cfg;
+            if (!intent_cfg.ParseJSON(intent_path.c_str())) {
+                LOG_ERROR_RETURN(0, -1,
+                                 "Restack journal is mutated but intent config is unreadable; "
+                                 "refusing further restacks until repaired.");
+            }
+            if (configs_match(conf, intent_cfg)) {
+                if (install_canonical_config(intent_path) != 0) {
+                    LOG_ERROR_RETURN(0, -1, "Failed to finish restack journal publish.");
+                }
+                unlink(phase_path.c_str());
+                unlink(intent_path.c_str());
+                return 0;
+            }
+            LOG_ERROR_RETURN(0, -1,
+                             "Restack journal is mutated but live config does not match intent; "
+                             "refusing a second restack.");
+        }
+        // Pre-mutation intent is safe to discard before starting a new attempt.
+        if (phase == "prepared") {
+            unlink(phase_path.c_str());
+            unlink(intent_path.c_str());
+        }
+    }
 
     ImageConfigNS::ImageConfig new_cfg;
     LSMT::IFileRW *upper_file = nullptr;
 
-    LOG_INFO("Load new config `.", new_config_path);
+    LOG_INFO("Load new config for restack.");
     if (!new_cfg.ParseJSON(new_config_path)) {
-        LOG_ERROR_RETURN(0, -1, "Error parse new config json: `.", new_config_path);
+        LOG_ERROR_RETURN(0, -1, "Error parse new config json.");
+    }
+
+    // Idempotent retry: canonical stack already matches the requested next config.
+    if (configs_match(conf, new_cfg)) {
+        LOG_INFO("Restack request already applied; returning success.");
+        unlink(phase_path.c_str());
+        unlink(intent_path.c_str());
+        return 0;
+    }
+
+    auto current_lowers = conf.lowers();
+    auto new_lowers = new_cfg.lowers();
+    if (new_lowers.size() != current_lowers.size() + 1) {
+        LOG_ERROR_RETURN(0, -1,
+                         "The new config must preserve all current lowers and append the current upper (current: `, new: `).",
+                         current_lowers.size(), new_lowers.size());
+    }
+    for (size_t i = 0; i < current_lowers.size(); ++i) {
+        auto &current = current_lowers[i];
+        auto &next = new_lowers[i];
+        if (next.gzipIndex() != current.gzipIndex() || next.file() != current.file() ||
+            next.targetFile() != current.targetFile() || next.dir() != current.dir() ||
+            next.digest() != current.digest() || next.targetDigest() != current.targetDigest() ||
+            next.size() != current.size()) {
+            LOG_ERROR_RETURN(0, -1, "The new config changes existing lower layer `.", i);
+        }
+    }
+
+    auto current_upper = conf.upper();
+    auto &snapshot_lower = new_lowers.back();
+    if (snapshot_lower.file() != current_upper.data() || !snapshot_lower.gzipIndex().empty() ||
+        !snapshot_lower.targetFile().empty() || !snapshot_lower.dir().empty() ||
+        !snapshot_lower.digest().empty() || !snapshot_lower.targetDigest().empty() ||
+        snapshot_lower.size() != 0) {
+        LOG_ERROR_RETURN(0, -1,
+                         "The newest lower must reference only the current upper data file.");
     }
 
     auto upper = new_cfg.upper();
-    // auto lowers = new_cfg.lowers();
-    // if(lowers[lowers.size()-1].file() != conf.upper().data())
-    //     LOG_ERROR_RETURN(0, -1, "The last lower layer(`) should be the same as old upper layer(`) after restack.", lowers[lowers.size()-1].file(), conf.upper().data());
     if(upper.index() == conf.upper().index() || upper.data() == conf.upper().data())
-        LOG_ERROR_RETURN(0, -1, "The new upper layer(`, `) should be different from the old upper layer(`, `).", upper.data(), upper.index(), conf.upper().data(), conf.upper().index());
+        LOG_ERROR_RETURN(0, -1, "The new upper layer should be different from the old upper layer.");
+
+    // Persist intent before mutating the live device so a lost response can
+    // distinguish pre-mutation retry from post-mutation repair.
+    std::string new_cfg_bytes;
+    if (read_text_file(new_config_path, new_cfg_bytes) != 0) {
+        LOG_ERROR_RETURN(0, -1, "Failed to read next config for restack intent.");
+    }
+    if (write_text_file_fsync(intent_path, new_cfg_bytes) != 0 ||
+        write_text_file_fsync(phase_path, "prepared") != 0) {
+        unlink(intent_path.c_str());
+        unlink(phase_path.c_str());
+        LOG_ERROR_RETURN(0, -1, "Failed to persist restack intent.");
+    }
 
     upper_file = open_upper(upper);
-    if (!upper_file)
+    if (!upper_file) {
+        unlink(intent_path.c_str());
+        unlink(phase_path.c_str());
         LOG_ERROR_RETURN(0, -1, "Open upper layer failed.");
-    
-    if(((LSMT::IFileRW *)m_file)->restack(upper_file) != 0)
+    }
+
+    if(((LSMT::IFileRW *)m_file)->restack(upper_file) != 0) {
+        delete upper_file;
+        unlink(intent_path.c_str());
+        unlink(phase_path.c_str());
         LOG_ERRNO_RETURN(0, -1, "Restack new rwlayer failed.");
-    
+    }
+
+    // Mutation applied: further failure must not restack again.
+    if (write_text_file_fsync(phase_path, "mutated") != 0) {
+        LOG_ERROR_RETURN(0, -1,
+                         "Restack succeeded but failed to mark journal mutated; "
+                         "refusing further restacks until repaired.");
+    }
+
     if(m_upper_file) {
         // transfer the sealed layer from m_upper_file to m_lower_file before m_upper_file is destructed
         auto sealed = ((LSMT::IFileRW *)m_upper_file)->get_file(0);
@@ -603,22 +781,34 @@ int ImageFile::create_snapshot(const char *new_config_path) {
 
     m_upper_file = upper_file;
 
-    // overwrite the config file in use in case the old files are used again after the process restarts
-    auto lfs = photon::fs::new_localfs_adaptor();
-    if (lfs == nullptr) {
-        LOG_ERRNO_RETURN(0, -1, "new localfs_adaptor failed");
+    // Prefer installing from the durable intent so retries use identical bytes.
+    if (install_canonical_config(intent_path) != 0) {
+        // Fall back to the caller-provided next config path if still present.
+        auto lfs = photon::fs::new_localfs_adaptor();
+        if (lfs == nullptr) {
+            LOG_ERROR_RETURN(0, -1,
+                             "Restack mutated but failed to publish canonical config; "
+                             "refusing further restacks until repaired.");
+        }
+        DEFER(delete lfs);
+        if (lfs->rename(new_config_path, this->config_path.c_str()) != 0) {
+            LOG_ERROR_RETURN(0, -1,
+                             "Restack mutated but failed to publish canonical config; "
+                             "refusing further restacks until repaired.");
+        }
     }
-    DEFER(delete lfs);
-    int ret = lfs->rename(new_config_path, this->config_path.c_str());
-    if (ret != 0) {
-        LOG_ERRNO_RETURN(0, -1, "rename(`,`) failed", new_config_path, this->config_path);
-    }
-    LOG_INFO("rename(`,`) success", new_config_path, this->config_path);
-    
+
+    conf.CopyFrom(new_cfg, conf.GetAllocator());
+    unlink(phase_path.c_str());
+    unlink(intent_path.c_str());
+    // Caller next-config may still exist if install used intent; remove if leftover.
+    unlink(new_config_path);
+
     return 0;
 }
 
 int ImageFile::resize(uint64_t target_size, bool resize_fs) {
+    photon::scoped_rwlock lock(m_io_lock, photon::WLOCK);
     if (read_only) {
         LOG_ERROR_RETURN(EROFS, -1, "cannot resize a read-only image (no upper layer)");
     }
