@@ -1392,9 +1392,9 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
                          pht->index_size + 0, MAX_LSMT_INDEX_SIZE);
 
     if (trailer) {
-    index_bytes = pht->index_size * sizeof(SegmentMapping);
-    if (index_bytes > trailer_offset - pht->index_offset)
-        LOG_ERROR_RETURN(0, nullptr, "invalid index bytes or size");
+        index_bytes = pht->index_size * sizeof(SegmentMapping);
+        if (index_bytes > trailer_offset - pht->index_offset)
+            LOG_ERROR_RETURN(0, nullptr, "invalid index bytes or size");
     }
 
     SegmentMapping *ibuf = nullptr;
