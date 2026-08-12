@@ -104,9 +104,6 @@ public:
 
         } else if (m_mode == Mode::Replay) {
             m_replay_stopped = true;
-            if (m_reload_thread) {
-                photon::thread_shutdown((photon::thread *)m_reload_thread);
-            }
             if (m_replay_thread) {
                 for (auto th : m_replay_threads) {
                     if (th) {
@@ -114,6 +111,7 @@ public:
                     }
                 }
                 photon::thread_join(m_replay_thread);
+                m_replay_thread = nullptr;
             }
         }
 
@@ -136,13 +134,12 @@ public:
     }
 
     void do_replay() {
-        if (m_reload_thread != nullptr) {
-            photon::thread_join(m_reload_thread); // waiting for trace generation.
-            m_reload_thread = nullptr;
-        }
         struct timeval start;
         gettimeofday(&start, NULL);
         auto records = m_replay_queue.size();
+        if (records == 0) {
+            return;
+        }
         LOG_INFO("Prefetch: Replay ` records from ` layers, concurrency `",
                  m_replay_queue.size(), m_src_files.size(), m_concurrency);
         for (int i = 0; i < m_concurrency; ++i) {
@@ -164,7 +161,7 @@ public:
         if (m_mode != Mode::Replay) {
             return -1;
         }
-        if (m_reload_thread == nullptr && (m_replay_queue.empty() || m_src_files.empty())) {
+        if (m_replay_queue.empty() || m_src_files.empty()) {
             return 0;
         }
         auto th = photon::thread_create11(&PrefetcherImpl::do_replay, this);
@@ -222,7 +219,6 @@ public:
     vector<photon::join_handle *> m_replay_threads;
     photon::join_handle *m_replay_thread = nullptr;
     photon::join_handle *m_detect_thread = nullptr;
-    photon::join_handle *m_reload_thread = nullptr;
     bool m_detect_thread_interruptible = false;
     string m_lock_file_path;
     string m_ok_file_path;
@@ -348,13 +344,23 @@ public:
 
     const size_t MAX_FILE_SIZE = 65536;
     std::string m_prefetch_list = "";
-    std::string fstype = "ext4";
     vector<string> files;
 
      DynamicPrefetcher(const std::string &prefetch_list, int concurrency) :
         PrefetcherImpl(concurrency), m_prefetch_list(prefetch_list)
     {
         reload();
+    }
+
+    ~DynamicPrefetcher() {
+        // We have to stop replay thread within ~DynamicPrefetcher(). If we delay it
+        // to parent class's destructor, something like PrefetcherImpl->generate_trace()
+        // will cause crash.
+        m_replay_stopped = true;
+        if (m_replay_thread) {
+            photon::thread_join(m_replay_thread);
+            m_replay_thread = nullptr;
+        }
     }
 
     IFile *new_prefetch_file(IFile *src_file, uint32_t layer_index) override {
@@ -438,6 +444,9 @@ public:
         }
         uint64_t count = ((size+ LSMT::ALIGNMENT - 1) / LSMT::ALIGNMENT) * LSMT::ALIGNMENT;
         for (uint32_t i = 0; i < fie.fm_mapped_extents; i++) {
+            if (m_replay_stopped) {
+                return 0;
+            }
             LOG_DEBUG("get segment: ` `", fie.fm_extents[i].fe_physical, fie.fm_extents[i].fe_length);
             TraceFormat raw_tf = {
                 .op = TraceOp::READ,
@@ -466,23 +475,27 @@ public:
     }
 
 
-    int generate_trace(const IFile *imagefile) {
+    int generate_trace() {
         photon::fs::IFileSystem *fs;
 
-        if (fstype == "erofs")
-            fs = create_erofs_fs(const_cast<IFile*>(imagefile), 4096);
-        else
-            fs = new_extfs(const_cast<IFile*>(imagefile), true);
+        if (is_erofs_fs(m_src_files[0])) {
+            fs = create_erofs_fs(m_src_files[0], 4096);
+            LOG_INFO("prefetch on erofs");
+        } else {
+            fs = new_extfs(m_src_files[0], true);
+            LOG_INFO("prefetch on ext4");
+        }
 
         if (fs == nullptr) {
             LOG_ERROR_RETURN(0, -1, "unrecognized filesystem in dynamic prefetcher");
         }
 
-        register_src_file(0, const_cast<IFile*>(imagefile));
-
         LOG_INFO("get file extents from overlaybd");
         // TODO: parallel get file extents via target_file->fiemap
         for (auto entry : files) {
+            if (m_replay_stopped) {
+                return 0;
+            }
             vector<string> items;
             if (entry.back() == '/' || entry.back()=='*') {
                 listdir(fs, entry, items);
@@ -490,6 +503,9 @@ public:
                 items.push_back(entry);
             }
             for (auto fn : items) {
+                if (m_replay_stopped) {
+                    return 0;
+                }
                 if (get_extents(fs, fn)!=0) {
                     LOG_WARN("get extents failed: `", fn);
                     continue;
@@ -500,16 +516,15 @@ public:
         return 0;
     }
 
-    virtual int replay(const IFile *imagefile) override {
+    void do_replay() {
+        generate_trace();
+        PrefetcherImpl::do_replay();
+    }
 
-		if (is_erofs_fs(imagefile))
-			fstype = "erofs";
-		else
-			fstype = "ext4";
-		LOG_DEBUG("get fstype `", fstype);
-        auto th = photon::thread_create11(&DynamicPrefetcher::generate_trace, this, imagefile);
-        m_reload_thread = photon::thread_enable_join(th);
-        return PrefetcherImpl::replay(nullptr);
+    virtual int replay(const IFile *imagefile) override {
+        register_src_file(0, const_cast<IFile*>(imagefile));
+        m_replay_thread = photon::thread_enable_join(photon::thread_create11(&DynamicPrefetcher::do_replay, this));
+        return 0;
     }
 };
 
