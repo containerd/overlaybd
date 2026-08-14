@@ -49,6 +49,7 @@ int main(int argc, char **argv) {
     uint64_t vsize;
     string parent_uuid;
     bool sparse = false;
+    bool hybrid = false;
     std::string data_file_path, index_file_path, warp_index_path;
     bool build_turboOCI = false;
     bool build_fastoci = false;
@@ -59,6 +60,7 @@ int main(int argc, char **argv) {
     CLI::App app{"this is overlaybd-create"};
     app.add_option("-u", parent_uuid, "parent uuid");
     app.add_flag("-s", sparse, "create sparse RW layer")->default_val(false);
+    app.add_flag("--hybrid", hybrid, "create hybrid RW layer")->default_val(false);
     app.add_flag("--turboOCI", build_turboOCI, "commit using turboOCI format")->default_val(false);
     app.add_flag("--fastoci", build_fastoci, "commit using turboOCI format(depracated)")->default_val(false);
     app.add_flag("--raw", raw, "create raw image")->default_val(false);
@@ -68,6 +70,11 @@ int main(int argc, char **argv) {
     app.add_option("vsize", vsize, "virtual size(GB)")->type_name("INT")->check(CLI::NonNegativeNumber)->required();
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
     CLI11_PARSE(app, argc, argv);
+
+    if (sparse && hybrid) {
+        fprintf(stderr, "-s and --hybrid cannot be used together\n");
+        return -1;
+    }
 
     build_turboOCI = build_turboOCI || build_fastoci;
 
@@ -93,7 +100,8 @@ int main(int argc, char **argv) {
         LSMT::LayerInfo args(fdata, findex);
         args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
         args.virtual_size = vsize;
-        args.sparse_rw = sparse;
+        args.rw_type = sparse ? LSMT::RWType::Sparse
+                              : (hybrid ? LSMT::RWType::Hybrid : LSMT::RWType::Append);
         file = LSMT::create_file_rw(args, false);
     }
 

@@ -406,6 +406,13 @@ TEST_F(FileTest, create_open_sp) {
     delete file2;
 }
 
+TEST_F(FileTest, create_open_hybrid) {
+    auto file1 = create_file_rw(/*sparse = */ false, /*hybrid = */ true);
+    delete file1;
+    auto file2 = open_file_rw();
+    delete file2;
+}
+
 class FileTest1 : public FileTest {
 public:
     virtual void SetUp() override {
@@ -428,7 +435,7 @@ TEST_F(FileTest2, sparse_rw) {
     }
     LayerInfo args;
     args.fdata = file;
-    args.sparse_rw = true;
+    args.rw_type = RWType::Sparse;
     args.virtual_size = 64 << 20;
     auto layer = ::create_file_rw(args, true);
     char raw_data[65536];

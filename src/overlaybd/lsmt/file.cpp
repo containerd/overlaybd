@@ -84,6 +84,7 @@ struct HeaderTrailer {
     static const uint32_t FLAG_SHIFT_TYPE = 1;   // 1:data file,     0:index file
     static const uint32_t FLAG_SHIFT_SEALED = 2; // 1:YES,           0:NO
     static const uint32_t FLAG_SPARSE_RW = 4;    // 1:sparse file    0:normal file
+    static const uint32_t FLAG_HYBRID_RW = 5;    // 1:hybrid rw      0:append rw
 
     uint32_t get_flag_bit(uint32_t shift) const {
         return flags & (1 << shift);
@@ -111,6 +112,9 @@ struct HeaderTrailer {
     }
     bool is_sparse_rw() const {
         return get_flag_bit(FLAG_SPARSE_RW);
+    }
+    bool is_hybrid_rw() const {
+        return get_flag_bit(FLAG_HYBRID_RW);
     }
 
     void set_header() {
@@ -141,6 +145,12 @@ struct HeaderTrailer {
     }
     void clr_sparse_rw() {
         clr_flag_bit(FLAG_SPARSE_RW);
+    }
+    void set_hybrid_rw() {
+        set_flag_bit(FLAG_HYBRID_RW);
+    }
+    void clr_hybrid_rw() {
+        clr_flag_bit(FLAG_HYBRID_RW);
     }
 
     int set_tag(char *buf, size_t n) {
@@ -203,10 +213,14 @@ static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, boo
         pht->set_data_file();
     else
         pht->set_index_file();
-    if (args.sparse_rw)
+    if (args.rw_type == RWType::Sparse)
         pht->set_sparse_rw();
     else
         pht->clr_sparse_rw();
+    if (args.rw_type == RWType::Hybrid)
+        pht->set_hybrid_rw();
+    else
+        pht->clr_hybrid_rw();
 
     pht->index_offset = index_offset;
     pht->index_size = index_size;
@@ -345,7 +359,8 @@ static int load_layer_info(IFile **src_files, size_t n, LayerInfo &layer, bool o
     }
     HeaderTrailer *pht = (HeaderTrailer *)buf_top;
     layer.virtual_size = pht->virtual_size;
-    layer.sparse_rw = pht->is_sparse_rw();
+    layer.rw_type = pht->is_sparse_rw() ? RWType::Sparse
+                                        : (pht->is_hybrid_rw() ? RWType::Hybrid : RWType::Append);
     if (n != 1) {
         ALIGNED_MEM(buf_bottom, HeaderTrailer::SPACE, ALIGNMENT4K);
         //
@@ -384,7 +399,7 @@ static int compact(const CompactOptions &opt, atomic_uint64_t &compacted_idx_siz
     LayerInfo layer;
     if (load_layer_info(src_files, opt.n, layer) != 0)
         return -1;
-    layer.sparse_rw = false;
+    layer.rw_type = RWType::Append;
     layer.user_tag = commit_args->user_tag;
     layer.uuid.clear();
     if (UUID::String::is_valid((commit_args->uuid).c_str())) {
@@ -1465,6 +1480,9 @@ IFileRO *open_file_ro(IFile *file, bool ownership) {
 IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
     ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
     auto pht = verify_ht(fdata, buf);
+    if (pht && pht->is_sparse_rw() && pht->is_hybrid_rw()) {
+        LOG_ERROR_RETURN(EINVAL, nullptr, "invalid writable layer type flags");
+    }
     if ((pht == nullptr) || ((pht->is_sparse_rw() == false) && (!findex))) {
         LOG_ERRNO_RETURN(0, nullptr, "invalid file ptr, fdata: ` findex: `", fdata, findex);
     }
@@ -1501,7 +1519,7 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
     }
     LSMTFile *rst = nullptr;
     if (pht->is_sparse_rw() == false) {
-        LOG_INFO("create LSMTFile object (append-only)");
+        LOG_INFO("create LSMTFile object (hybrid_rw: `)", pht->is_hybrid_rw());
         rst = new LSMTFile;
     } else {
         LOG_INFO("create LSMTSparseFile object");
@@ -1515,20 +1533,25 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
     UUID raw;
     raw.parse(pht->uuid);
     rst->m_uuid.push_back(raw);
-    LOG_INFO("Layer Info: { UUID:` , Parent_UUID: `, SparseRW: `, Virtual size: `, Version: `.` }",
-             pht->uuid, pht->parent_uuid, pht->is_sparse_rw(), rst->m_vsize, pht->version,
-             pht->sub_version);
+    LOG_INFO("Layer Info: { UUID:` , Parent_UUID: `, SparseRW: `, HybridRW: `, Virtual size: `, Version: `.` }",
+             pht->uuid, pht->parent_uuid, pht->is_sparse_rw(), pht->is_hybrid_rw(), rst->m_vsize,
+             pht->version, pht->sub_version);
     return rst;
 }
 
 IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
     auto fdata = args.fdata;
     auto findex = args.findex;
-    if ((args.sparse_rw == false) && (!fdata || !findex)) {
+    if (args.rw_type != RWType::Append && args.rw_type != RWType::Hybrid &&
+        args.rw_type != RWType::Sparse) {
+        LOG_ERROR_RETURN(EINVAL, nullptr, "invalid writable layer type: `",
+                         static_cast<uint8_t>(args.rw_type));
+    }
+    if ((args.rw_type != RWType::Sparse) && (!fdata || !findex)) {
         LOG_ERROR_RETURN(0, nullptr, "invalid file ptr, fdata: `, findex: `", fdata, findex);
     }
     LSMTFile *rst = nullptr;
-    if (args.sparse_rw == false) {
+    if (args.rw_type != RWType::Sparse) {
         rst = new LSMTFile;
     } else {
         rst = new LSMTSparseFile;
@@ -1544,14 +1567,15 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
     rst->m_vsize = args.virtual_size;
     rst->m_file_ownership = ownership;
     write_header_trailer(fdata, true, false, true, 0, 0, args);
-    if (!args.sparse_rw) {
+    if (args.rw_type != RWType::Sparse) {
         write_header_trailer(findex, true, false, false, HeaderTrailer::SPACE, 0, args);
     }
     HeaderTrailer tmp;
     // args.parent_uuid.to_string(parent_uuid, UUID::String::LEN);
-    LOG_INFO("Layer Info: { UUID:`, Parent_UUID: `, Sparse: ` Virtual size: `, Version: `.` }", raw,
-             args.parent_uuid, args.sparse_rw, rst->m_vsize, tmp.version, tmp.sub_version);
-    if (args.sparse_rw) {
+    LOG_INFO("Layer Info: { UUID:`, Parent_UUID: `, RWType: ` Virtual size: `, Version: `.` }", raw,
+             args.parent_uuid, static_cast<uint8_t>(args.rw_type), rst->m_vsize, tmp.version,
+             tmp.sub_version);
+    if (args.rw_type == RWType::Sparse) {
         fdata->ftruncate(args.virtual_size + HeaderTrailer::SPACE);
     }
     return rst;
@@ -1561,7 +1585,7 @@ IFileRW *create_warpfile(WarpFileArgs &args, bool ownership) {
     auto rst = new LSMTWarpFile();
     rst->m_findex = args.findex;
     LayerInfo info;
-    info.sparse_rw = false;
+    info.rw_type = RWType::Append;
     info.virtual_size = args.virtual_size;
     info.parent_uuid.parse(args.parent_uuid);
     info.uuid.parse(args.uuid);
