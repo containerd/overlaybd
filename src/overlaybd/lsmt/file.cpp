@@ -739,6 +739,7 @@ public:
     uint64_t m_data_offset = HeaderTrailer::SPACE / ALIGNMENT;
 
     uint8_t m_rw_tag = 0;
+    bool m_hybrid_rw = false;
 
     Mutex m_rw_mtx;
     IFile *m_findex = nullptr;
@@ -763,6 +764,11 @@ public:
             return m_files[m_rw_tag];
         }
         return nullptr;
+    }
+
+    IComboIndex *rw_index() const {
+        assert(m_index != nullptr);
+        return static_cast<IComboIndex *>(m_index);
     }
 
     virtual int vioctl(int request, va_list args) override {
@@ -862,26 +868,66 @@ public:
             offset += MAX_IO_SIZE;
         }
         // wait unlock
-        off_t moffset = -1;
         {
             Lock lock(m_rw_mtx);
-            moffset = append(m_files[m_rw_tag], buf, count);
-            if (moffset == 0)
-                return -1;
             m_vsize = max(m_vsize, count + offset);
             if (m_vsize < count + offset) {
                 LOG_INFO("resize m_visze: `->`", m_vsize, count + offset);
             }
-            SegmentMapping m{
-                (uint64_t)offset / (uint64_t)ALIGNMENT,
-                (uint32_t)count / (uint32_t)ALIGNMENT,
-                (uint64_t)moffset / (uint64_t)ALIGNMENT,
+            auto offset_in_blocks = (uint64_t)offset / ALIGNMENT;
+            auto count_in_blocks = (uint32_t)count / ALIGNMENT;
+            auto end_in_blocks = offset_in_blocks + count_in_blocks;
+            unique_ptr<IWritableLayerCursor> writable_layer_cursor;
+            if (m_hybrid_rw) {
+                writable_layer_cursor = rw_index()->writable_layer_cursor(
+                    {offset_in_blocks, count_in_blocks});
+            }
+
+            auto update_mapping = [&](SegmentMapping m, bool append_data) -> int {
+                auto data_offset = (m.offset - offset_in_blocks) * ALIGNMENT;
+                auto data_length = (size_t)m.length * ALIGNMENT;
+                if (!append_data) {
+                    if (m_files[m_rw_tag]->pwrite((const char *)buf + data_offset, data_length,
+                                                   m.moffset * ALIGNMENT) != (ssize_t)data_length) {
+                        LOG_ERRNO_RETURN(0, -1, "rewrite data failed");
+                    }
+                    return 0;
+                }
+
+                auto moffset = append(m_files[m_rw_tag], (const char *)buf + data_offset,
+                                      data_length);
+                if (moffset == 0)
+                    return -1;
+                m.moffset = (uint64_t)moffset / ALIGNMENT;
+                m_data_offset = max(m_data_offset, m.mend());
+                m.tag = m_rw_tag;
+                rw_index()->insert(m);
+                append_index(m);
+                return 0;
             };
-            m.tag = m_rw_tag;
-            assert(m.length > (uint32_t)0);
-            m_data_offset = m.mend();
-            static_cast<IMemoryIndex0 *>(m_index)->insert(m);
-            append_index(m);
+
+            uint64_t cursor = offset_in_blocks;
+            SegmentMapping m;
+            while (writable_layer_cursor && writable_layer_cursor->next(m)) {
+                if (cursor < m.offset) {
+                    SegmentMapping appended(cursor, (uint32_t)(m.offset - cursor), 0);
+                    if (update_mapping(appended, true) != 0)
+                        return -1;
+                }
+                if (m.zeroed) {
+                    SegmentMapping appended(m.offset, m.length, 0);
+                    if (update_mapping(appended, true) != 0)
+                        return -1;
+                } else if (update_mapping(m, false) != 0) {
+                    return -1;
+                }
+                cursor = m.end();
+            }
+            if (cursor < end_in_blocks) {
+                SegmentMapping appended(cursor, (uint32_t)(end_in_blocks - cursor), 0);
+                if (update_mapping(appended, true) != 0)
+                    return -1;
+            }
         }
 
         return bytes;
@@ -1080,6 +1126,7 @@ public:
         }
         LOG_DEBUG("m_files.size(): `, rw_tag: `", m_files.size(), m_rw_tag);
         m_findex = u->m_findex;
+        m_hybrid_rw = u->m_hybrid_rw;
         m_vsize = u->m_vsize;
         ((IComboIndex *)m_index)->commit_index0();
 
@@ -1526,6 +1573,7 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
         rst = new LSMTSparseFile;
     }
     rst->m_index = pi;
+    rst->m_hybrid_rw = pht->is_hybrid_rw();
     rst->m_findex = findex;
     rst->m_files.push_back(fdata);
     rst->m_vsize = pht->virtual_size;
@@ -1557,6 +1605,7 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
         rst = new LSMTSparseFile;
     }
     rst->m_index = create_memory_index0((const SegmentMapping *)nullptr, 0, 0, 0);
+    rst->m_hybrid_rw = args.rw_type == RWType::Hybrid;
     rst->m_findex = findex;
     rst->m_files.push_back(fdata);
     LOG_DEBUG("unparse uuid");
@@ -1906,6 +1955,7 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
         } else {
             rst = new LSMTSparseFile;
         }
+        rst->m_hybrid_rw = pht->is_hybrid_rw();
         // TODO: also for LSMTWarpFile
         if (u->m_vsize == 0) {
             if (u->update_vsize(l->m_vsize) < 0) {

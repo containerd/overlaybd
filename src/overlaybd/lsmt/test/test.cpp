@@ -413,6 +413,377 @@ TEST_F(FileTest, create_open_hybrid) {
     delete file2;
 }
 
+// Seed upper [0,64); rewrite [8,56) in place; then write [0,80), appending only [64,80).
+TEST_F(FileTest, hybrid_rw_reuses_upper_data) {
+    // All ranges below are expressed in ALIGNMENT-sized blocks.
+    constexpr size_t first_write_start = 0;
+    constexpr size_t first_write_size = 64;
+    constexpr size_t second_write_start = 8;
+    constexpr size_t second_write_size = 48;
+    constexpr size_t third_write_start = 0;
+    constexpr size_t third_write_size = 80;
+    ALIGNED_MEM4K(first, first_write_size * ALIGNMENT);
+    ALIGNED_MEM4K(second, second_write_size * ALIGNMENT);
+    ALIGNED_MEM4K(third, third_write_size * ALIGNMENT);
+    ALIGNED_MEM4K(readback, third_write_size * ALIGNMENT);
+    memset(first, 0x11, first_write_size * ALIGNMENT);
+    memset(second, 0x22, second_write_size * ALIGNMENT);
+    memset(third, 0x33, third_write_size * ALIGNMENT);
+
+    auto file = create_file_rw(/*sparse = */ false, /*hybrid = */ true);
+    ASSERT_EQ((ssize_t)(first_write_size * ALIGNMENT),
+              file->pwrite(first, first_write_size * ALIGNMENT, first_write_start * ALIGNMENT));
+    auto data_size = file_size(lfs, data_name.back().c_str());
+    auto index_size = file_size(lfs, idx_name.back().c_str());
+
+    // Second write is [8, 56): both sides of the first mapping must remain readable.
+    ASSERT_EQ((ssize_t)(second_write_size * ALIGNMENT),
+              file->pwrite(second, second_write_size * ALIGNMENT,
+                           second_write_start * ALIGNMENT));
+    EXPECT_EQ(data_size, file_size(lfs, data_name.back().c_str()));
+    EXPECT_EQ(index_size, file_size(lfs, idx_name.back().c_str()));
+    ASSERT_EQ((ssize_t)(first_write_size * ALIGNMENT),
+              file->pread(readback, first_write_size * ALIGNMENT, first_write_start * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(first, readback, second_write_start * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(second, readback + second_write_start * ALIGNMENT,
+                        second_write_size * ALIGNMENT));
+    EXPECT_EQ(0,
+              memcmp(first + (second_write_start + second_write_size) * ALIGNMENT,
+                     readback + (second_write_start + second_write_size) * ALIGNMENT,
+                     (first_write_size - second_write_start - second_write_size) * ALIGNMENT));
+
+    // Third write reuses [0, 64) and appends only the 16-block tail.
+    ASSERT_EQ((ssize_t)(third_write_size * ALIGNMENT),
+              file->pwrite(third, third_write_size * ALIGNMENT, third_write_start * ALIGNMENT));
+    EXPECT_EQ(data_size + (third_write_size - first_write_size) * ALIGNMENT,
+              file_size(lfs, data_name.back().c_str()));
+
+    ASSERT_EQ((ssize_t)(third_write_size * ALIGNMENT),
+              file->pread(readback, third_write_size * ALIGNMENT, third_write_start * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(third, readback, third_write_size * ALIGNMENT));
+    delete file;
+
+    auto reopened = open_file_rw();
+    ASSERT_EQ((ssize_t)(third_write_size * ALIGNMENT),
+              reopened->pread(readback, third_write_size * ALIGNMENT, third_write_start * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(third, readback, third_write_size * ALIGNMENT));
+    delete reopened;
+}
+
+// Seed upper [32,64); write [0,96): append [0,32) and [64,96), rewrite [32,64) in place.
+TEST_F(FileTest, hybrid_rw_reuses_trailing_upper_data) {
+    constexpr size_t initial_offset_in_blocks = 32;
+    constexpr size_t initial_block_count = 32;
+    constexpr size_t rewrite_block_count = 96;
+    ALIGNED_MEM4K(initial, initial_block_count * ALIGNMENT);
+    ALIGNED_MEM4K(rewrite, rewrite_block_count * ALIGNMENT);
+    ALIGNED_MEM4K(readback, rewrite_block_count * ALIGNMENT);
+    memset(initial, 0x11, initial_block_count * ALIGNMENT);
+    memset(rewrite, 0x22, rewrite_block_count * ALIGNMENT);
+
+    auto file = create_file_rw(/*sparse = */ false, /*hybrid = */ true);
+    ASSERT_EQ((ssize_t)(initial_block_count * ALIGNMENT),
+              file->pwrite(initial, initial_block_count * ALIGNMENT,
+                           initial_offset_in_blocks * ALIGNMENT));
+    auto data_size = file_size(lfs, data_name.back().c_str());
+
+    // [0, 32) and [64, 96) append; [32, 64) is rewritten in place.
+    ASSERT_EQ((ssize_t)(rewrite_block_count * ALIGNMENT),
+              file->pwrite(rewrite, rewrite_block_count * ALIGNMENT, 0));
+    EXPECT_EQ(data_size + (rewrite_block_count - initial_block_count) * ALIGNMENT,
+              file_size(lfs, data_name.back().c_str()));
+    ASSERT_EQ((ssize_t)(rewrite_block_count * ALIGNMENT),
+              file->pread(readback, rewrite_block_count * ALIGNMENT, 0));
+    EXPECT_EQ(0, memcmp(rewrite, readback, rewrite_block_count * ALIGNMENT));
+    delete file;
+
+    auto reopened = open_file_rw();
+    ASSERT_EQ((ssize_t)(rewrite_block_count * ALIGNMENT),
+              reopened->pread(readback, rewrite_block_count * ALIGNMENT, 0));
+    EXPECT_EQ(0, memcmp(rewrite, readback, rewrite_block_count * ALIGNMENT));
+    delete reopened;
+}
+
+// Seed upper [0,64) and [128,256); write [32,192): append only the middle hole [64,128).
+TEST_F(FileTest, hybrid_rw_reuses_two_upper_ranges_across_hole) {
+    constexpr size_t left_start = 0;
+    constexpr size_t left_size = 64;
+    constexpr size_t right_start = 128;
+    constexpr size_t right_size = 128;
+    constexpr size_t rewrite_start = 32;
+    constexpr size_t rewrite_size = 160;
+    constexpr size_t whole_range_size = right_start + right_size;
+    ALIGNED_MEM4K(left, left_size * ALIGNMENT);
+    ALIGNED_MEM4K(right, right_size * ALIGNMENT);
+    ALIGNED_MEM4K(rewrite, rewrite_size * ALIGNMENT);
+    ALIGNED_MEM4K(readback, whole_range_size * ALIGNMENT);
+    memset(left, 0x11, left_size * ALIGNMENT);
+    memset(right, 0x22, right_size * ALIGNMENT);
+    memset(rewrite, 0x33, rewrite_size * ALIGNMENT);
+
+    auto file = create_file_rw(/*sparse = */ false, /*hybrid = */ true);
+    ASSERT_EQ((ssize_t)(left_size * ALIGNMENT),
+              file->pwrite(left, left_size * ALIGNMENT, left_start * ALIGNMENT));
+    ASSERT_EQ((ssize_t)(right_size * ALIGNMENT),
+              file->pwrite(right, right_size * ALIGNMENT, right_start * ALIGNMENT));
+    auto data_size = file_size(lfs, data_name.back().c_str());
+    auto index_size = file_size(lfs, idx_name.back().c_str());
+
+    // Rewrite [32, 192): it reuses [32, 64) and [128, 192), and appends [64, 128).
+    ASSERT_EQ((ssize_t)(rewrite_size * ALIGNMENT),
+              file->pwrite(rewrite, rewrite_size * ALIGNMENT, rewrite_start * ALIGNMENT));
+    EXPECT_EQ(data_size + 64 * ALIGNMENT, file_size(lfs, data_name.back().c_str()));
+    EXPECT_EQ(index_size + sizeof(SegmentMapping), file_size(lfs, idx_name.back().c_str()));
+
+    ASSERT_EQ((ssize_t)(whole_range_size * ALIGNMENT),
+              file->pread(readback, whole_range_size * ALIGNMENT, 0));
+    EXPECT_EQ(0, memcmp(left, readback, rewrite_start * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(rewrite, readback + rewrite_start * ALIGNMENT,
+                        rewrite_size * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(right + (rewrite_start + rewrite_size - right_start) * ALIGNMENT,
+                        readback + (rewrite_start + rewrite_size) * ALIGNMENT,
+                        (whole_range_size - rewrite_start - rewrite_size) * ALIGNMENT));
+    delete file;
+
+    auto reopened = open_file_rw();
+    ASSERT_EQ((ssize_t)(whole_range_size * ALIGNMENT),
+              reopened->pread(readback, whole_range_size * ALIGNMENT, 0));
+    EXPECT_EQ(0, memcmp(left, readback, rewrite_start * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(rewrite, readback + rewrite_start * ALIGNMENT,
+                        rewrite_size * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(right + (rewrite_start + rewrite_size - right_start) * ALIGNMENT,
+                        readback + (rewrite_start + rewrite_size) * ALIGNMENT,
+                        (whole_range_size - rewrite_start - rewrite_size) * ALIGNMENT));
+    delete reopened;
+}
+
+// Seed upper data [0,64), then discard [64,128); write [32,160), appending former zeroed blocks.
+TEST_F(FileTest, hybrid_rw_appends_over_zeroed_upper_range) {
+    constexpr size_t data_size_in_blocks = 64;
+    constexpr size_t discard_start = 64;
+    constexpr size_t discard_size = 64;
+    constexpr size_t rewrite_start = 32;
+    constexpr size_t rewrite_size = 128;
+    constexpr size_t whole_range_size = 160;
+    ALIGNED_MEM4K(initial, data_size_in_blocks * ALIGNMENT);
+    ALIGNED_MEM4K(rewrite, rewrite_size * ALIGNMENT);
+    ALIGNED_MEM4K(readback, whole_range_size * ALIGNMENT);
+    memset(initial, 0x11, data_size_in_blocks * ALIGNMENT);
+    memset(rewrite, 0x22, rewrite_size * ALIGNMENT);
+
+    auto file = create_file_rw(/*sparse = */ false, /*hybrid = */ true);
+    ASSERT_EQ((ssize_t)(data_size_in_blocks * ALIGNMENT),
+              file->pwrite(initial, data_size_in_blocks * ALIGNMENT, 0));
+    ASSERT_EQ(0, file->fallocate(3, discard_start * ALIGNMENT, discard_size * ALIGNMENT));
+    auto data_size = file_size(lfs, data_name.back().c_str());
+
+    // [32,64) rewrites data, [64,128) replaces zeroed mappings, and [128,160) appends a hole.
+    ASSERT_EQ((ssize_t)(rewrite_size * ALIGNMENT),
+              file->pwrite(rewrite, rewrite_size * ALIGNMENT, rewrite_start * ALIGNMENT));
+    EXPECT_EQ(data_size + (discard_size + whole_range_size - (discard_start + discard_size)) * ALIGNMENT,
+              file_size(lfs, data_name.back().c_str()));
+    ASSERT_EQ((ssize_t)(whole_range_size * ALIGNMENT),
+              file->pread(readback, whole_range_size * ALIGNMENT, 0));
+    EXPECT_EQ(0, memcmp(initial, readback, rewrite_start * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(rewrite, readback + rewrite_start * ALIGNMENT,
+                        rewrite_size * ALIGNMENT));
+    delete file;
+
+    auto reopened = open_file_rw();
+    ASSERT_EQ((ssize_t)(whole_range_size * ALIGNMENT),
+              reopened->pread(readback, whole_range_size * ALIGNMENT, 0));
+    EXPECT_EQ(0, memcmp(initial, readback, rewrite_start * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(rewrite, readback + rewrite_start * ALIGNMENT,
+                        rewrite_size * ALIGNMENT));
+    delete reopened;
+}
+
+// Stack lower [64,128) with upper [0,64); write [0,128), appending instead of overwriting lower.
+TEST_F(FileTest, hybrid_rw_never_reuses_lower_range) {
+    constexpr size_t upper_size = 64;
+    constexpr size_t lower_start = 64;
+    constexpr size_t lower_size = 64;
+    constexpr size_t rewrite_size = 128;
+    ALIGNED_MEM4K(lower_data, lower_size * ALIGNMENT);
+    ALIGNED_MEM4K(upper_data, upper_size * ALIGNMENT);
+    ALIGNED_MEM4K(rewrite, rewrite_size * ALIGNMENT);
+    ALIGNED_MEM4K(readback, rewrite_size * ALIGNMENT);
+    memset(lower_data, 0x11, lower_size * ALIGNMENT);
+    memset(upper_data, 0x22, upper_size * ALIGNMENT);
+    memset(rewrite, 0x33, rewrite_size * ALIGNMENT);
+
+    auto lower_rw = create_file_rw();
+    ASSERT_EQ((ssize_t)(lower_size * ALIGNMENT),
+              lower_rw->pwrite(lower_data, lower_size * ALIGNMENT, lower_start * ALIGNMENT));
+    IFileRO *lower = nullptr;
+    ASSERT_EQ(0, lower_rw->close_seal(&lower));
+    delete lower_rw;
+
+    auto upper = create_file_rw(/*sparse = */ false, /*hybrid = */ true);
+    auto file = stack_files(upper, lower, /*ownership = */ true, /*check_order = */ false);
+    ASSERT_NE(nullptr, file);
+    ASSERT_EQ((ssize_t)(upper_size * ALIGNMENT), file->pwrite(upper_data, upper_size * ALIGNMENT, 0));
+    auto data_size = file_size(lfs, data_name.back().c_str());
+
+    ASSERT_EQ((ssize_t)(rewrite_size * ALIGNMENT), file->pwrite(rewrite, rewrite_size * ALIGNMENT, 0));
+    EXPECT_EQ(data_size + lower_size * ALIGNMENT, file_size(lfs, data_name.back().c_str()));
+    ASSERT_EQ((ssize_t)(rewrite_size * ALIGNMENT),
+              file->pread(readback, rewrite_size * ALIGNMENT, 0));
+    EXPECT_EQ(0, memcmp(rewrite, readback, rewrite_size * ALIGNMENT));
+    delete file;
+}
+
+// Seed upper [0,64), [128,192), and [256,320); write [32,288), appending both interior holes.
+TEST_F(FileTest, hybrid_rw_reuses_three_upper_ranges_across_two_holes) {
+    constexpr size_t range_size = 64;
+    constexpr size_t middle_start = 128;
+    constexpr size_t right_start = 256;
+    constexpr size_t rewrite_start = 32;
+    constexpr size_t rewrite_size = 256;
+    constexpr size_t whole_range_size = right_start + range_size;
+    ALIGNED_MEM4K(left, range_size * ALIGNMENT);
+    ALIGNED_MEM4K(middle, range_size * ALIGNMENT);
+    ALIGNED_MEM4K(right, range_size * ALIGNMENT);
+    ALIGNED_MEM4K(rewrite, rewrite_size * ALIGNMENT);
+    ALIGNED_MEM4K(readback, whole_range_size * ALIGNMENT);
+    memset(left, 0x11, range_size * ALIGNMENT);
+    memset(middle, 0x22, range_size * ALIGNMENT);
+    memset(right, 0x44, range_size * ALIGNMENT);
+    memset(rewrite, 0x33, rewrite_size * ALIGNMENT);
+
+    auto file = create_file_rw(/*sparse = */ false, /*hybrid = */ true);
+    ASSERT_EQ((ssize_t)(range_size * ALIGNMENT), file->pwrite(left, range_size * ALIGNMENT, 0));
+    ASSERT_EQ((ssize_t)(range_size * ALIGNMENT),
+              file->pwrite(middle, range_size * ALIGNMENT, middle_start * ALIGNMENT));
+    ASSERT_EQ((ssize_t)(range_size * ALIGNMENT),
+              file->pwrite(right, range_size * ALIGNMENT, right_start * ALIGNMENT));
+    auto data_size = file_size(lfs, data_name.back().c_str());
+
+    ASSERT_EQ((ssize_t)(rewrite_size * ALIGNMENT),
+              file->pwrite(rewrite, rewrite_size * ALIGNMENT, rewrite_start * ALIGNMENT));
+    EXPECT_EQ(data_size + 2 * range_size * ALIGNMENT, file_size(lfs, data_name.back().c_str()));
+    ASSERT_EQ((ssize_t)(whole_range_size * ALIGNMENT),
+              file->pread(readback, whole_range_size * ALIGNMENT, 0));
+    EXPECT_EQ(0, memcmp(left, readback, rewrite_start * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(rewrite, readback + rewrite_start * ALIGNMENT,
+                        rewrite_size * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(right + (rewrite_start + rewrite_size - right_start) * ALIGNMENT,
+                        readback + (rewrite_start + rewrite_size) * ALIGNMENT,
+                        (whole_range_size - rewrite_start - rewrite_size) * ALIGNMENT));
+    delete file;
+
+    auto reopened = open_file_rw();
+    ASSERT_EQ((ssize_t)(whole_range_size * ALIGNMENT),
+              reopened->pread(readback, whole_range_size * ALIGNMENT, 0));
+    EXPECT_EQ(0, memcmp(left, readback, rewrite_start * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(rewrite, readback + rewrite_start * ALIGNMENT,
+                        rewrite_size * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(right + (rewrite_start + rewrite_size - right_start) * ALIGNMENT,
+                        readback + (rewrite_start + rewrite_size) * ALIGNMENT,
+                        (whole_range_size - rewrite_start - rewrite_size) * ALIGNMENT));
+    delete reopened;
+}
+
+// Seed upper [32,96); rewrite exactly [32,96), requiring neither data nor index growth.
+TEST_F(FileTest, hybrid_rw_reuses_exact_upper_range) {
+    constexpr size_t write_start = 32;
+    constexpr size_t write_size = 64;
+    ALIGNED_MEM4K(initial, write_size * ALIGNMENT);
+    ALIGNED_MEM4K(rewrite, write_size * ALIGNMENT);
+    ALIGNED_MEM4K(readback, write_size * ALIGNMENT);
+    memset(initial, 0x11, write_size * ALIGNMENT);
+    memset(rewrite, 0x22, write_size * ALIGNMENT);
+
+    auto file = create_file_rw(/*sparse = */ false, /*hybrid = */ true);
+    ASSERT_EQ((ssize_t)(write_size * ALIGNMENT),
+              file->pwrite(initial, write_size * ALIGNMENT, write_start * ALIGNMENT));
+    auto data_size = file_size(lfs, data_name.back().c_str());
+    auto index_size = file_size(lfs, idx_name.back().c_str());
+
+    ASSERT_EQ((ssize_t)(write_size * ALIGNMENT),
+              file->pwrite(rewrite, write_size * ALIGNMENT, write_start * ALIGNMENT));
+    EXPECT_EQ(data_size, file_size(lfs, data_name.back().c_str()));
+    EXPECT_EQ(index_size, file_size(lfs, idx_name.back().c_str()));
+    ASSERT_EQ((ssize_t)(write_size * ALIGNMENT),
+              file->pread(readback, write_size * ALIGNMENT, write_start * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(rewrite, readback, write_size * ALIGNMENT));
+    delete file;
+
+    auto reopened = open_file_rw();
+    ASSERT_EQ((ssize_t)(write_size * ALIGNMENT),
+              reopened->pread(readback, write_size * ALIGNMENT, write_start * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(rewrite, readback, write_size * ALIGNMENT));
+    delete reopened;
+}
+
+// Seed upper [0,64) and [128,192); write the exact gap [64,128), without touching either neighbor.
+TEST_F(FileTest, hybrid_rw_appends_exact_gap_between_upper_ranges) {
+    constexpr size_t range_size = 64;
+    constexpr size_t right_start = 128;
+    constexpr size_t whole_range_size = right_start + range_size;
+    ALIGNED_MEM4K(left, range_size * ALIGNMENT);
+    ALIGNED_MEM4K(right, range_size * ALIGNMENT);
+    ALIGNED_MEM4K(gap, range_size * ALIGNMENT);
+    ALIGNED_MEM4K(readback, whole_range_size * ALIGNMENT);
+    memset(left, 0x11, range_size * ALIGNMENT);
+    memset(right, 0x22, range_size * ALIGNMENT);
+    memset(gap, 0x33, range_size * ALIGNMENT);
+
+    auto file = create_file_rw(/*sparse = */ false, /*hybrid = */ true);
+    ASSERT_EQ((ssize_t)(range_size * ALIGNMENT), file->pwrite(left, range_size * ALIGNMENT, 0));
+    ASSERT_EQ((ssize_t)(range_size * ALIGNMENT),
+              file->pwrite(right, range_size * ALIGNMENT, right_start * ALIGNMENT));
+    auto data_size = file_size(lfs, data_name.back().c_str());
+    auto index_size = file_size(lfs, idx_name.back().c_str());
+
+    ASSERT_EQ((ssize_t)(range_size * ALIGNMENT),
+              file->pwrite(gap, range_size * ALIGNMENT, range_size * ALIGNMENT));
+    EXPECT_EQ(data_size + range_size * ALIGNMENT, file_size(lfs, data_name.back().c_str()));
+    EXPECT_EQ(index_size + sizeof(SegmentMapping), file_size(lfs, idx_name.back().c_str()));
+    ASSERT_EQ((ssize_t)(whole_range_size * ALIGNMENT),
+              file->pread(readback, whole_range_size * ALIGNMENT, 0));
+    EXPECT_EQ(0, memcmp(left, readback, range_size * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(gap, readback + range_size * ALIGNMENT, range_size * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(right, readback + right_start * ALIGNMENT, range_size * ALIGNMENT));
+    delete file;
+
+    auto reopened = open_file_rw();
+    ASSERT_EQ((ssize_t)(whole_range_size * ALIGNMENT),
+              reopened->pread(readback, whole_range_size * ALIGNMENT, 0));
+    EXPECT_EQ(0, memcmp(left, readback, range_size * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(gap, readback + range_size * ALIGNMENT, range_size * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(right, readback + right_start * ALIGNMENT, range_size * ALIGNMENT));
+    delete reopened;
+}
+
+// Stack a sealed lower with hybrid upper; seed upper [1,2), then write [0,2): append [0,1).
+TEST_F(FileTest, hybrid_rw_reuses_stacked_upper_data) {
+    ALIGNED_MEM4K(initial, ALIGNMENT);
+    ALIGNED_MEM4K(rewrite, 2 * ALIGNMENT);
+    ALIGNED_MEM4K(readback, 2 * ALIGNMENT);
+    memset(initial, 0x11, ALIGNMENT);
+    memset(rewrite, 0x22, 2 * ALIGNMENT);
+
+    auto lower_rw = create_file_rw();
+    ASSERT_EQ((ssize_t)ALIGNMENT, lower_rw->pwrite(initial, ALIGNMENT, 3 * ALIGNMENT));
+    IFileRO *lower = nullptr;
+    ASSERT_EQ(0, lower_rw->close_seal(&lower));
+    delete lower_rw;
+
+    auto upper = create_file_rw(/*sparse = */ false, /*hybrid = */ true);
+    auto file = stack_files(upper, lower, /*ownership = */ true, /*check_order = */ false);
+    ASSERT_NE(nullptr, file);
+    ASSERT_EQ((ssize_t)ALIGNMENT, file->pwrite(initial, ALIGNMENT, ALIGNMENT));
+    auto data_size = file_size(lfs, data_name.back().c_str());
+
+    // After stacking, the live upper index is ComboIndex::mapping, not m_index0.
+    ASSERT_EQ((ssize_t)(2 * ALIGNMENT), file->pwrite(rewrite, 2 * ALIGNMENT, 0));
+    EXPECT_EQ(data_size + ALIGNMENT, file_size(lfs, data_name.back().c_str()));
+    ASSERT_EQ((ssize_t)(2 * ALIGNMENT), file->pread(readback, 2 * ALIGNMENT, 0));
+    EXPECT_EQ(0, memcmp(rewrite, readback, 2 * ALIGNMENT));
+    delete file;
+}
+
 class FileTest1 : public FileTest {
 public:
     virtual void SetUp() override {
@@ -666,8 +1037,6 @@ TEST_F(FileTest3, seek_data) {
     delete fmerged;
     delete[] data;
 }
-
-
 TEST_F(FileTest3, sparsefile_close_seal) {
     CleanUp();
     cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
@@ -801,8 +1170,6 @@ TEST_F(FileTest3, restack) {
     verify_file(file);
     delete file;
 }
-
-
 TEST_F(FileTest3, restack_sparse) {
     CleanUp();
     cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
