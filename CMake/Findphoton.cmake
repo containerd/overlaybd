@@ -1,8 +1,11 @@
 include(FetchContent)
 set(FETCHCONTENT_QUIET false)
 set(PHOTON_ENABLE_EXTFS ON)
-set(PHOTON_ENABLE_RESIZE ON)
-add_definitions(-DPHOTON_ENABLE_RESIZE)
+
+if(NOT ORIGIN_EXT2FS)
+  set(PHOTON_ENABLE_RESIZE ON)
+  add_definitions(-DPHOTON_ENABLE_RESIZE)
+endif()
 
 FetchContent_Declare(
   photon
