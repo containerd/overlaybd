@@ -1116,7 +1116,6 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
         LOG_INFO("read overwrite header. idx_offset: `, idx_bytes: `, dict_size: `, use_dict: `",
                  pht->index_offset, index_bytes, pht->opt.dict_size, pht->opt.use_dict);
     }
-
     auto ibuf = std::unique_ptr<uint32_t[]>(new uint32_t[pht->index_size]);
     LOG_DEBUG("index_offset: `", pht->index_offset);
 

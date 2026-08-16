@@ -312,8 +312,7 @@ public:
     }
 
     int increase_tag(int delta) override {
-
-        ("index tag add `", delta);
+        LOG_DEBUG("index tag add `", delta);
         auto array = ptr_array((SegmentMapping *)this->buffer(), this->size());
         for (auto &m : array)
             m.tag += delta;
