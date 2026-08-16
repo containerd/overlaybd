@@ -312,7 +312,8 @@ public:
     }
 
     int increase_tag(int delta) override {
-        LOG_DEBUG("index tag add `", delta);
+
+        ("index tag add `", delta);
         auto array = ptr_array((SegmentMapping *)this->buffer(), this->size());
         for (auto &m : array)
             m.tag += delta;
@@ -622,9 +623,10 @@ public:
     UNIMPLEMENTED(int commit_index0() override);
 };
 
-static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const Index **pindexes,
+static bool merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const Index **pindexes,
                           std::size_t n, uint64_t begin, uint64_t end, bool change_tag = true,
-                          size_t max_level = 0);
+                          size_t max_level = 0,
+                          size_t max_index_size = MAX_LSMT_INDEX_SIZE);
 
 class ComboIndex : public Index0 {
 public:
@@ -740,7 +742,8 @@ public:
     virtual Index *rebuild_backing_index(Index *highlevel_idx, size_t max_level) {
         vector<SegmentMapping> mappings;
         const Index *indexes[2] = {highlevel_idx, const_cast<Index *>(m_backing_index)};
-        merge_indexes(0, mappings, indexes, 2, 0, UINT64_MAX, false, max_level);
+        if (!merge_indexes(0, mappings, indexes, 2, 0, UINT64_MAX, false, max_level))
+            return nullptr;
         return new Index(std::move(mappings));
     }
 
@@ -753,7 +756,10 @@ public:
             return ro_idx0;
         }
         const Index *indexes[2] = {ro_idx0, const_cast<Index *>(m_backing_index)};
-        merge_indexes(0, mappings, indexes, 2, 0, UINT64_MAX, false, 2);
+        if (!merge_indexes(0, mappings, indexes, 2, 0, UINT64_MAX, false, 2)) {
+            delete ro_idx0;
+            return nullptr;
+        }
         delete ro_idx0;
         return new Index(std::move(mappings));
     }
@@ -839,35 +845,41 @@ IMemoryIndex *create_level_index(const SegmentMapping *pmappings, size_t n, uint
     return (ok1 && ok2) ? new LevelIndex(pmappings, n, copy_mode) : nullptr;
 }
 
-static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const Index **pindexes,
+static bool merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const Index **pindexes,
                           size_t n, uint64_t begin, uint64_t end, bool change_tag,
-                          size_t max_level) {
+                          size_t max_level, size_t max_index_size) {
 
     if (pindexes == nullptr)
-        return;
+        return true;
     if (change_tag) {
         if (n == 0)
-            return;
+            return true;
     } else {
         if (max_level == 0)
-            return;
+            return true;
     }
     if (begin >= end)
-        return;
+        return true;
 
     auto begin0 = begin;
     auto size0 = mapping.size();
     auto pi0 = pindexes[0];
     for (auto it = pi0->lower_bound(begin); it != pi0->end() && it->offset < end; ++it) {
         if (it->offset > begin) {
-            if (change_tag)
-                merge_indexes(level + 1, mapping, pindexes + 1, n - 1, begin, it->offset);
-            else {
+            if (change_tag) {
+                if (!merge_indexes(level + 1, mapping, pindexes + 1, n - 1, begin, it->offset,
+                                true, max_level, max_index_size))
+                    return false;
+            } else {
                 int k = (n <= 1 ? 0 : 1);
-                merge_indexes(level + 1, mapping, pindexes + k, 0, begin, it->offset, false,
-                              max_level - 1);
+                if (!merge_indexes(level + 1, mapping, pindexes + k, 0, begin, it->offset, false,
+                                max_level - 1, max_index_size))
+                    return false;
             }
         }
+        if (mapping.size() >= max_index_size)
+            LOG_ERROR_RETURN(0, false, "Merged LSMT index size ` exceeds maximum `",
+                            mapping.size() + 1, max_index_size);
 
         mapping.push_back(*it);
         if (change_tag) {
@@ -876,11 +888,15 @@ static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const 
         begin = it->end();
     }
     if (begin < end) {
-        if (change_tag)
-            merge_indexes(level + 1, mapping, pindexes + 1, n - 1, begin, end);
-        else {
+        if (change_tag) {
+            if (!merge_indexes(level + 1, mapping, pindexes + 1, n - 1, begin, end,
+                            true, max_level, max_index_size))
+                return false;
+        } else {
             int k = (n <= 1 ? 0 : 1);
-            merge_indexes(level + 1, mapping, pindexes + k, 0, begin, end, false, max_level - 1);
+            if (!merge_indexes(level + 1, mapping, pindexes + k, 0, begin, end, false,
+                            max_level - 1, max_index_size))
+                return false;
         }
     }
     if (mapping.size() > size0) {
@@ -889,6 +905,8 @@ static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const 
         if (mapping.back().end() > end)
             mapping.back().backward_end_to(end);
     }
+
+    return true;
 }
 
 IComboIndex *create_combo_index(IMemoryIndex0 *index0, const IMemoryIndex *index,
@@ -952,12 +970,8 @@ IMemoryIndex *merge_memory_indexes(const IMemoryIndex **pindexes, size_t n) {
     vector<SegmentMapping> mapping;
     auto pi = (const Index **)pindexes;
     mapping.reserve(pi[0]->size());
-    merge_indexes(0, mapping, pi, n, 0, UINT64_MAX);
-
-    if (mapping.size() > MAX_LSMT_INDEX_SIZE)
-        LOG_ERROR_RETURN(0, nullptr,
-                         "Merged LSMT index size ` exceeds maximum `",
-                         mapping.size(), MAX_LSMT_INDEX_SIZE);
+    if (!merge_indexes(0, mapping, pi, n, 0, UINT64_MAX))
+        return nullptr;
 
     if (pindexes[0]->vsize() < static_cast<uint64_t>(UINT32_MAX) * ALIGNMENT
         && mapping.size() < NODES_PER_LEVEL_32[MAX_LEVEL_32-1]) {

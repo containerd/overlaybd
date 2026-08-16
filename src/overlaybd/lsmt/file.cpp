@@ -1029,6 +1029,9 @@ public:
     virtual int flatten(IFile *as) override {
 
         unique_ptr<IComboIndex> pmi((IComboIndex*)(m_index->make_read_only_index()));
+        if (!pmi)
+            LOG_ERROR_RETURN(0, -1, "failed to make read only index.");
+
         CommitArgs args(as);
         atomic_uint64_t _no_use_var(0);
         CompactOptions opts(&m_files, (SegmentMapping*)(pmi->buffer()), pmi->size(), m_vsize, &args);
@@ -1350,6 +1353,10 @@ static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer, ssize_t
         LOG_ERROR_RETURN(0, nullptr,
                          "trailer magic, trailer type, "
                          "file type or sealedness doesn't match");
+
+    if (pht->index_size > MAX_LSMT_RO_INDEX_SIZE)
+        LOG_ERROR_RETURN(0, nullptr, "LSMT RO index size ` exceeds maximum `",
+                         pht->index_size + 0, MAX_LSMT_RO_INDEX_SIZE);
     return pht;
 }
 
@@ -1367,7 +1374,6 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
         LOG_ERRNO_RETURN(0, nullptr, "failed to stat file.");
     assert(trailer || pht->is_sparse_rw() == false);
     uint64_t index_bytes;
-    uint64_t trailer_offset = 0;
     if (trailer) {
         if (!pht->is_data_file())
             LOG_ERROR_RETURN(0, nullptr, "uncognized file type");
@@ -1375,8 +1381,11 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
         if (pht == nullptr) {
             return nullptr;
         }
-        trailer_offset = stat.st_size - HeaderTrailer::SPACE;
+        auto trailer_offset = stat.st_size - HeaderTrailer::SPACE;
         LOG_DEBUG("index_size: `, trailer offset: `", pht->index_size + 0, trailer_offset);
+        index_bytes = pht->index_size * sizeof(SegmentMapping);
+        if (index_bytes > trailer_offset - pht->index_offset)
+            LOG_ERROR_RETURN(0, nullptr, "invalid index bytes or size");
 
     } else {
         if (!pht->is_index_file() || pht->is_sealed())
@@ -1385,16 +1394,10 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
             LOG_ERROR_RETURN(0, nullptr, "index offset wrong");
         index_bytes = stat.st_size - HeaderTrailer::SPACE;
         pht->index_size = index_bytes / sizeof(SegmentMapping);
-    }
 
-    if (pht->index_size > MAX_LSMT_INDEX_SIZE)
-        LOG_ERROR_RETURN(0, nullptr, "LSMT index size ` exceeds maximum `",
-                         pht->index_size + 0, MAX_LSMT_INDEX_SIZE);
-
-    if (trailer) {
-        index_bytes = pht->index_size * sizeof(SegmentMapping);
-        if (index_bytes > trailer_offset - pht->index_offset)
-            LOG_ERROR_RETURN(0, nullptr, "invalid index bytes or size");
+        if (pht->index_size > MAX_LSMT_INDEX_SIZE)
+            LOG_ERROR_RETURN(0, nullptr, "LSMT RW index size ` exceeds maximum `",
+                             pht->index_size + 0, MAX_LSMT_INDEX_SIZE);
     }
 
     SegmentMapping *ibuf = nullptr;
