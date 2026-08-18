@@ -110,13 +110,14 @@ instances amplify every inefficiency:
   ever-growing penalty.
 
 - **Index memory at density (qcow2).** qcow2 uses a two-level L1/L2
-  mapping table to locate each 64 KB cluster. For a 100 GB image this
-  table is ~12.5 MB, yet QEMU's default L2 cache is only 1 MB —
-  covering roughly 8% of the table. Random I/O therefore triggers
-  frequent L2 page eviction and reload. The operator faces a dilemma:
-  raise the per-VM cache to the full 12.5 MB and hundreds of VMs consume
-  gigabytes of host memory in metadata alone, or keep the default and
-  accept constant cache misses on every I/O path.
+  mapping table to locate each 64 KB cluster. For 100 GB of data this
+  table is ~12.5 MB — and every file in a backing chain keeps its own
+  table and cache, so a chain of n layers multiplies the footprint
+  by n. QEMU sizes each file's L2 cache to cover its whole table, up
+  to 32 MB by default. The operator faces a dilemma:
+  keep the defaults and hundreds of VMs consume
+  gigabytes of host memory in metadata alone, or shrink the caches and
+  accept frequent L2 eviction and reload on every I/O path.
 
 - **Cold-start latency (OCI tar + gzip).** The standard container image
   requires downloading, decompressing, and extracting every layer before

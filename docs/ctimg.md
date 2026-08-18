@@ -139,12 +139,13 @@ read miss walks the chain downward — O(n) in the number of layers.
 conform to the layered-image model.)
 
 The second is the index. Data is located through a two-level L1/L2
-mapping table that grows with the virtual disk — at the default 64 KB
-cluster size, roughly 12.5 MB for a 100 GB image. Keeping the whole table resident
-for every VM is too expensive at density, so qemu caches only about
-1 MB of it by default, leaving operators stuck between two losses:
-enlarge the cache and waste host memory, or keep it small and waste
-I/O on table entries that miss the cache.
+mapping table that grows with the data stored — roughly 12.5 MB per
+100 GB of data at the default 64 KB cluster size — and every file in
+a backing chain carries its own table and its own cache, so the
+footprint multiplies with chain depth. QEMU sizes each file's cache
+to cover its whole table, up to 32 MB by default, leaving operators
+stuck between two losses: keep the caches and spend host memory, or
+shrink them and waste I/O on table entries that miss the cache.
 
 The third is write overhead. Writes are copy-on-write at cluster
 granularity: a write allocates a new cluster, copies the original
@@ -263,6 +264,8 @@ This is not a theoretical argument. Overlaybd is deployed at scale today.
   [Superhuman](https://www.databricks.com/blog/how-superhuman-and-databricks-built-200k-qps-inference-platform-together)
   also adopted Databricks' infrastructure to build a 200K QPS inference
   platform.
+
+- [And more...](?id=who-uses-overlaybd)
 
 ### Peer-reviewed research
 
