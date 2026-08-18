@@ -371,7 +371,7 @@ public:
         auto fdata = photon::fs::open_localfile_adaptor(data_name, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         auto findex = photon::fs::open_localfile_adaptor(index_name, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         LSMT::LayerInfo args(fdata, findex);
-        args.sparse_rw = sparse;
+        args.rw_type = sparse ? LSMT::RWType::Sparse : LSMT::RWType::Append;
         args.virtual_size = 64 << 20;
         auto file = LSMT::create_file_rw(args, true);
         delete file;

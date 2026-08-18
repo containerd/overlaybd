@@ -56,6 +56,36 @@ static inline size_t copy_n(IT begin, IT end, uint64_t end_offset, SegmentMappin
     return m;
 }
 
+class WritableLayerCursor : public IWritableLayerCursor {
+public:
+    set<SegmentMapping>::const_iterator m_current;
+    set<SegmentMapping>::const_iterator m_end;
+    Segment m_range;
+
+    WritableLayerCursor(set<SegmentMapping>::const_iterator current,
+                        set<SegmentMapping>::const_iterator end, Segment range)
+        : m_current(current), m_end(end), m_range(range) {
+    }
+
+    virtual bool next(SegmentMapping &m) override {
+        if (m_current == m_end || m_current->offset >= m_range.end())
+            return false;
+        m = *m_current++;
+        if (m.offset < m_range.offset)
+            m.forward_offset_to(m_range.offset);
+        if (m.end() > m_range.end())
+            m.backward_end_to(m_range.end());
+        return true;
+    }
+};
+
+static unique_ptr<IWritableLayerCursor> create_writable_layer_cursor(
+    const set<SegmentMapping> &mapping, Segment range) {
+    SegmentMapping key(range.offset, range.length, 0);
+    return unique_ptr<IWritableLayerCursor>(
+        new WritableLayerCursor(mapping.lower_bound(key), mapping.end(), range));
+}
+
 static bool verify_mapping_order(const SegmentMapping *pmappings, size_t n);
 
 bool is_avx512f_supported() {
@@ -563,6 +593,10 @@ public:
         auto m = copy_n(lb, mapping.end(), s.end(), pm, n);
         trim_edge_mappings(pm, m, s);
         return m;
+    }
+
+    virtual unique_ptr<IWritableLayerCursor> writable_layer_cursor(Segment range) const override {
+        return create_writable_layer_cursor(mapping, range);
     }
 
     // dump the the whole index as an array
