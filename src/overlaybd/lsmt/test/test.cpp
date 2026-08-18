@@ -62,6 +62,53 @@ void lookup_test(const SegmentMapping (&mapping)[N1], Segment s,
     lookup_test<IDX>(mapping, N1, s, stdrst, N2);
 }
 
+TEST_F(FileTest, reject_oversized_index) {
+    const char *filename = "oversized-index.lsmt";
+    auto file = lfs->open(filename, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    ASSERT_NE(file, nullptr);
+
+    LayerInfo info;
+    info.virtual_size = HeaderTrailer::SPACE;
+    ASSERT_EQ(write_header_trailer(file, true, true, true, 0, 0, info),
+              (int)HeaderTrailer::SPACE);
+
+    const uint64_t index_size = MAX_LSMT_RO_INDEX_SIZE + 1;
+    const uint64_t index_offset = HeaderTrailer::SPACE;
+    const uint64_t trailer_offset =
+        index_offset + index_size * sizeof(SegmentMapping);
+    ASSERT_EQ(file->lseek(trailer_offset, SEEK_SET), (off_t)trailer_offset);
+    ASSERT_EQ(write_header_trailer(file, false, true, true, index_offset,
+                                   index_size, info),
+              (int)HeaderTrailer::SPACE);
+
+    EXPECT_EQ(LSMT::open_file_ro(file), nullptr);
+    delete file;
+    lfs->unlink(filename);
+}
+
+TEST_F(FileTest, reject_oversized_rw_index) {
+    auto rw = create_file_rw();
+    ASSERT_NE(rw, nullptr);
+    delete rw;
+
+    auto fdata = lfs->open(data_name.back().c_str(), O_RDWR, S_IRWXU);
+    auto findex = lfs->open(idx_name.back().c_str(), O_RDWR, S_IRWXU);
+    ASSERT_NE(fdata, nullptr);
+    ASSERT_NE(findex, nullptr);
+
+    const uint64_t index_file_size =
+        HeaderTrailer::SPACE +
+        (MAX_LSMT_INDEX_SIZE + 1) * sizeof(SegmentMapping);
+    ASSERT_EQ(findex->ftruncate(index_file_size), 0);
+
+    auto reopened = LSMT::open_file_rw(fdata, findex, false);
+    EXPECT_EQ(reopened, nullptr);
+
+    delete reopened;
+    delete fdata;
+    delete findex;
+}
+
 void lookup_test(IMemoryIndex &idx);
 
 TEST(Index, lookup) {
@@ -265,6 +312,20 @@ inline void test_merge_combo(const IMemoryIndex *indexes[], size_t ni, // num of
                              const SegmentMapping (&stdrst)[NR]) {
     // test_merge(indexes, ni, stdrst, NR);
     test_combo(indexes, ni, stdrst, NR);
+}
+
+TEST(Index, reject_oversized_merge) {
+    SegmentMapping mapping0[] = {{0, 1, 0}, {2, 1, 2}};
+    SegmentMapping mapping1[] = {{1, 1, 1}, {3, 1, 3}};
+
+    Index index0(mapping0, LEN(mapping0), false);
+    Index index1(mapping1, LEN(mapping1), false);
+    const Index *indexes[] = {&index0, &index1};
+
+    vector<SegmentMapping> merged;
+    EXPECT_FALSE(merge_indexes(0, merged, indexes, LEN(indexes), 0, UINT64_MAX,
+                               true, 0, 3));
+    EXPECT_EQ(merged.size(), 3);
 }
 
 TEST(Index, merge) {

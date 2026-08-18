@@ -1029,6 +1029,9 @@ public:
     virtual int flatten(IFile *as) override {
 
         unique_ptr<IComboIndex> pmi((IComboIndex*)(m_index->make_read_only_index()));
+        if (!pmi)
+            LOG_ERROR_RETURN(0, -1, "failed to make read only index.");
+
         CommitArgs args(as);
         atomic_uint64_t _no_use_var(0);
         CompactOptions opts(&m_files, (SegmentMapping*)(pmi->buffer()), pmi->size(), m_vsize, &args);
@@ -1350,6 +1353,10 @@ static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer, ssize_t
         LOG_ERROR_RETURN(0, nullptr,
                          "trailer magic, trailer type, "
                          "file type or sealedness doesn't match");
+
+    if (pht->index_size > MAX_LSMT_RO_INDEX_SIZE)
+        LOG_ERROR_RETURN(0, nullptr, "LSMT RO index size ` exceeds maximum `",
+                         pht->index_size + 0, MAX_LSMT_RO_INDEX_SIZE);
     return pht;
 }
 
@@ -1387,6 +1394,10 @@ static SegmentMapping *do_load_index(IFile *file, HeaderTrailer *pheader_trailer
             LOG_ERROR_RETURN(0, nullptr, "index offset wrong");
         index_bytes = stat.st_size - HeaderTrailer::SPACE;
         pht->index_size = index_bytes / sizeof(SegmentMapping);
+
+        if (pht->index_size > MAX_LSMT_INDEX_SIZE)
+            LOG_ERROR_RETURN(0, nullptr, "LSMT RW index size ` exceeds maximum `",
+                             pht->index_size + 0, MAX_LSMT_INDEX_SIZE);
     }
 
     SegmentMapping *ibuf = nullptr;

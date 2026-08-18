@@ -29,6 +29,8 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 #include <sys/types.h>
 
 namespace LSMT {
+static const uint64_t MAX_LSMT_RO_INDEX_SIZE = 1000000;
+static const uint64_t MAX_LSMT_INDEX_SIZE = 128000000;
 struct Segment {          
     uint64_t offset : 50;
     uint32_t length : 14;
