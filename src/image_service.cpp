@@ -419,6 +419,11 @@ int ImageService::init() {
     if (cache_type != "file" && cache_type != "ocf" && cache_type != "download") {
         LOG_ERROR_RETURN(0, -1, "unknown cache type: `", cache_type);
     }
+#ifndef ENABLE_OCF_CACHE
+    if (cache_type == "ocf") {
+        LOG_ERROR_RETURN(0, -1, "'ocf' cache is disabled in this build (ENABLE_OCF_CACHE=off)");
+    }
+#endif
     LOG_INFO("cache config: ", VALUE(cache_type), VALUE(cache_dir),
                                VALUE(cache_size_GB), VALUE(refill_size));
 
@@ -473,6 +478,7 @@ int ImageService::init() {
                 (uint64_t)1048576 * 1024, global_fs.io_alloc, 0, {nullptr, &cache_fn_trans_sha256});
 
         } else if (cache_type == "ocf") {
+#ifdef ENABLE_OCF_CACHE
             auto namespace_dir = std::string(cache_dir + "/namespace");
             if (::access(namespace_dir.c_str(), F_OK) != 0 && ::mkdir(namespace_dir.c_str(), 0755) != 0) {
                 LOG_ERRNO_RETURN(0, -1, "failed to create namespace_dir");
@@ -500,6 +506,7 @@ int ImageService::init() {
 
             global_fs.cached_fs = FileSystem::new_ocf_cached_fs(global_fs.srcfs, namespace_fs, block_size, refill_size,
                                                                 media_file, reload_media, global_fs.io_alloc);
+#endif
         } else if (cache_type == "download") {
             global_fs.cached_fs = FileSystem::new_download_cached_fs(global_fs.srcfs, 4096, refill_size, global_fs.io_alloc);
         } else {

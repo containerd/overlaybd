@@ -3,10 +3,9 @@ include(FetchContent)
 if(${BUILD_CURL_FROM_SOURCE})
     message("Add and build standalone libcurl")
     include(FetchContent)
-    FetchContent_Declare(
-        curl_bundle
-        GIT_REPOSITORY https://github.com/curl/curl.git
-        GIT_TAG curl-7_42_1
+    FetchContent_Declare(curl_bundle
+        GIT_REPOSITORY ${DEPENDENCY_CURL_REPOSITORY}
+        GIT_TAG ${DEPENDENCY_CURL_TAG}
         GIT_PROGRESS 1)
 
     FetchContent_GetProperties(curl_bundle)
