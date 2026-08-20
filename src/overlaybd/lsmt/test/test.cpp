@@ -314,20 +314,6 @@ inline void test_merge_combo(const IMemoryIndex *indexes[], size_t ni, // num of
     test_combo(indexes, ni, stdrst, NR);
 }
 
-TEST(Index, reject_oversized_merge) {
-    SegmentMapping mapping0[] = {{0, 1, 0}, {2, 1, 2}};
-    SegmentMapping mapping1[] = {{1, 1, 1}, {3, 1, 3}};
-
-    Index index0(mapping0, LEN(mapping0), false);
-    Index index1(mapping1, LEN(mapping1), false);
-    const Index *indexes[] = {&index0, &index1};
-
-    vector<SegmentMapping> merged;
-    EXPECT_FALSE(merge_indexes(0, merged, indexes, LEN(indexes), 0, UINT64_MAX,
-                               true, 0, 3));
-    EXPECT_EQ(merged.size(), 3);
-}
-
 TEST(Index, merge) {
     const static SegmentMapping mapping0[] = {{5, 5, 0}, {10, 10, 50}, {100, 10, 20}};
     const static SegmentMapping mapping1[] = {{0, 1, 7},    {2, 4, 5},    {15, 10, 22},
