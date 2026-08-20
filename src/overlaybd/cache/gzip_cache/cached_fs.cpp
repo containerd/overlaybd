@@ -16,6 +16,7 @@
 #include "cached_fs.h"
 #include "../full_file_cache/cache_pool.h"
 #include "../cache.h"
+#include <photon/common/alog.h>
 #include <photon/common/estring.h>
 
 namespace Cache {

@@ -107,7 +107,7 @@ void ICachePool::set_trans_func(CacheFnTransFunc fn_trans_func) {
     this->fn_trans_func = fn_trans_func;
 }
 
-int ICachePool::store_release(ICacheStore *store) {
-    return cast(m_stores)->release(store->get_store_key());
+void ICachePool::store_release(ICacheStore *store) {
+    cast(m_stores)->release(store->get_store_key());
 }
 } // namespace FileSystem

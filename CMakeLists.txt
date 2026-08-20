@@ -88,7 +88,7 @@ endif()
 #---------------------------------------------------------------------
 set(DEPENDENCY_PHOTON_REPOSITORY "https://github.com/alibaba/PhotonLibOS.git"
     CACHE STRING "repository of photon, empty to use the local installation")
-set(DEPENDENCY_PHOTON_TAG "0178d14499d8639759a81e32ad58da5226df5e9b"
+set(DEPENDENCY_PHOTON_TAG "62244b5a3726775cf70ad5c26a1345e562072094"
     CACHE STRING "tag/commit of photon")
 
 set(DEPENDENCY_TCMU_REPOSITORY "https://github.com/data-accelerator/photon-libtcmu.git"
@@ -153,8 +153,6 @@ endif()
 #---------------------------------------------------------------------
 # External dependencies
 #---------------------------------------------------------------------
-set(ENABLE_MIMIC_VDSO off) # photon option
-
 # e2fs is looked up before photon: photon's own build looks it up as well, and
 # photon_obj is ordered after the libext2fs build declared by this call.
 find_package(e2fs REQUIRED)      # E2FSPROGS::libext2fs E2FSPROGS::libcom_err
