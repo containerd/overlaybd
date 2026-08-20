@@ -34,7 +34,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS on)
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -DNDEBUG -g")
 
-add_compile_options(-Wall -Werror=sign-compare)
 add_definitions(-DOVERLAYBD_VER=${OBD_VER})
 
 # GCC 13+ (default on Azure Linux 4.0 with GCC 15) no longer transitively
@@ -203,7 +202,13 @@ endif()
 
 #---------------------------------------------------------------------
 # overlaybd libraries
+#
+# Warnings are errors for the code that follows, i.e. ours. The call is
+# deliberately placed after the find_package()es above, so that the
+# dependencies they add as subprojects keep their own warning settings.
 #---------------------------------------------------------------------
+add_compile_options(-Wall -Werror)
+
 add_library(checksum_lib STATIC src/tools/sha256file.cpp)
 target_link_libraries(checksum_lib PUBLIC external_lib)
 
@@ -345,7 +350,8 @@ if(ENABLE_OCF_CACHE)
     add_library(ocf_lib STATIC ${src_ocf})
     target_include_directories(ocf_lib PUBLIC ${OCF_DIR}/include ${OCF_DIR}/ease_bindings/env)
     target_link_libraries(ocf_lib PUBLIC ocf_env_lib ZLIB::ZLIB)
-    target_compile_options(ocf_lib PRIVATE -Wno-sign-compare)
+    # vendored code, don't let its warnings break our build
+    target_compile_options(ocf_lib PRIVATE -Wno-error -Wno-sign-compare)
 
     add_library(ocf_cache_lib STATIC
         ${OCF_DIR}/ocf_cache.cpp

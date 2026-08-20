@@ -456,7 +456,6 @@ public:
     IFile *create_commit_layer(int i = 0, int io_engine = 0, bool compress = false,
                                bool verify = false, bool sparse = false) {
         auto file = create_a_layer(sparse);
-        IFile *as = nullptr;
         IFile *dst = nullptr;
         auto dst_filename = layer_name.back();
         if (compress) {

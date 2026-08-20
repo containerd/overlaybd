@@ -403,7 +403,7 @@ int ImageService::init() {
     }
 
     std::string cache_type, cache_dir;
-    uint32_t cache_size_GB, refill_size, block_size;
+    uint32_t cache_size_GB, refill_size;
     if (global_conf.cacheConfig().cacheType().empty()) {
         cache_type = global_conf.cacheType();
         cache_dir = global_conf.registryCacheDir();
@@ -414,7 +414,6 @@ int ImageService::init() {
         cache_size_GB = global_conf.cacheConfig().cacheSizeGB();
     }
     refill_size = global_conf.cacheConfig().refillSize();
-    block_size = global_conf.cacheConfig().blockSize();
 
     if (cache_type != "file" && cache_type != "ocf" && cache_type != "download") {
         LOG_ERROR_RETURN(0, -1, "unknown cache type: `", cache_type);
@@ -504,7 +503,8 @@ int ImageService::init() {
             }
             global_fs.media_file = media_file;
 
-            global_fs.cached_fs = FileSystem::new_ocf_cached_fs(global_fs.srcfs, namespace_fs, block_size, refill_size,
+            global_fs.cached_fs = FileSystem::new_ocf_cached_fs(global_fs.srcfs, namespace_fs,
+                                                                global_conf.cacheConfig().blockSize(), refill_size,
                                                                 media_file, reload_media, global_fs.io_alloc);
 #endif
         } else if (cache_type == "download") {
