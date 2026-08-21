@@ -110,8 +110,8 @@ private:
 class DownloadCacheFs : public IFileSystem {
 public:
     DownloadCacheFs(IFileSystem *fs, size_t bs, size_t rs, IOAlloc *io_alloc)
-        : m_src_fs(fs), block_size(bs), refill_size(rs), io_alloc(io_alloc),
-          m_file_pool(1 * 1000 * 1000) {
+        : block_size(bs), refill_size(rs), io_alloc(io_alloc),
+          m_file_pool(1 * 1000 * 1000), m_src_fs(fs) {
         LOG_INFO("new DownloadCacheFs");
     }
     ~DownloadCacheFs() {

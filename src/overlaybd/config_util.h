@@ -137,9 +137,9 @@ GetResult(Document *j, const char (&path)[N]) {
     Value *val = GetValueByPointer(*j, path);
     Document ret;
     if (!val)
-        return std::move(ret);
+        return ret;
     ret.CopyFrom(*val, ret.GetAllocator());
-    return std::move(ret);
+    return ret;
 }
 
 template <typename T, size_t N>

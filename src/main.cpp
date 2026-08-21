@@ -38,6 +38,12 @@
 #include <linux/netlink.h>
 #include <string>
 
+// glibc did not export SOL_NETLINK until 2.24, while the value is a fixed part
+// of the kernel ABI. Define it for the older toolchains, e.g. on CentOS 7.
+#ifndef SOL_NETLINK
+#define SOL_NETLINK 270
+#endif
+
 class TCMUDevLoop;
 
 #define MAX_OPEN_FD 1048576
