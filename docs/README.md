@@ -321,11 +321,26 @@ Uses the P2P protocol to speed up HTTP file download for registry in large-scale
 
 # Events
 
-<img src="assets/Scaling_up.jpg" width="400px">
+## Artifact Streaming GA for Microsoft Azure Kubernetes Service (AKS)
+It provides customers the ability to accelerate containerized workloads in
+the cloud by dramatically reducing the overall startup time with *overlaybd*
+image format. It is now GA since Jul 14, 2026.
+See [#3928](https://github.com/Azure/AKS/issues/3928#issuecomment-4969059980) for details.
 
-[Scaling up Without Slowing Down: Accelerating Pod Start Time. KubeCon+CloudNativeCon Europe 2024](https://youtu.be/RJ6Lt9bVNTw)
+## Presentation at KubeCon + CloudNativeCon Europe 2025
 
+*Streamlined Efficiency: Unshackling Kubernetes Image Volumes for Rapid AI Model and Dataset Loading*.
+Jointly given by Microsoft Azure and Alibaba Cloud.
+<div style="background:url(assets/image_volumes.jpg) center/cover no-repeat;position:relative;padding-top:56.25%;height:0;font-size:0;overflow:hidden">
+  <iframe style="position:absolute;inset:0;width:100%;height:100%;margin:0;border:0" src="https://www.youtube.com/embed/nHGzMmstR0E?si=qJ6yd8bN4ZeZttj-" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+</div>
 
+## Presentation at KubeCon + CloudNativeCon Europe 2024
+*Scaling up Without Slowing Down: Accelerating Pod Start Time*.
+Jointly given by Microsoft Azure and Alibaba Cloud.
+<div style="background:url(assets/Scaling_up.jpg) center/cover no-repeat;position:relative;padding-top:56.25%;height:0;font-size:0;overflow:hidden">
+  <iframe style="position:absolute;inset:0;width:100%;height:100%;margin:0;border:0" src="https://www.youtube.com/embed/RJ6Lt9bVNTw?si=o3pP42xwT5CzdqiP" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+</div>
 
 # Who Uses Overlaybd
 
@@ -360,3 +375,4 @@ Uses the P2P protocol to speed up HTTP file download for registry in large-scale
 <!-- <a href="https://www.xiaopeng.com" target="_blank"><img src="assets/logos/xpeng.svg" alt="XPeng"></a> -->
 </div>
 
+*The list above is by no means exhaustive — many more organizations are running overlaybd in production.*
