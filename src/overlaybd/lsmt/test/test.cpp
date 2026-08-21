@@ -320,12 +320,17 @@ TEST(Index, reject_oversized_merge) {
 
     Index index0(mapping0, LEN(mapping0), false);
     Index index1(mapping1, LEN(mapping1), false);
-    const Index *indexes[] = {&index0, &index1};
+    const IMemoryIndex *indexes[] = {&index0, &index1};
 
-    vector<SegmentMapping> merged;
-    EXPECT_FALSE(merge_indexes(0, merged, indexes, LEN(indexes), 0, UINT64_MAX,
-                               true, 0, 3));
-    EXPECT_EQ(merged.size(), 3);
+    const auto old_max_index_size = LSMT::test_max_lsmt_index_size;
+    LSMT::test_max_lsmt_index_size = 3;
+
+    IMemoryIndex *merged = nullptr;
+    EXPECT_NO_THROW(merged = merge_memory_indexes(indexes, LEN(indexes)));
+
+    LSMT::test_max_lsmt_index_size = old_max_index_size;
+
+    EXPECT_EQ(merged, nullptr);
 }
 
 TEST(Index, merge) {

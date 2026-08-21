@@ -1338,6 +1338,11 @@ static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer, ssize_t
 
         if (!pht->verify_magic() || !pht->is_header())
             LOG_ERROR_RETURN(0, nullptr, "header magic/type don't match");
+
+        if (pht->index_size > MAX_LSMT_RO_INDEX_SIZE)
+            LOG_ERROR_RETURN(0, nullptr, "LSMT RO index size ` exceeds maximum `",
+                            pht->index_size + 0, MAX_LSMT_RO_INDEX_SIZE);
+
         return pht;
     }
     if (st_size == -1) {

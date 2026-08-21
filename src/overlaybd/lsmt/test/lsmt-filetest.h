@@ -33,7 +33,15 @@ extern bool io_test;
 
 #include <photon/common/utility.h>
 #include <photon/fs/localfs.h>
+#include "../index.h"
+
+namespace LSMT {
+static uint64_t test_max_lsmt_index_size = MAX_LSMT_INDEX_SIZE;
+}
+
+#define MAX_LSMT_INDEX_SIZE ::LSMT::test_max_lsmt_index_size
 #include "../index.cpp"
+#undef MAX_LSMT_INDEX_SIZE
 #include "../file.cpp"
 #include "../../zfile/zfile.h"
 #include <photon/thread/thread.h>
