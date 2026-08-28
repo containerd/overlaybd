@@ -4,3 +4,4 @@ releases
 .vscode
 .idea
 deps/
+.DS_Store
