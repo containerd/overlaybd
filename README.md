@@ -19,6 +19,12 @@ Overlaybd has 2 core component:
 
 This repository is an implementation of overlaybd based on [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
 
+The userspace TCMU support is provided by the bundled
+[photon-libtcmu](https://github.com/data-accelerator/photon-libtcmu) source in
+`src/libtcmu`. It is built with the same PhotonLibOS instance as
+OverlayBD. photon-libtcmu is available under LGPL-2.1 or Apache-2.0; OverlayBD
+uses it under Apache-2.0. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 Overlaybd can be used as the storage backend of [Accelerated Container Image](https://github.com/containerd/accelerated-container-image), which is a solution of remote container image by fetching image data on-demand without downloading and unpacking the whole image before the container starts.
 
 Benefits from the universality of block-device, overlaybd is also a widely applicable image format for most runtime, including qemu/kvm and any other runtime supporting block or scsi api.

@@ -5,6 +5,7 @@ find_package(RapidJSON REQUIRED MODULE)
 
 link_libraries(rt pthread resolv)
 
+add_subdirectory(libtcmu)
 add_subdirectory(overlaybd)
 
 add_library(overlaybd_image_lib
@@ -49,7 +50,7 @@ add_executable(overlaybd-tcmu
   main.cpp
 )
 target_include_directories(overlaybd-tcmu PUBLIC
-  ${TCMU_INCLUDE_DIR}
+  libtcmu/
   ${CURL_INCLUDE_DIRS}
   ${OPENSSL_INCLUDE_DIR}
   ${RAPIDJSON_INCLUDE_DIRS}

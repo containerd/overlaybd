@@ -49,7 +49,6 @@ option(ORIGIN_EXT2FS "Use original libext2fs" off)
 
 find_package(e2fs REQUIRED)
 find_package(photon REQUIRED)
-find_package(tcmu REQUIRED)
 
 if(BUILD_STREAM_CONVERTOR)
     find_package(yaml-cpp)
