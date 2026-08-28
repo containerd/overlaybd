@@ -38,6 +38,32 @@
       max-width: 100%;
       object-fit: contain;
     }
+    .sidebar-nav p.sidebar-home {
+      margin: 0 0 1.6em;
+    }
+    .sidebar-nav li {
+      position: relative;
+    }
+    .sidebar-nav li.toc-sub > a {
+      padding-left: 1.3em;
+    }
+    .sidebar-nav .toc-toggle {
+      position: absolute;
+      left: 0;
+      top: 0;
+      font-size: 1.6em;
+      line-height: 1;
+      color: #999;
+      cursor: pointer;
+      user-select: none;
+      transition: transform .15s;
+    }
+    .sidebar-nav li:not(.toc-folded) > .toc-toggle {
+      transform: rotate(90deg);
+    }
+    .sidebar-nav li.toc-folded > ul {
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -45,8 +71,38 @@
   <script>
     window.$docsify = {
       auto2top: true,
+      maxLevel: 3,
       name: '',
-      repo: ''
+      repo: '',
+      plugins: [
+        function (hook, vm) {
+          hook.doneEach(function () {
+            var nav = document.querySelector('.sidebar-nav');
+            if (!nav) return;
+            if (vm.route.path !== '/' && !nav.querySelector(':scope > .sidebar-home')) {
+              var home = document.createElement('p');
+              home.className = 'sidebar-home';
+              home.innerHTML = '<a href="#/">← Back to Home</a>';
+              nav.prepend(home);
+            }
+            var firstItem = nav.querySelector(':scope > ul > li');
+            nav.querySelectorAll('li').forEach(function (li) {
+              if (li === firstItem) return;
+              li.classList.add('toc-sub');
+              if (!li.querySelector(':scope > ul') || li.querySelector(':scope > .toc-toggle')) return;
+              var toggle = document.createElement('span');
+              toggle.className = 'toc-toggle';
+              toggle.textContent = '▸';
+              toggle.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                li.classList.toggle('toc-folded');
+              });
+              li.insertBefore(toggle, li.firstChild);
+            });
+          });
+        }
+      ]
     }
   </script>
   <script src="//cdn.jsdelivr.net/npm/docsify@5"></script>
