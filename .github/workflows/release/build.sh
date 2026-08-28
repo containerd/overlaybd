@@ -73,11 +73,13 @@ elif [[ ${OS} =~ "centos" ]]; then
     fi
 
     yum install -y epel-release libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel
-    yum install -y rpm-build make git wget sudo autoconf automake libtool
+    # pkgconfig: ublksrv's configure uses PKG_CHECK_MODULES (needs pkg.m4 at autoreconf time)
+    yum install -y rpm-build make git wget sudo autoconf automake libtool pkgconfig
     yum install --skip-broken -y libzstd-static gcc gcc-c++ binutils libzstd-devel
 elif [[ ${OS} =~ "mariner" ]]; then
     yum install -y libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel glibc-devel libzstd-devel binutils ca-certificates-microsoft build-essential
-    yum install -y rpm-build make git wget sudo tar gcc gcc-c++ autoconf automake libtool
+    # pkg-config: ublksrv's configure uses PKG_CHECK_MODULES (needs pkg.m4 at autoreconf time)
+    yum install -y rpm-build make git wget sudo tar gcc gcc-c++ autoconf automake libtool pkg-config
 
     DISTRO=${OS/:/.}
     PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.${DISTRO}"
