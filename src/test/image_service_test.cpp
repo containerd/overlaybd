@@ -42,7 +42,7 @@ char *test_ua = nullptr;
 photon::net::ISocketServer *new_server(std::string ip, uint16_t port) {
     auto server = photon::net::new_tcp_socket_server();
     server->timeout(1000UL*1000);
-    server->setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
+    server->setsockopt<int>(SOL_SOCKET, SO_REUSEPORT, 1);
     server->bind(port, photon::net::IPAddr(ip.c_str()));
     server->listen();
     server->set_handler(nullptr);
@@ -154,7 +154,7 @@ TEST(http_client, user_agent) {
     client->set_user_agent(test_ua);
     DEFER(delete client);
     auto op = client->new_operation(photon::net::http::Verb::GET, target_get);
-    DEFER(delete op);
+    DEFER(client->destroy_operation(op));
     op->req.headers.content_length(0);
     client->call(op);
     EXPECT_EQ(op->status_code, 200);
@@ -291,7 +291,7 @@ public:
         auto client = photon::net::http::new_http_client();
         DEFER(delete client);
         auto op = client->new_operation(photon::net::http::Verb::GET, request_url);
-        DEFER(delete op);
+        DEFER(client->destroy_operation(op));
         op->req.headers.content_length(0);
         // std::cout << "op->req.target(): " << op->req.target() << " op->req.query(): " << op->req.query() << std::endl;
         client->call(op);

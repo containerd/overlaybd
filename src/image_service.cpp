@@ -25,11 +25,11 @@
 #include <photon/net/curl.h>
 #include <photon/net/http/url.h>
 #include <photon/net/socket.h>
+#include <photon/net/utils.h>
 #include <photon/thread/thread.h>
-#include "overlaybd/cache/cache.h"
+#include <photon/fs/cache/cache.h>
 #include "overlaybd/registryfs/registryfs.h"
 #include "overlaybd/zfile/zfile.h"
-#include "overlaybd/base64.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -108,7 +108,11 @@ int parse_auths(const ConfigUtils::Document &auths, const std::string &remote_pa
             continue;
 
         if (iter.value.HasMember("auth")) {
-            auto token = base64_decode(iter.value["auth"].GetString());
+            std::string token;
+            if (!photon::net::Base64Decode(iter.value["auth"].GetString(), token)) {
+                LOG_ERROR("invalid base64 auth for: `", addr);
+                continue;
+            }
             auto p = token.find(":");
             if (p == std::string::npos) {
                 LOG_ERROR("invalid base64 auth, no ':' found: `", token);
@@ -455,10 +459,6 @@ int ImageService::init() {
             global_fs.srcfs = global_fs.underlay_registryfs;
         }
 
-        if (global_conf.enableThread() == true && cache_type == "file") {
-            LOG_ERROR_RETURN(0, -1, "multi-thread has not been valid for file cache");
-        }
-
         global_fs.io_alloc = new IOAlloc;
 
         if (cache_type == "file") {
@@ -468,7 +468,7 @@ int ImageService::init() {
                 LOG_ERROR_RETURN(0, -1, "new_localfs_adaptor for ` failed", cache_dir.c_str());
             }
             // file cache will delete its src_fs automatically when destructed
-            global_fs.cached_fs = FileSystem::new_full_file_cached_fs(
+            global_fs.cached_fs = photon::fs::new_full_file_cached_fs(
                 global_fs.srcfs, registry_cache_fs, refill_size, cache_size_GB, 10000000,
                 (uint64_t)1048576 * 1024, global_fs.io_alloc, 0, {nullptr, &cache_fn_trans_sha256});
 
@@ -498,10 +498,12 @@ int ImageService::init() {
             }
             global_fs.media_file = media_file;
 
-            global_fs.cached_fs = FileSystem::new_ocf_cached_fs(global_fs.srcfs, namespace_fs, block_size, refill_size,
-                                                                media_file, reload_media, global_fs.io_alloc);
+            global_fs.cached_fs = photon::fs::new_ocf_cached_fs(
+                global_fs.srcfs, namespace_fs, block_size, refill_size, media_file, reload_media,
+                global_fs.io_alloc);
         } else if (cache_type == "download") {
-            global_fs.cached_fs = FileSystem::new_download_cached_fs(global_fs.srcfs, 4096, refill_size, global_fs.io_alloc);
+            global_fs.cached_fs = photon::fs::new_persistent_cached_fs(
+                global_fs.srcfs, 4096, refill_size, global_fs.io_alloc);
         } else {
             LOG_ERROR_RETURN(0, -1, "cache type invalid");
         }

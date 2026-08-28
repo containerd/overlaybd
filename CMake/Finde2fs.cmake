@@ -1,3 +1,5 @@
+include(FindPackageHandleStandardArgs)
+
 if(NOT ORIGIN_EXT2FS)
     message("Add and build standalone libext2fs")
     include(FetchContent)
@@ -20,11 +22,17 @@ if(NOT ORIGIN_EXT2FS)
         # upstream build.sh hardcodes `CFLAGS="-fPIC -O3"` on the configure
         # line, so setting CFLAGS via the environment is ignored -- we patch
         # build.sh in place instead. `-std=gnu11` is supported by every
-        # compiler used across the release matrix (GCC 7+).
+        # compiler used across the release matrix (GCC 8+).
         add_custom_command(
             OUTPUT ${LIBEXT2FS_INSTALL_DIR}/lib
+            BYPRODUCTS
+                ${E2FS_INSTALL_LIB_DIR}/libext2fs.so
+                ${e2fsprogs_SOURCE_DIR}/build/lib/libcom_err.a
+                ${E2FS_RESIZE_DIR}/resize2fs.o
+                ${E2FS_RESIZE_DIR}/extent.o
+                ${E2FS_RESIZE_DIR}/resource_track.o
             WORKING_DIRECTORY ${e2fsprogs_SOURCE_DIR}
-            COMMAND chmod 755 build.sh && sed -i 's|CFLAGS="-fPIC -O3"|CFLAGS="-fPIC -O3 -std=gnu11"|' build.sh && ./build.sh
+            COMMAND chmod 755 build.sh && sed -i 's|CFLAGS="-fPIC -O3"|CFLAGS="-fPIC -O3 -std=gnu11"|' build.sh && ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER} ./build.sh
         )
         add_custom_target(libext2fs_build DEPENDS ${LIBEXT2FS_INSTALL_DIR}/lib)
     endif()

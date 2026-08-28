@@ -50,6 +50,7 @@
 
 using namespace photon::fs;
 using namespace photon::net::http;
+using photon::Timeout;
 
 static const estring kDockerRegistryAuthChallengeKeyValuePrefix = "www-authenticate";
 static const estring kAuthHeaderKey = "Authorization";
@@ -468,7 +469,7 @@ public:
         auto code = m_fs->get_data(m_url, offset, count, tmo.timeout(), op);
         if (code != 200 && code != 206) {
             ERRNO eno;
-            if (tmo.expire() < photon::now) {
+            if (tmo.expiration() < photon::now) {
                 LOG_ERROR_RETURN(ETIMEDOUT, -1, "timed out in preadv ", VALUE(m_url), VALUE(offset));
             }
             if (retry--) {
@@ -491,7 +492,7 @@ public:
         HTTP_OP op;
         auto code = m_fs->get_data(m_url, 0, 1, tmo.timeout(), op);
         if (code != 200 && code != 206) {
-            if (tmo.expire() < photon::now)
+            if (tmo.expiration() < photon::now)
                 LOG_ERROR_RETURN(ETIMEDOUT, -1, "get meta timedout");
             if (retry--)
                     goto again;

@@ -23,13 +23,6 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fpic -Wall -Werror=sign-compare")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fpic -Wall -Werror=sign-compare -DOVERLAYBD_VER=${OBD_VER}")
 
-# GCC 13+ (default on Azure Linux 4.0 with GCC 15) no longer transitively
-# includes <cstdint> from other standard headers. Force-include it for every
-# C++ translation unit so that fixed-width integer types (uint64_t, etc.) used
-# in third-party headers (e.g. photon's fs/path.h at the pinned commit) resolve
-# without needing to upgrade those pins. C sources (e.g. OCF) are unaffected.
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -include cstdint")
-
 if ((CMAKE_SYSTEM_PROCESSOR STREQUAL aarch64) OR (CMAKE_SYSTEM_PROCESSOR STREQUAL arm64))
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a+crc -fsigned-char -fno-stack-protector -fomit-frame-pointer")
 endif ()
@@ -54,6 +47,7 @@ option(BUILD_CURL_FROM_SOURCE "Compile static libcurl" off)
 option(BUILD_STREAM_CONVERTOR "Build the stream convertor" on)
 option(ORIGIN_EXT2FS "Use original libext2fs" off)
 
+find_package(e2fs REQUIRED)
 find_package(photon REQUIRED)
 find_package(tcmu REQUIRED)
 
