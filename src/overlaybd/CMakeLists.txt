@@ -2,7 +2,7 @@ add_subdirectory(registryfs)
 add_subdirectory(lsmt)
 add_subdirectory(zfile)
 add_subdirectory(zstd)
-add_subdirectory(cache)
+add_subdirectory(gzip_cache)
 add_subdirectory(tar)
 add_subdirectory(gzip)
 add_subdirectory(gzindex)
@@ -21,7 +21,7 @@ target_link_libraries(overlaybd_lib INTERFACE
     lsmt_lib
     zfile_lib
     zstd_lib
-    cache_lib
+    gzip_cache_lib
     tar_lib
     gzip_lib
     gzindex_lib
