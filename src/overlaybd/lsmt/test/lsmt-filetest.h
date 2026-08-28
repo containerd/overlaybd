@@ -120,7 +120,7 @@ public:
         snprintf_names(next_layer_id++);
     }
 
-    IFileRW *create_file_rw(bool sparse = false) {
+    IFileRW *create_file_rw(bool sparse = false, bool hybrid = false) {
         name_next_layer();
         auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         // auto fdata = photon::fs::open_localfile_adaptor(data_name.back().c_str(), O_RDWR |
@@ -132,7 +132,7 @@ public:
         EXPECT_EQ(nullptr, ::create_file_rw(_, true));
         LOG_INFO("TEST OK");
         LayerInfo args(fdata, findex);
-        args.sparse_rw = sparse;
+        args.rw_type = hybrid ? RWType::Hybrid : (sparse ? RWType::Sparse : RWType::Append);
         if (parent_uuid != "")
             args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
         args.virtual_size = vsize;
@@ -425,7 +425,7 @@ public:
         LOG_INFO("data: ` index: `", data_name.back().c_str(), idx_name.back().c_str());
         LayerInfo args(fdata, findex);
         if (sparse)
-            args.sparse_rw = true;
+            args.rw_type = RWType::Sparse;
 
         if (parent_uuid != "")
             args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());

@@ -113,6 +113,12 @@ public:
     virtual int restack(IFileRW *upper) = 0;
 };
 
+enum class RWType : uint8_t {
+    Append,
+    Hybrid,
+    Sparse,
+};
+
 // create a new writable LSMT file constitued by a data file and an index file,
 // optionally obtaining the ownerships of the underlying files,
 // thus they will be destructed automatically.
@@ -123,7 +129,7 @@ struct LayerInfo {
     UUID parent_uuid;
     UUID uuid;
     char *user_tag = nullptr; // a user provided string of message, 256B at most
-    bool sparse_rw = false;
+    RWType rw_type = RWType::Append;
     size_t len = 0; // len of user_tag; if it's 0, it will be detected with strlen()
     LayerInfo(photon::fs::IFile *_fdata = nullptr, photon::fs::IFile *_findex = nullptr)
         : fdata(_fdata), findex(_findex) {
