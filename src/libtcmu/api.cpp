@@ -7,6 +7,7 @@
  */
 
 #define _GNU_SOURCE
+#include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
