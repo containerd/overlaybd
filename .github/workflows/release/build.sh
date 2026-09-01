@@ -26,6 +26,15 @@ PACKAGE_RELEASE=""
 CMAKE="cmake"
 CPACK="cpack"
 
+retry_tdnf() {
+    local attempt
+    for attempt in 1 2 3; do
+        tdnf "$@" && return 0
+        tdnf clean all
+    done
+    return 1
+}
+
 
 # Install Dependencies
 if [[ ${OS} =~ "ubuntu" ]]; then
@@ -34,6 +43,17 @@ if [[ ${OS} =~ "ubuntu" ]]; then
     apt-get update -y
     apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev rpm wget make g++ git dpkg-dev sudo pkg-config
     apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm libzstd-dev libext2fs-dev zlib1g-dev
+
+    if [[ ${OS} == "ubuntu:18.04" ]]; then
+        apt-get install -y software-properties-common
+        add-apt-repository -y ppa:ubuntu-toolchain-r/test
+        apt-get update -y
+        apt-get install -y gcc-9 g++-9
+        COMPILER="-DCMAKE_C_COMPILER=/usr/bin/gcc-9 -DCMAKE_CXX_COMPILER=/usr/bin/g++-9"
+    elif [[ ${OS} == "ubuntu:20.04" ]]; then
+        apt-get install -y gcc-9 g++-9
+        COMPILER="-DCMAKE_C_COMPILER=/usr/bin/gcc-9 -DCMAKE_CXX_COMPILER=/usr/bin/g++-9"
+    fi
 
     DISTRO=${OS/:/1~}
     PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.${DISTRO}"
@@ -82,7 +102,7 @@ elif [[ ${OS} =~ "mariner" ]]; then
     DISTRO=${OS/:/.}
     PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.${DISTRO}"
 elif [[ ${OS} =~ "azurelinux" ]]; then
-    tdnf update -y
+    retry_tdnf update -y || exit 1
     if [[ ${OS} =~ "azurelinux:4" ]]; then
         # Azure Linux 4.0 removed the `ca-certificates-microsoft` and
         # `build-essential` packages that AL3 ships, and no longer pulls
@@ -90,8 +110,8 @@ elif [[ ${OS} =~ "azurelinux" ]]; then
         # explicitly. (gcc/gcc-c++/make/binutils/glibc-devel/autoconf/
         # automake/libtool are already installed on the next line, which is
         # everything `build-essential` provided.)
-        tdnf install -y libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel glibc-devel libzstd-devel binutils ca-certificates zlib-devel
-        tdnf install -y rpm-build make git wget sudo tar gcc gcc-c++ autoconf automake libtool pkg-config
+        retry_tdnf install -y libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel glibc-devel libzstd-devel binutils ca-certificates zlib-devel || exit 1
+        retry_tdnf install -y rpm-build make git wget sudo tar gcc gcc-c++ autoconf automake libtool pkg-config || exit 1
 
         # Azure Linux 4's rpmbuild runs check-rpaths which rejects the
         # /opt/overlaybd/lib RPATH baked into our binaries (they link against
@@ -102,8 +122,8 @@ elif [[ ${OS} =~ "azurelinux" ]]; then
         export QA_RPATHS=0x0002
     else
         # Azure Linux 3.0 (and earlier) -- unchanged from the original recipe.
-        tdnf install -y libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel glibc-devel libzstd-devel binutils ca-certificates-microsoft build-essential
-        tdnf install -y rpm-build make git wget sudo tar gcc gcc-c++ autoconf automake libtool
+        retry_tdnf install -y libaio-devel libcurl-devel openssl-devel libnl3-devel e2fsprogs-devel glibc-devel libzstd-devel binutils ca-certificates-microsoft build-essential || exit 1
+        retry_tdnf install -y rpm-build make git wget sudo tar gcc gcc-c++ autoconf automake libtool || exit 1
     fi
 
     DISTRO=${OS/:/.}

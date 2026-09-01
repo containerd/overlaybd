@@ -1,0 +1,145 @@
+name: TCMU Performance Comparison
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+    - main
+    - native-photon-workpool
+    paths:
+    - .github/workflows/tcmu-performance.yml
+    - .github/scripts/tcmu-performance.sh
+    - .github/scripts/summarize-tcmu-performance.py
+    - src/main.cpp
+    - src/libtcmu/**
+    - src/overlaybd/zfile/**
+
+env:
+  BASELINE_SHA: 175e2cd06117d19b344da6a3bfd685e30befe9fd
+  BUILD_TYPE: Debug
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y \
+          autoconf automake fio help2man jq libaio-dev libcurl4-openssl-dev \
+          libext2fs-dev libgflags-dev libjson-c-dev libkmod-dev libnl-3-dev \
+          libnl-genl-3-dev libpci-dev libssl-dev libsystemd-dev libtool \
+          libzstd-dev lsscsi nasm pkg-config uuid-dev
+
+    - name: Record runner information
+      run: |
+        lscpu
+        free -h
+        uname -a
+        fio --version
+
+    - name: Build native Photon WorkPool implementation
+      shell: bash
+      run: |
+        current_build="$GITHUB_WORKSPACE/build"
+        result_dir="$RUNNER_TEMP/tcmu-performance-results"
+        mkdir -p "$result_dir"
+        # Match the regular CMake workflow. actions/checkout's recursive,
+        # shallow submodule mode can leave DML tag refs without their trees.
+        git submodule update --init
+        # Build production binaries only; unit tests and their GoogleTest
+        # dependency are covered by the regular CMake workflow.
+        cmake -S "$GITHUB_WORKSPACE" -B "$current_build" \
+          -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+          -DBUILD_TESTING=0 \
+          -DENABLE_DSA=1 \
+          -DENABLE_ISAL=1
+        if ! cmake --build "$current_build" --parallel "$(nproc)" \
+            2>&1 | tee "$result_dir/current-build.log"; then
+          first_error=$(grep -Eim1 'error:|fatal:|undefined reference|No space left' \
+            "$result_dir/current-build.log" || true)
+          echo "::error title=Current build failed::${first_error:-see current-build.log artifact}"
+          exit 1
+        fi
+
+    - name: Build baseline
+      shell: bash
+      run: |
+        baseline_src="$RUNNER_TEMP/overlaybd-baseline"
+        baseline_build="$RUNNER_TEMP/overlaybd-baseline-build"
+        git clone --filter=blob:none https://github.com/liulanzheng/overlaybd.git "$baseline_src"
+        git -C "$baseline_src" checkout "$BASELINE_SHA"
+        git -C "$baseline_src" submodule update --init --recursive
+        cmake -S "$baseline_src" -B "$baseline_build" \
+          -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+          -DBUILD_TESTING=0 \
+          -DENABLE_DSA=1 \
+          -DENABLE_ISAL=1
+        cmake --build "$baseline_build" --parallel "$(nproc)"
+        sudo cmake --install "$baseline_build"
+
+    - name: Benchmark baseline implementation
+      shell: bash
+      run: |
+        bash .github/scripts/tcmu-performance.sh \
+          baseline \
+          "$RUNNER_TEMP/overlaybd-baseline/src/example_config/overlaybd-registryv2.json" \
+          "$RUNNER_TEMP/overlaybd-baseline/src/example_config/redis.obd.config.json" \
+          "$RUNNER_TEMP/tcmu-performance-results" \
+          naa.123456789abcdef
+
+    - name: Remove baseline build
+      shell: bash
+      run: |
+        test "$RUNNER_TEMP/overlaybd-baseline" != "/"
+        test "$RUNNER_TEMP/overlaybd-baseline-build" != "/"
+        rm -rf \
+          "$RUNNER_TEMP/overlaybd-baseline" \
+          "$RUNNER_TEMP/overlaybd-baseline-build"
+        # The baseline workload intentionally fills OverlayBD's file cache.
+        # Reclaim it before compiling the current revision on the small hosted
+        # runner disk; each benchmark repopulates an empty cache itself.
+        sudo find /opt/overlaybd/registry_cache -mindepth 1 -delete
+        df -h
+
+    - name: Install native Photon WorkPool implementation
+      shell: bash
+      run: |
+        current_build="$GITHUB_WORKSPACE/build"
+        sudo cmake --install "$current_build"
+        jq '.workpoolSize = 8 | del(.enableThread)' \
+          "$GITHUB_WORKSPACE/src/example_config/overlaybd-registryv2.json" \
+          > "$RUNNER_TEMP/current-overlaybd.json"
+
+    - name: Benchmark native Photon WorkPool implementation
+      shell: bash
+      run: |
+        bash .github/scripts/tcmu-performance.sh \
+          current \
+          "$RUNNER_TEMP/current-overlaybd.json" \
+          "$GITHUB_WORKSPACE/src/example_config/redis.obd.config.json" \
+          "$RUNNER_TEMP/tcmu-performance-results" \
+          naa.987654321abcdef
+
+    - name: Summarize comparison
+      if: always()
+      shell: bash
+      run: |
+        python3 .github/scripts/summarize-tcmu-performance.py \
+          "$RUNNER_TEMP/tcmu-performance-results" | tee -a "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload fio results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: tcmu-performance-${{ github.sha }}
+        path: ${{ runner.temp }}/tcmu-performance-results
+        if-no-files-found: warn

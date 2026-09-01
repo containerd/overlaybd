@@ -26,8 +26,8 @@ jobs:
       run: |
         sudo apt-get update -y
         sudo apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libzstd-dev
-        sudo apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm
-        sudo apt-get install -y libext2fs-dev
+        sudo apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm pkg-config help2man
+        sudo apt-get install -y libext2fs-dev fio jq lsscsi
         wget https://github.com/google/googletest/archive/refs/tags/release-1.11.0.tar.gz
         tar -zxvf release-1.11.0.tar.gz
         cd googletest-release-1.11.0/
@@ -48,15 +48,19 @@ jobs:
     - name: Build
       working-directory: ${{github.workspace}}/build
       shell: bash
-      run: make -j64
+      run: |
+        make -j64
+        sudo make install
 
     - name: E2E Test OverlayBD
       working-directory: ${{github.workspace}}/build
       shell: bash
       run: |
         lscpu
-        sudo make install
         sudo cp ${{github.workspace}}/src/example_config/overlaybd-registryv2.json /etc/overlaybd/overlaybd.json
+        grep -Eq '"cacheType"[[:space:]]*:[[:space:]]*"file"' /etc/overlaybd/overlaybd.json
+        sudo install -d -m 0755 /opt/overlaybd/registry_cache
+        sudo find /opt/overlaybd/registry_cache -mindepth 1 -delete
         sudo systemctl enable /opt/overlaybd/overlaybd-tcmu.service
         sudo systemctl start overlaybd-tcmu
         sudo systemctl status overlaybd-tcmu
@@ -68,15 +72,126 @@ jobs:
         echo -n "naa.123456789abcdef" | sudo tee /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/nexus
         sudo ln -s /sys/kernel/config/target/core/user_1/vol1 /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0/vol1
         lsblk
-        sudo apt-get install -y lsscsi
-        dev=`lsscsi | grep TCMU | awk '{print $7}'`
-        echo $dev
+        dev=$(lsscsi | awk '/TCMU/ {print $7; exit}')
+        test -b "$dev"
+        echo "$dev"
         mkdir obd_mp
-        sudo mount -o ro $dev obd_mp
+        sudo mount -o ro "$dev" obd_mp
         ls obd_mp
+
+        # Exercise OverlayBD while the filesystem is mounted. direct=1 opens the
+        # raw block device with O_DIRECT, so Linux's block/page cache cannot
+        # satisfy these reads before they reach OverlayBD.
+        cache_blocks_before=$(sudo find /opt/overlaybd/registry_cache -type f -printf '%b\n' | awk '{blocks += $1} END {print blocks + 0}')
+        sudo fio \
+          --name=overlaybd-file-cache-fill \
+          --filename="$dev" \
+          --readonly \
+          --direct=1 \
+          --ioengine=libaio \
+          --rw=randread \
+          --bs=4k \
+          --iodepth=32 \
+          --numjobs=8 \
+          --time_based=1 \
+          --runtime=20 \
+          --randrepeat=1 \
+          --randseed=20260821 \
+          --group_reporting=1
+        cache_blocks_after=$(sudo find /opt/overlaybd/registry_cache -type f -printf '%b\n' | awk '{blocks += $1} END {print blocks + 0}')
+        test "$cache_blocks_after" -gt "$cache_blocks_before"
+
+        # Repeat the same high-concurrency direct-I/O workload so the requests
+        # traverse OverlayBD again and hit the file cache populated above.
+        fio_result="$RUNNER_TEMP/overlaybd-file-cache-hit.json"
+        sudo fio \
+          --name=overlaybd-file-cache-hit \
+          --filename="$dev" \
+          --readonly \
+          --direct=1 \
+          --ioengine=libaio \
+          --rw=randread \
+          --bs=4k \
+          --iodepth=32 \
+          --numjobs=8 \
+          --time_based=1 \
+          --runtime=20 \
+          --randrepeat=1 \
+          --randseed=20260821 \
+          --group_reporting=1 \
+          --output-format=json \
+          --output="$fio_result"
+        iops=$(jq -r '.jobs[0].read.iops | floor' "$fio_result")
+        echo "OverlayBD file-cache random-read IOPS: $iops"
+        if ((iops < 110000)); then
+          echo "::error title=OverlayBD IOPS regression::Expected at least 110000 IOPS, got $iops"
+          exit 1
+        fi
+
+        # Add three more TCMU devices and exercise all four concurrently. Each
+        # fio process uses O_DIRECT so every request reaches OverlayBD instead
+        # of being satisfied by the host page cache.
+        for index in 2 3 4; do
+          core_path="/sys/kernel/config/target/core/user_1/vol${index}"
+          target_path="/sys/kernel/config/target/loopback/naa.${index}23456789abcdef/tpgt_1"
+          sudo mkdir -p "$core_path"
+          echo -n dev_config=overlaybd/${{github.workspace}}/src/example_config/redis.obd.config.json | sudo tee "$core_path/control"
+          echo -n 1 | sudo tee "$core_path/enable"
+          sudo mkdir -p "$target_path/lun/lun_0"
+          echo -n "naa.${index}23456789abcdef" | sudo tee "$target_path/nexus"
+          sudo ln -s "$core_path" "$target_path/lun/lun_0/vol${index}"
+        done
+
+        for attempt in {1..30}; do
+          mapfile -t devices < <(lsscsi | awk '/TCMU/ {print $7}')
+          ((${#devices[@]} >= 4)) && break
+          sleep 1
+        done
+        if ((${#devices[@]} < 4)); then
+          echo "::error title=TCMU device discovery failed::Expected 4 devices, found ${#devices[@]}"
+          lsscsi
+          exit 1
+        fi
+        devices=("${devices[@]:0:4}")
+        printf 'Concurrent TCMU test devices: %s\n' "${devices[*]}"
+
+        fio_pids=()
+        for index in "${!devices[@]}"; do
+          sudo fio \
+            --name="overlaybd-multi-device-$((index + 1))" \
+            --filename="${devices[$index]}" \
+            --readonly \
+            --direct=1 \
+            --ioengine=libaio \
+            --rw=randread \
+            --bs=4k \
+            --iodepth=32 \
+            --numjobs=1 \
+            --time_based=1 \
+            --runtime=20 \
+            --group_reporting=1 \
+            --output="$RUNNER_TEMP/overlaybd-multi-device-$((index + 1)).log" &
+          fio_pids+=("$!")
+        done
+        fio_failed=0
+        for pid in "${fio_pids[@]}"; do
+          wait "$pid" || fio_failed=1
+        done
+        if ((fio_failed)); then
+          echo "::error title=Concurrent TCMU I/O failed::At least one device failed under concurrent fio load"
+          tail -n +1 "$RUNNER_TEMP"/overlaybd-multi-device-*.log
+          exit 1
+        fi
+        tail -n +1 "$RUNNER_TEMP"/overlaybd-multi-device-*.log
+        sudo systemctl is-active --quiet overlaybd-tcmu
         sudo umount obd_mp
-        ls -l /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0/vol1
-        sudo unlink /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0/vol1
+        for index in 1 2 3 4; do
+          core_path="/sys/kernel/config/target/core/user_1/vol${index}"
+          lun_path="/sys/kernel/config/target/loopback/naa.${index}23456789abcdef/tpgt_1/lun/lun_0/vol${index}"
+          ls -l "$lun_path"
+          sudo unlink "$lun_path"
+          sudo rmdir "$core_path"
+        done
         wget https://overlaybd.blob.core.windows.net/overlaybd/e2etest.tar.gz
         gzip -k -d e2etest.tar.gz
         mkdir test_data
@@ -96,7 +211,6 @@ jobs:
       working-directory: ${{github.workspace}}/build
       shell: bash
       run: |
-        sudo make install
         sudo cp ${{github.workspace}}/src/example_config/overlaybd-registryv2.json /etc/overlaybd/overlaybd.json
         sudo systemctl enable /opt/overlaybd/overlaybd-tcmu.service
         sudo systemctl start overlaybd-tcmu
@@ -104,21 +218,106 @@ jobs:
         sudo wget https://overlaybd.blob.core.windows.net/overlaybd/e2etest.tar.gz
         sudo mkdir -p /var/lib/overlaybd/test/
         sudo tar -zxvf e2etest.tar.gz -C /var/lib/overlaybd/test/
-        sudo mkdir -p /sys/kernel/config/target/core/user_1/vol2
-        echo -n dev_config=overlaybd//var/lib/overlaybd/test/20/block/config.v1.json | sudo tee /sys/kernel/config/target/core/user_1/vol2/control
-        echo -n 1 | sudo tee /sys/kernel/config/target/core/user_1/vol2/enable
-        sudo mkdir -p /sys/kernel/config/target/loopback/naa.987654321abcdef/tpgt_1/lun/lun_0
-        echo -n "naa.987654321abcdef" | sudo tee /sys/kernel/config/target/loopback/naa.987654321abcdef/tpgt_1/nexus
-        sudo ln -s /sys/kernel/config/target/core/user_1/vol2 /sys/kernel/config/target/loopback/naa.987654321abcdef/tpgt_1/lun/lun_0/vol2
+
+        # Match the registry-v2 E2E load with four independent turboOCIv1
+        # devices backed by the same image.
+        for index in 1 2 3 4; do
+          core_path="/sys/kernel/config/target/core/user_1/turbo${index}"
+          target_path="/sys/kernel/config/target/loopback/naa.a23456789abcde${index}/tpgt_1"
+          sudo mkdir -p "$core_path"
+          echo -n dev_config=overlaybd//var/lib/overlaybd/test/20/block/config.v1.json | sudo tee "$core_path/control"
+          echo -n 1 | sudo tee "$core_path/enable"
+          sudo mkdir -p "$target_path/lun/lun_0"
+          echo -n "naa.a23456789abcde${index}" | sudo tee "$target_path/nexus"
+          sudo ln -s "$core_path" "$target_path/lun/lun_0/turbo${index}"
+        done
+
+        for attempt in {1..30}; do
+          mapfile -t devices < <(lsscsi | awk '/TCMU/ {print $7}')
+          ((${#devices[@]} >= 4)) && break
+          sleep 1
+        done
+        if ((${#devices[@]} < 4)); then
+          echo "::error title=turboOCIv1 device discovery failed::Expected 4 devices, found ${#devices[@]}"
+          lsscsi
+          exit 1
+        fi
+        devices=("${devices[@]:0:4}")
+        printf 'turboOCIv1 test devices: %s\n' "${devices[*]}"
         lsblk
-        sudo apt-get install -y lsscsi
-        dev=`lsscsi | grep TCMU | awk '{print $7}'`
-        echo $dev
         sudo mkdir foci_mp
-        sudo mount -o ro $dev foci_mp
+        sudo mount -o ro "${devices[0]}" foci_mp
         ls foci_mp
+
+        # Run the same single-device warmup and high-concurrency direct-I/O
+        # load used by the registry-v2 E2E test.
+        sudo fio \
+          --name=turbooci-v1-warmup \
+          --filename="${devices[0]}" \
+          --readonly \
+          --direct=1 \
+          --ioengine=libaio \
+          --rw=randread \
+          --bs=4k \
+          --iodepth=32 \
+          --numjobs=8 \
+          --time_based=1 \
+          --runtime=20 \
+          --randrepeat=1 \
+          --randseed=20260821 \
+          --group_reporting=1
+        sudo fio \
+          --name=turbooci-v1-high-concurrency \
+          --filename="${devices[0]}" \
+          --readonly \
+          --direct=1 \
+          --ioengine=libaio \
+          --rw=randread \
+          --bs=4k \
+          --iodepth=32 \
+          --numjobs=8 \
+          --time_based=1 \
+          --runtime=20 \
+          --randrepeat=1 \
+          --randseed=20260821 \
+          --group_reporting=1
+
+        fio_pids=()
+        for index in "${!devices[@]}"; do
+          sudo fio \
+            --name="turbooci-v1-multi-device-$((index + 1))" \
+            --filename="${devices[$index]}" \
+            --readonly \
+            --direct=1 \
+            --ioengine=libaio \
+            --rw=randread \
+            --bs=4k \
+            --iodepth=32 \
+            --numjobs=1 \
+            --time_based=1 \
+            --runtime=20 \
+            --group_reporting=1 \
+            --output="$RUNNER_TEMP/turbooci-v1-multi-device-$((index + 1)).log" &
+          fio_pids+=("$!")
+        done
+        fio_failed=0
+        for pid in "${fio_pids[@]}"; do
+          wait "$pid" || fio_failed=1
+        done
+        if ((fio_failed)); then
+          echo "::error title=Concurrent turboOCIv1 I/O failed::At least one device failed under concurrent fio load"
+          tail -n +1 "$RUNNER_TEMP"/turbooci-v1-multi-device-*.log
+          exit 1
+        fi
+        tail -n +1 "$RUNNER_TEMP"/turbooci-v1-multi-device-*.log
+        sudo systemctl is-active --quiet overlaybd-tcmu
         sudo umount foci_mp
-        sudo unlink /sys/kernel/config/target/loopback/naa.987654321abcdef/tpgt_1/lun/lun_0/vol2
+        for index in 1 2 3 4; do
+          core_path="/sys/kernel/config/target/core/user_1/turbo${index}"
+          lun_path="/sys/kernel/config/target/loopback/naa.a23456789abcde${index}/tpgt_1/lun/lun_0/turbo${index}"
+          sudo unlink "$lun_path"
+          sudo rmdir "$core_path"
+        done
     - name: Unit Test
       working-directory: ${{github.workspace}}/build
       shell: bash

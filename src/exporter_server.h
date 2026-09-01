@@ -53,7 +53,7 @@ struct ExporterServer {
     ExporterServer(ImageConfigNS::GlobalConfig &config,
                    OverlayBDMetric *metrics) {
         tcpserver = photon::net::new_tcp_socket_server();
-        tcpserver->setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
+        tcpserver->setsockopt<int>(SOL_SOCKET, SO_REUSEPORT, 1);
         if (tcpserver->bind(config.exporterConfig().port()) < 0)
             LOG_ERRNO_RETURN(0, , "Failed to bind exporter port `",
                              config.exporterConfig().port());

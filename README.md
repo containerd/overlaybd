@@ -19,6 +19,12 @@ Overlaybd has 2 core component:
 
 This repository is an implementation of overlaybd based on [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
 
+The userspace TCMU support is provided by the bundled
+[photon-libtcmu](https://github.com/data-accelerator/photon-libtcmu) source in
+`src/libtcmu`. It is built with the same PhotonLibOS instance as
+OverlayBD. photon-libtcmu is available under LGPL-2.1 or Apache-2.0; OverlayBD
+uses it under Apache-2.0. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 Overlaybd can be used as the storage backend of [Accelerated Container Image](https://github.com/containerd/accelerated-container-image), which is a solution of remote container image by fetching image data on-demand without downloading and unpacking the whole image before the container starts.
 
 Benefits from the universality of block-device, overlaybd is also a widely applicable image format for most runtime, including qemu/kvm and any other runtime supporting block or scsi api.
@@ -55,7 +61,7 @@ To build overlaybd from source code, the following dependencies are required:
 
 * CMake >= 3.14
 
-* gcc/g++ >= 7
+* gcc/g++ >= 8
 
 * Libaio, libcurl, libnl3, glib2 and openssl runtime and development libraries.
   * CentOS 7/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel libzstd-static e2fsprogs-devel`
@@ -152,6 +158,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
         "path": "/opt/overlaybd/cred.json"
     },
     "ioEngine": 0,
+    "workpoolSize": 8,
     "download": {
         "enable": true,
         "delay": 600,
@@ -210,7 +217,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | exporterConfig.port           | port for http server to show metrics.                                                       |
 | exporterConfig.updateInterval | Time interval to update metrics in microseconds.                                            |
 | enableAudit         | Enable audit or not.                                                                                  |
-| enableThread        | Enable overlaybd device run in seprate thread or not. Note `cacheType` should be `ocf`. `false` is default. |
+| workpoolSize        | Number of Photon vCPUs (OS threads) in the shared device work pool. `8` is default.                   |
 | auditPath           | The path for audit file, `/var/log/overlaybd-audit.log` is the default value.                         |
 | registryFsVersion   | registry client version, 'v1' libcurl based, 'v2' is photon http based. 'v2' is the default value.    |
 | prefetchConfig.concurrency    | Prefetch concurrency for reloading trace, `16` is default                                   |

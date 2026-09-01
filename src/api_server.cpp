@@ -152,7 +152,7 @@ struct ApiServer {
             host.resize(pos);
         }
         tcpserver = photon::net::new_tcp_socket_server();
-        tcpserver->setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
+        tcpserver->setsockopt<int>(SOL_SOCKET, SO_REUSEPORT, 1);
         if(tcpserver->bind(url.port(), photon::net::IPAddr(host.c_str())) < 0)
             LOG_ERRNO_RETURN(0, -1, "Failed to bind api server port `", url.port());
         if(tcpserver->listen() < 0)

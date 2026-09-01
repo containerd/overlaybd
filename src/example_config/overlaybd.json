@@ -18,6 +18,7 @@
         "path": "/opt/overlaybd/cred.json"
     },
     "ioEngine": 0,
+    "workpoolSize": 8,
     "download": {
         "enable": true,
         "delay": 600,
