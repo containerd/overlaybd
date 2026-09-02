@@ -34,6 +34,26 @@
 #include "../lsmt/file.h"
 #include "../lsmt/index.h"
 
+/*
+ * Archive members may be stored with a leading / ("/usr/lib") or without
+ * ("usr/lib"), while the extraction target is always mounted at its own root.
+ * Root the name so that both flavours denote the very same path. This takes over
+ * from the subfs("/") wrapper the target fs used to sit behind, which prepended
+ * the slash unconditionally and so turned an already rooted "/usr/lib" into
+ * "//usr/lib" -- an empty path element that ext2fs' namei() refuses to resolve.
+ *
+ * Names reach us cleaned by clean_name(), hence a rooted one carries neither an
+ * empty element nor a ".." and can be taken as is. An unrooted one may still
+ * begin with "..", which clean_name() only folds away for a rooted name; callers
+ * reject those the way subfs' path_level_valid() did.
+ */
+std::string rooted_name(const char *name) {
+    if (name[0] == '/') {
+        return name;
+    }
+    return std::string("/") + name;
+}
+
 int UnTar::set_file_perms(const char *filename) {
     mode_t mode = header.get_mode();
     uid_t uid = header.get_uid();
@@ -129,11 +149,14 @@ int UnTar::extract_all() {
         if (name == nullptr) {
             LOG_ERRNO_RETURN(0, -1, "get filename failed");
         }
-        if (strcmp(name, "/") == 0) {
-            LOG_WARN("file '/' ignored: resolved to root");
+        if (!photon::fs::path_level_valid(name)) {
+            LOG_ERROR_RETURN(EINVAL, -1, "filename ` climbs above the extraction root", name);
+        }
+        std::string filename = rooted_name(name);
+        if (filename == "/") {
+            LOG_WARN("file '`' ignored: resolved to root", name);
             continue;
         }
-        std::string filename(name);
         if (extract_file(filename.c_str()) != 0) {
             LOG_ERRNO_RETURN(0, -1, "extract failed, filename `", filename);
         }
@@ -319,9 +342,14 @@ int UnTar::extract_regfile(const char *filename) {
 }
 
 int UnTar::extract_hardlink(const char *filename) {
-    char *linktgt = get_linkname();
+    // a hardlink target is a path inside the target fs, unlike a symlink target
+    char *linkname = get_linkname();
+    if (!photon::fs::path_level_valid(linkname)) {
+        LOG_ERROR_RETURN(EINVAL, -1, "link target ` climbs above the extraction root", linkname);
+    }
+    auto linktgt = rooted_name(linkname);
     LOG_DEBUG("  ==> extracting: ` (link to `)", filename, linktgt);
-    if (fs->link(linktgt, filename) == -1) {
+    if (fs->link(linktgt.c_str(), filename) == -1) {
         LOG_ERRNO_RETURN(0, -1, "link failed, filename `, linktgt `", filename, linktgt);
     }
     return 0;

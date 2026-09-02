@@ -78,6 +78,9 @@ char *clean_name(char *name) {
 }
 
 std::string remove_last_slash(const std::string_view &path) {
+    // the root is all slash, stripping it would leave an empty path
+    if (path == "/")
+        return std::string(path);
     if (path.back() == '/')
         return std::string(path.substr(0, path.size() - 1));
     else

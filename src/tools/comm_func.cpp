@@ -75,6 +75,12 @@ photon::fs::IFileSystem *create_ext4fs(photon::fs::IFile *imgfile, bool mkfs,
         fprintf(stderr, "new extfs failed, %s\n", strerror(errno));
         exit(-1);
     }
+    // subfs prepends `root` to every path, which for the fs root only turns an
+    // already normalized "/x" into "//x". ext2fs' namei() rejects the empty path
+    // element, so full-path lookups (opendir, stat, truncate, ...) would fail.
+    if (root == nullptr || root[0] == '\0' || strcmp(root, "/") == 0) {
+        return extfs;
+    }
     auto target = new_subfs(extfs, root, true);
     if (!target) {
         fprintf(stderr, "new subfs failed, %s\n", strerror(errno));
