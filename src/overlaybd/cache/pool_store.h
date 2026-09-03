@@ -93,7 +93,7 @@ public:
     // available space meet other requirements as well
     virtual int evict(size_t size = 0) = 0;
 
-    int store_release(ICacheStore *store);
+    void store_release(ICacheStore *store);
 
     void stores_clear();
 

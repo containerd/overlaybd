@@ -147,7 +147,7 @@ public:
     }
 
     long get_data(const estring &url, off_t offset, size_t count, uint64_t timeout, HTTP_OP &op) {
-        Timeout tmo(timeout);
+        photon::Timeout tmo(timeout);
         long ret = 0;
         UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
             return get_actual_url(url, tmo.timeout(), ret);
@@ -210,7 +210,7 @@ public:
 
     UrlInfo* get_actual_url(const estring &url, uint64_t timeout, long &code) {
 
-        Timeout tmo(timeout);
+        photon::Timeout tmo(timeout);
         estring authurl, scope;
         estring *token = nullptr;
 
@@ -300,7 +300,7 @@ public:
 
     int refresh_token(const estring &url, estring &token) {
         estring authurl, scope;
-        Timeout tmo(m_timeout);
+        photon::Timeout tmo(m_timeout);
         auto authtype = get_scope_auth(url, &authurl, &scope, tmo.timeout(), true);
         if (authtype == AuthType::Unknown)
             return -1;
@@ -329,7 +329,7 @@ protected:
 
     AuthType get_scope_auth(const estring &url, estring *authurl, estring *scope, uint64_t timeout,
                        bool push = false) {
-        Timeout tmo(timeout);
+        photon::Timeout tmo(timeout);
         auto verb = push ? Verb::POST : Verb::GET;
         HTTP_OP op(m_client, verb, url);
         op.follow = 0;
@@ -403,7 +403,7 @@ protected:
 
     bool authenticate(const estring &authurl, std::string &username, std::string &password,
                       estring *token, uint64_t timeout) {
-        Timeout tmo(timeout);
+        photon::Timeout tmo(timeout);
         estring userpwd_b64;
         photon::net::Base64Encode(estring().appends(username, ":", password), userpwd_b64);
         HTTP_OP op(m_client, Verb::GET, authurl);
@@ -455,7 +455,7 @@ public:
         }
         auto filesize = m_filesize;
         int retry = 3;
-        Timeout tmo(m_timeout);
+        photon::Timeout tmo(m_timeout);
 
     again:
         iovector_view view((struct iovec*)iov, iovcnt);
@@ -468,7 +468,7 @@ public:
         auto code = m_fs->get_data(m_url, offset, count, tmo.timeout(), op);
         if (code != 200 && code != 206) {
             ERRNO eno;
-            if (tmo.expire() < photon::now) {
+            if (tmo.expired()) {
                 LOG_ERROR_RETURN(ETIMEDOUT, -1, "timed out in preadv ", VALUE(m_url), VALUE(offset));
             }
             if (retry--) {
@@ -485,13 +485,13 @@ public:
     }
 
     int64_t get_length(uint64_t timeout = -1) {
-        Timeout tmo(timeout);
+        photon::Timeout tmo(timeout);
         int retry = 3;
     again:
         HTTP_OP op;
         auto code = m_fs->get_data(m_url, 0, 1, tmo.timeout(), op);
         if (code != 200 && code != 206) {
-            if (tmo.expire() < photon::now)
+            if (tmo.expired())
                 LOG_ERROR_RETURN(ETIMEDOUT, -1, "get meta timedout");
             if (retry--)
                     goto again;
@@ -652,7 +652,7 @@ public:
     // non-empty digest means complete request
     off_t upload_chunk(off_t offset, size_t count, std::string_view digest) {
         LOG_INFO("upload chunk ", VALUE(offset), VALUE(count), VALUE(digest));
-        Timeout tmo(m_timeout);
+        photon::Timeout tmo(m_timeout);
         auto verb = Verb::PATCH;
         estring url = m_upload_url;
         if (!digest.empty()) {
@@ -812,7 +812,7 @@ public:
             return -1;
         }
 
-        Timeout tmo(m_timeout);
+        photon::Timeout tmo(m_timeout);
         HTTP_OP op(m_upload_fs->get_client(), Verb::POST, m_upload_url);
         op.req.headers.insert("Content-Type", "application/octet-stream");
         op.req.headers.insert(kAuthHeaderKey, "Bearer ");

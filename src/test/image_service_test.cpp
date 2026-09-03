@@ -37,12 +37,12 @@
 #include "../tools/comm_func.h"
 #include "../overlaybd/lsmt/file.h"
 
-char *test_ua = nullptr;
+const char *test_ua = nullptr;
 
 photon::net::ISocketServer *new_server(std::string ip, uint16_t port) {
     auto server = photon::net::new_tcp_socket_server();
     server->timeout(1000UL*1000);
-    server->setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
+    server->setsockopt<int>(SOL_SOCKET, SO_REUSEPORT, 1);
     server->bind(port, photon::net::IPAddr(ip.c_str()));
     server->listen();
     server->set_handler(nullptr);
@@ -154,7 +154,7 @@ TEST(http_client, user_agent) {
     client->set_user_agent(test_ua);
     DEFER(delete client);
     auto op = client->new_operation(photon::net::http::Verb::GET, target_get);
-    DEFER(delete op);
+    DEFER(client->destroy_operation(op));
     op->req.headers.content_length(0);
     client->call(op);
     EXPECT_EQ(op->status_code, 200);
@@ -291,7 +291,7 @@ public:
         auto client = photon::net::http::new_http_client();
         DEFER(delete client);
         auto op = client->new_operation(photon::net::http::Verb::GET, request_url);
-        DEFER(delete op);
+        DEFER(client->destroy_operation(op));
         op->req.headers.content_length(0);
         // std::cout << "op->req.target(): " << op->req.target() << " op->req.query(): " << op->req.query() << std::endl;
         client->call(op);
@@ -319,12 +319,12 @@ TEST_F(HTTPServerTest, http_server) {
 }
 
 #define PREADV_SINGLE(file, buf, count, offset) ({ \
-    struct iovec iov = { .iov_base = (void *)buf, .iov_len = count }; \
+    struct iovec iov = { .iov_base = (void *)buf, .iov_len = (size_t)(count) }; \
     (file)->preadv(&iov, 1, offset); \
 })
 
 #define PWRITEV_SINGLE(file, buf, count, offset) ({ \
-    struct iovec iov = { .iov_base = (void *)buf, .iov_len = count }; \
+    struct iovec iov = { .iov_base = (void *)buf, .iov_len = (size_t)(count) }; \
     (file)->pwritev(&iov, 1, offset); \
 })
 
@@ -367,7 +367,7 @@ public:
         srand(154574045);
     }
 
-    void create_file_rw(char *data_name, char *index_name, bool sparse = false) {
+    void create_file_rw(const char *data_name, const char *index_name, bool sparse = false) {
         auto fdata = photon::fs::open_localfile_adaptor(data_name, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         auto findex = photon::fs::open_localfile_adaptor(index_name, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         LSMT::LayerInfo args(fdata, findex);
@@ -432,8 +432,9 @@ TEST_F(CreateSnapshotTest, create_snapshot) {
     EXPECT_EQ(ret, len);
     for(auto i = 0; i < len; i++) {
         EXPECT_EQ(buf0[i], buf1[i]);
-        if(i >= len / 4 && i < len / 2 + len / 4)
+        if (i >= len / 4 && i < len / 2 + len / 4) {
             EXPECT_EQ(buf0[i], buf[i - len / 4]);
+        }
     }
 
     delete imgfile0;
@@ -491,8 +492,9 @@ TEST_F(CreateSnapshotTest, create_snapshot_sparse) {
     EXPECT_EQ(ret, len);
     for(auto i = 0; i < len; i++) {
         EXPECT_EQ(buf0[i], buf1[i]);
-        if(i >= len / 4 && i < len / 2 + len / 4)
+        if (i >= len / 4 && i < len / 2 + len / 4) {
             EXPECT_EQ(buf0[i], buf[i - len / 4]);
+        }
     }
 
     delete imgfile0;

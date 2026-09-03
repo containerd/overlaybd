@@ -117,7 +117,7 @@ public:
 
     long GET(const char *url, photon::net::HeaderMap *headers, off_t offset, size_t count,
              photon::net::IOVWriter *writer, uint64_t timeout) {
-        Timeout tmo(timeout);
+        photon::Timeout tmo(timeout);
         long ret = 0;
         UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
             return getActualUrl(url, tmo.timeout(), ret);
@@ -197,7 +197,7 @@ public:
             uint64_t elapsed = 1000000UL * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
             LOG_INFO("getActualUrl for: `, time used: ` ms", url, elapsed / 1000);
         });
-        Timeout tmo(timeout);
+        photon::Timeout tmo(timeout);
         auto curl = get_cURL();
         DEFER({ release_cURL(curl); });
         photon::net::HeaderMap headers;
@@ -297,7 +297,7 @@ protected:
 
     int getScopeAuth(const char *url, estring *authurl, estring *scope, uint64_t timeout) {
         // need authorize;
-        Timeout tmo(timeout);
+        photon::Timeout tmo(timeout);
         auto curl = get_cURL();
         DEFER({ release_cURL(curl); });
         photon::net::HeaderMap headers;
@@ -339,7 +339,7 @@ protected:
             uint64_t elapsed = 1000000UL * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
             LOG_INFO("authenticate for: `, time used: ` ms", auth_url, elapsed / 1000);
         });
-        Timeout tmo(timeout);
+        photon::Timeout tmo(timeout);
         photon::net::cURL *req = get_cURL();
         DEFER({ release_cURL(req); });
         photon::net::StringWriter writer;
@@ -411,7 +411,7 @@ public:
         }
         auto filesize = m_filesize;
         int retry = 3;
-        Timeout timeout(m_timeout);
+        photon::Timeout tmo(m_timeout);
 
     again:
         photon::net::IOVWriter container(iov, iovcnt);
@@ -422,11 +422,11 @@ public:
 
         photon::net::HeaderMap headers;
         long code =
-            m_fs->GET(m_url.c_str(), &headers, offset, count, &container, timeout.timeout());
+            m_fs->GET(m_url.c_str(), &headers, offset, count, &container, tmo.timeout());
 
         if (code != 200 && code != 206) {
             ERRNO eno;
-            if (timeout.expire() < photon::now) {
+            if (tmo.expired()) {
                 LOG_ERROR_RETURN(ETIMEDOUT, -1, "timed out in preadv ", VALUE(m_url),
                                  VALUE(offset));
             }
@@ -459,12 +459,12 @@ public:
      */
     int64_t getMetaLength(uint64_t timeout = -1) {
         photon::net::HeaderMap headers;
-        Timeout tmo(timeout);
+        photon::Timeout tmo(timeout);
         int retry = 3;
     again:
         auto code = m_fs->GET(m_url.c_str(), &headers, -1, -1, nullptr, tmo.timeout());
         if (code != 200 && code != 206) {
-            if (tmo.expire() < photon::now)
+            if (tmo.expired())
                 LOG_ERROR_RETURN(ETIMEDOUT, -1, "Get meta timedout");
             if (retry--)
                 goto again;
