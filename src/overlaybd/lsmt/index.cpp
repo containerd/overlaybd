@@ -627,6 +627,10 @@ static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const 
                           std::size_t n, uint64_t begin, uint64_t end, bool change_tag = true,
                           size_t max_level = 0);
 
+static bool merge_indexes_catch(uint8_t level, vector<SegmentMapping> &mapping,
+                                const Index **pindexes, std::size_t n, uint64_t begin,
+                                uint64_t end, bool change_tag = true, size_t max_level = 0);
+
 class ComboIndex : public Index0 {
 public:
     Index0 *m_index0{nullptr};
@@ -741,11 +745,8 @@ public:
     virtual Index *rebuild_backing_index(Index *highlevel_idx, size_t max_level) {
         vector<SegmentMapping> mappings;
         const Index *indexes[2] = {highlevel_idx, const_cast<Index *>(m_backing_index)};
-        try {
-            merge_indexes(0, mappings, indexes, 2, 0, UINT64_MAX, false, max_level);
-        } catch (const std::length_error &) {
+        if (!merge_indexes_catch(0, mappings, indexes, 2, 0, UINT64_MAX, false, max_level))
             return nullptr;
-        }
         return new Index(std::move(mappings));
     }
 
@@ -758,9 +759,7 @@ public:
             return ro_idx0;
         }
         const Index *indexes[2] = {ro_idx0, const_cast<Index *>(m_backing_index)};
-        try {
-            merge_indexes(0, mappings, indexes, 2, 0, UINT64_MAX, false, 2);
-        } catch (const std::length_error &) {
+        if (!merge_indexes_catch(0, mappings, indexes, 2, 0, UINT64_MAX, false, 2)) {
             delete ro_idx0;
             return nullptr;
         }
@@ -910,6 +909,17 @@ static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const 
     }
 }
 
+static bool merge_indexes_catch(uint8_t level, vector<SegmentMapping> &mapping,
+                                const Index **pindexes, size_t n, uint64_t begin, uint64_t end,
+                                bool change_tag, size_t max_level) {
+    try {
+        merge_indexes(level, mapping, pindexes, n, begin, end, change_tag, max_level);
+    } catch (const std::length_error &) {
+        return false;
+    }
+    return true;
+}
+
 IComboIndex *create_combo_index(IMemoryIndex0 *index0, const IMemoryIndex *index,
                                 uint8_t ro_index_count, bool ownership) {
     if (!index0 || !index)
@@ -971,11 +981,8 @@ IMemoryIndex *merge_memory_indexes(const IMemoryIndex **pindexes, size_t n) {
     vector<SegmentMapping> mapping;
     auto pi = (const Index **)pindexes;
     mapping.reserve(pi[0]->size());
-    try {
-        merge_indexes(0, mapping, pi, n, 0, UINT64_MAX);
-    } catch (const std::length_error &) {
+    if (!merge_indexes_catch(0, mapping, pi, n, 0, UINT64_MAX))
         return nullptr;
-    }
 
     if (pindexes[0]->vsize() < static_cast<uint64_t>(UINT32_MAX) * ALIGNMENT
         && mapping.size() < NODES_PER_LEVEL_32[MAX_LEVEL_32-1]) {
