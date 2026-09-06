@@ -53,9 +53,16 @@ set(ENABLE_MIMIC_VDSO off)
 option(BUILD_CURL_FROM_SOURCE "Compile static libcurl" off)
 option(BUILD_STREAM_CONVERTOR "Build the stream convertor" on)
 option(ORIGIN_EXT2FS "Use original libext2fs" off)
+# Building it requires autotools on the build machine; disable with -DBUILD_UBLK_FRONTEND=off
+option(BUILD_UBLK_FRONTEND "Build the ublk frontend (overlaybd-ublk), requires autotools" on)
 
 find_package(photon REQUIRED)
 find_package(tcmu REQUIRED)
+
+if(BUILD_UBLK_FRONTEND)
+    find_package(liburing REQUIRED)
+    find_package(ublksrv REQUIRED)
+endif()
 
 if(BUILD_STREAM_CONVERTOR)
     find_package(yaml-cpp)

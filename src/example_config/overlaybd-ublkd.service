@@ -1,0 +1,30 @@
+[Unit]
+Description=overlaybd-ublkd service (centralized ublk device manager)
+After=network.target local-fs.target
+Before=shutdown.target
+DefaultDependencies=no
+Conflicts=shutdown.target
+
+[Service]
+LimitNOFILE=1048576
+LimitCORE=infinity
+Type=simple
+
+ExecStartPre=/sbin/modprobe ublk_drv
+
+ExecStart=/opt/overlaybd/bin/overlaybd-ublkd
+
+# Devices are stopped in parallel on shutdown, but each deletion may take
+# ~2s on kernels without DEL_DEV_ASYNC. Give teardown enough room: killing
+# a daemon that is still flushing dirty pages risks a writeback deadlock
+# (see the ublk notes in README).
+TimeoutStopSec=60
+
+GuessMainPID=no
+Restart=on-failure
+RestartSec=1s
+KillMode=process
+OOMScoreAdjust=-999
+
+[Install]
+WantedBy=multi-user.target
