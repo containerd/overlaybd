@@ -1504,7 +1504,7 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
         if (LSMTSparseFile::create_mappings(fdata, mappings) == -1) {
             LOG_ERROR_RETURN(0, nullptr, "failed to create segment mappings from sparse file!");
         }
-        pi = create_memory_index0((const SegmentMapping *)&mappings[0], mappings.size(),
+        pi = create_memory_index0(mappings.data(), mappings.size(),
                                   HeaderTrailer::SPACE / ALIGNMENT, stat.st_size / ALIGNMENT);
         if (!pi) {
             LOG_ERROR_RETURN(0, nullptr, "failed to create memory index from sparse file!");
