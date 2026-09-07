@@ -113,6 +113,10 @@ ImageFileTarget *ublk_make_image_target(ImageFile *file) {
     return new ImageFileTarget(file);
 }
 
+void ublk_free_image_target(ImageFileTarget *target) {
+    delete target;
+}
+
 void UblkDevice::stop() {
     stop_requested_ = true; // lifecycle stays ours: teardown may self-DEL
     if (ctrl_dev_ != nullptr)
@@ -558,7 +562,8 @@ int UblkDevice::claim_instance(const std::string &image_root, const std::string 
 int UblkDevice::setup_cache_root(const UblkDeviceOpts &opts, std::string &cache_root) {
     char resolved[PATH_MAX];
     if (realpath(opts.image_config_path.c_str(), resolved) == nullptr) {
-        last_error_ = "image config " + opts.image_config_path + ": " + strerror(errno);
+        last_error_ = "image config " + opts.image_config_path + ": " +
+                      std::string(strerror(errno));
         fprintf(stderr, "overlaybd-ublk: %s\n", last_error_.c_str());
         return -1;
     }
@@ -778,7 +783,9 @@ static int ublk_raw_ctrl(uint32_t cmd_op, int dev_id, uint64_t data0, void *buf,
     memset(sqe, 0, 128); // SQE128 slot
     sqe->fd = cfd;
     sqe->opcode = IORING_OP_URING_CMD;
-    *(uint32_t *)&sqe->off = cmd_op; // ublksrv_set_sqe_cmd_op equivalent
+    // ublksrv_set_sqe_cmd_op equivalent, through memcpy to stay within the
+    // aliasing rules
+    memcpy(&sqe->off, &cmd_op, sizeof(cmd_op));
     struct ublksrv_ctrl_cmd *cmd = (struct ublksrv_ctrl_cmd *)&sqe->addr3;
     cmd->dev_id = dev_id;
     cmd->queue_id = (uint16_t)-1;

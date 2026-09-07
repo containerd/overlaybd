@@ -1011,11 +1011,11 @@ public:
 
         for (off_t i = 0; i < (ssize_t)count; i += m_opt.block_size) {
             if (i + m_opt.block_size > (ssize_t)count) {
-                copy(ctx, buf+i, count-i, 0);
+                copy(ctx, (const char *)buf + i, count-i, 0);
                 reserved_size = count - i;
                 break;
             }
-            copy(ctx, buf+i, m_opt.block_size, 0);
+            copy(ctx, (const char *)buf + i, m_opt.block_size, 0);
             ctx->start_compress(m_opt.block_size);
             cur_id = (cur_id+1)%m_workers;
             ctx = workers[cur_id];

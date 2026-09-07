@@ -93,7 +93,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS on)
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -DNDEBUG -g")
 
-add_compile_options(-Wall -Werror=sign-compare)
 add_definitions(-DOVERLAYBD_VER=${OBD_VER})
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
@@ -273,7 +272,13 @@ endif()
 
 #---------------------------------------------------------------------
 # overlaybd libraries
+#
+# Warnings are errors for the code that follows, i.e. ours. The call is
+# deliberately placed after the find_package()es above, so that the
+# dependencies they add as subprojects keep their own warning settings.
 #---------------------------------------------------------------------
+add_compile_options(-Wall -Werror)
+
 add_library(checksum_lib STATIC src/tools/sha256file.cpp)
 target_link_libraries(checksum_lib PUBLIC external_lib)
 
