@@ -53,8 +53,58 @@ set(ENABLE_MIMIC_VDSO off)
 option(BUILD_CURL_FROM_SOURCE "Compile static libcurl" off)
 option(BUILD_STREAM_CONVERTOR "Build the stream convertor" on)
 option(ORIGIN_EXT2FS "Use original libext2fs" off)
-# Building it requires autotools on the build machine; disable with -DBUILD_UBLK_FRONTEND=off
-option(BUILD_UBLK_FRONTEND "Build the ublk frontend (overlaybd-ublk), requires autotools" on)
+# --- ublk kernel-support detection -----------------------------------------
+# The ublk userspace block driver (ublk_drv) landed in mainline Linux 6.0.
+# Default BUILD_UBLK_FRONTEND to ON only when the running kernel can drive
+# ublk, so a bare `cmake ..` does not attempt the ublk build (and its
+# autotools + liburing + ublksrv fetch) on kernels without ublk. It can still
+# be forced either way with -DBUILD_UBLK_FRONTEND=on|off.
+set(UBLK_KERNEL_SUPPORTED OFF)
+set(UBLK_SUPPORT_REASON "not detected")
+
+# (a) preferred: modinfo resolves ublk_drv for the running kernel (loaded or not)
+find_program(MODINFO_EXECUTABLE modinfo PATHS /sbin /usr/sbin /bin /usr/bin)
+if(MODINFO_EXECUTABLE)
+  execute_process(
+    COMMAND ${MODINFO_EXECUTABLE} -F filename ublk_drv
+    OUTPUT_VARIABLE _ublk_drv_path ERROR_QUIET
+    OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _ublk_modinfo_rc)
+  if(_ublk_modinfo_rc EQUAL 0 AND _ublk_drv_path)
+    set(UBLK_KERNEL_SUPPORTED ON)
+    set(UBLK_SUPPORT_REASON "ublk_drv module ${_ublk_drv_path}")
+  endif()
+endif()
+
+# (b) fallback: the module file ships under /lib/modules/$(uname -r)
+if(NOT UBLK_KERNEL_SUPPORTED)
+  execute_process(COMMAND uname -r OUTPUT_VARIABLE _ublk_krel
+    ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(_ublk_krel)
+    file(GLOB _ublk_drv_ko "/lib/modules/${_ublk_krel}/kernel/drivers/block/ublk_drv.ko*")
+    if(_ublk_drv_ko)
+      set(UBLK_KERNEL_SUPPORTED ON)
+      set(UBLK_SUPPORT_REASON "ublk_drv module ${_ublk_drv_ko}")
+    endif()
+  endif()
+endif()
+
+# (c) fallback: the ublk uapi header is installed (kernel-headers >= 6.0)
+if(NOT UBLK_KERNEL_SUPPORTED)
+  find_path(UBLK_CMD_HEADER NAMES linux/ublk_cmd.h)
+  if(UBLK_CMD_HEADER)
+    set(UBLK_KERNEL_SUPPORTED ON)
+    set(UBLK_SUPPORT_REASON "uapi header ${UBLK_CMD_HEADER}/linux/ublk_cmd.h")
+  endif()
+endif()
+
+# Building the frontend additionally requires autotools on the build machine.
+option(BUILD_UBLK_FRONTEND "Build the ublk frontend (overlaybd-ublk); auto-detected from kernel ublk support, requires autotools" ${UBLK_KERNEL_SUPPORTED})
+
+if(BUILD_UBLK_FRONTEND)
+  message(STATUS "ublk frontend: ON  (kernel ublk support: ${UBLK_SUPPORT_REASON})")
+else()
+  message(STATUS "ublk frontend: OFF (kernel ublk support: ${UBLK_SUPPORT_REASON}; force with -DBUILD_UBLK_FRONTEND=on)")
+endif()
 
 find_package(photon REQUIRED)
 find_package(tcmu REQUIRED)
