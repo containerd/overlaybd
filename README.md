@@ -125,7 +125,9 @@ For more information go to `overlaybd/src/overlaybd/zfile/README.md`.
 
 If you want to build the ublk frontend (`overlaybd-ublk`), which exposes an
 image as `/dev/ublkbN` without going through TCMU/SCSI. It is built by default
-(disable with `-D BUILD_UBLK_FRONTEND=off`); building it additionally requires
+only when the kernel supports ublk (auto-detected from the `ublk_drv` module or
+the `linux/ublk_cmd.h` uapi header); force it either way with
+`-D BUILD_UBLK_FRONTEND=on|off`. Building it additionally requires
 `autoconf`, `automake` and `libtool` (liburing and libublksrv are fetched and
 built from source automatically).
 

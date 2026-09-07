@@ -125,7 +125,7 @@ cmake -D ENABLE_QAT=1 ..
 
 #### 使用 UBLK 作为 overlaybd 块设备后端
 
-如果你希望构建 ublk 前端（`overlaybd-ublk`），它将镜像暴露为 `/dev/ublkbN`，而无需经过 TCMU/SCSI。它默认构建（可用 `-D BUILD_UBLK_FRONTEND=off` 关闭）；构建它还额外需要 `autoconf`、`automake` 和 `libtool`（liburing 和 libublksrv 会自动从源码拉取并构建）。
+如果你希望构建 ublk 前端（`overlaybd-ublk`），它将镜像暴露为 `/dev/ublkbN`，而无需经过 TCMU/SCSI。它仅在内核支持 ublk 时默认构建（通过 `ublk_drv` 模块或 `linux/ublk_cmd.h` uapi 头自动检测）；可用 `-D BUILD_UBLK_FRONTEND=on|off` 强制开启或关闭。构建它还额外需要 `autoconf`、`automake` 和 `libtool`（liburing 和 libublksrv 会自动从源码拉取并构建）。
 
 ```bash
 cmake -D BUILD_UBLK_FRONTEND=on ..
