@@ -13,7 +13,9 @@ if(NOT ORIGIN_EXT2FS)
 endif()
 
 # The OCF cache backend is part of photon, and so is the OCF checkout it needs.
-set(PHOTON_BUILD_OCF_CACHE ON)
+if(ENABLE_OCF_CACHE)
+  set(PHOTON_BUILD_OCF_CACHE ON)
+endif()
 
 if(DEPENDENCY_PHOTON_REPOSITORY)
   FetchContent_Declare(photon
@@ -48,16 +50,18 @@ if(DEPENDENCY_PHOTON_REPOSITORY)
     add_dependencies(photon_obj libext2fs_build)
   endif()
 
-  # photon's ocf targets include <ocf/...>, which its own build resolves
-  # through a symlink pointing inside photon's build tree. That layout only
-  # exists when photon is built standalone, so provide the same include
-  # layout for the OCF checkout fetched as part of this build.
-  FetchContent_GetProperties(ocf_lib SOURCE_DIR OCF_SOURCE_DIR)
-  set(OCF_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/ocf-include)
-  file(MAKE_DIRECTORY ${OCF_INCLUDE_DIR})
-  file(CREATE_LINK ${OCF_SOURCE_DIR}/inc ${OCF_INCLUDE_DIR}/ocf SYMBOLIC)
-  target_include_directories(ocf_lib PUBLIC ${OCF_INCLUDE_DIR})
-  target_include_directories(ocf_cache_lib PUBLIC ${OCF_INCLUDE_DIR})
+  if(ENABLE_OCF_CACHE)
+    # photon's ocf targets include <ocf/...>, which its own build resolves
+    # through a symlink pointing inside photon's build tree. That layout only
+    # exists when photon is built standalone, so provide the same include
+    # layout for the OCF checkout fetched as part of this build.
+    FetchContent_GetProperties(ocf_lib SOURCE_DIR OCF_SOURCE_DIR)
+    set(OCF_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/ocf-include)
+    file(MAKE_DIRECTORY ${OCF_INCLUDE_DIR})
+    file(CREATE_LINK ${OCF_SOURCE_DIR}/inc ${OCF_INCLUDE_DIR}/ocf SYMBOLIC)
+    target_include_directories(ocf_lib PUBLIC ${OCF_INCLUDE_DIR})
+    target_include_directories(ocf_cache_lib PUBLIC ${OCF_INCLUDE_DIR})
+  endif()
 
   # Consume photon as plain archives rather than through its photon_static
   # target: the latter also propagates photon's own third-party dependencies,
@@ -68,8 +72,10 @@ if(DEPENDENCY_PHOTON_REPOSITORY)
   set(PHOTON_INCLUDE_DIR ${photon_SOURCE_DIR}/include/)
   set(PHOTON_LIBRARY ${photon_BINARY_DIR}/output/libphoton_sole.a)
   set(PHOTON_EASY_WEAK_LIBRARY ${photon_BINARY_DIR}/output/libeasy_weak.a)
-  set(PHOTON_OCF_LIBRARY ${photon_BINARY_DIR}/output/libocf_cache_lib.a)
-  set(PHOTON_OCF_CORE_LIBRARY ${photon_BINARY_DIR}/output/libocf_lib.a)
+  if(ENABLE_OCF_CACHE)
+    set(PHOTON_OCF_LIBRARY ${photon_BINARY_DIR}/output/libocf_cache_lib.a)
+    set(PHOTON_OCF_CORE_LIBRARY ${photon_BINARY_DIR}/output/libocf_lib.a)
+  endif()
   set(photon_FOUND yes)
 else()
   # A locally installed photon has no photon_BINARY_DIR, look the archives up
@@ -79,8 +85,10 @@ else()
   find_path(PHOTON_INCLUDE_DIR photon/photon.h)
   find_library(PHOTON_LIBRARY NAMES photon_sole photon)
   find_library(PHOTON_EASY_WEAK_LIBRARY NAMES easy_weak)
-  find_library(PHOTON_OCF_LIBRARY NAMES ocf_cache_lib)
-  find_library(PHOTON_OCF_CORE_LIBRARY NAMES ocf_lib)
+  if(ENABLE_OCF_CACHE)
+    find_library(PHOTON_OCF_LIBRARY NAMES ocf_cache_lib)
+    find_library(PHOTON_OCF_CORE_LIBRARY NAMES ocf_lib)
+  endif()
 
   find_package_handle_standard_args(photon DEFAULT_MSG PHOTON_LIBRARY
                                     PHOTON_INCLUDE_DIR)

@@ -17,6 +17,7 @@ option(FULL_STATIC "make all binary output depends only libc dynamic libs" off)
 option(BUILD_CURL_FROM_SOURCE "Compile static libcurl" off)
 option(BUILD_STREAM_CONVERTOR "Build the stream convertor" on)
 option(ORIGIN_EXT2FS "Use original libext2fs" off)
+option(ENABLE_OCF_CACHE "Build the OCF cache backend" on)
 option(ENABLE_QAT "Build the QAT compression backend" off)
 option(ENABLE_DSA "Build the DSA crc32 backend (requires the DML submodule)" off)
 option(ENABLE_ISAL "Build the ISA-L crc32 backend (requires the isa-l submodule)" off)
@@ -416,6 +417,9 @@ target_link_libraries(overlaybd_image_lib PUBLIC
     # image_file.cpp, prefetch.cpp and comm_func.cpp go through photon's extfs
     E2FSPROGS::libext2fs
 )
+if(ENABLE_OCF_CACHE)
+    target_compile_definitions(overlaybd_image_lib PRIVATE ENABLE_OCF_CACHE)
+endif()
 
 # Propagate the resize .o files to all consumers of overlaybd_image_lib. These
 # provide the resize_fs() symbol needed by photon's resize_extfs().
