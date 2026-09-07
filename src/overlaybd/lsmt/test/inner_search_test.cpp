@@ -17,8 +17,7 @@
 // Cross-validation of the aarch64 inner-search kernels (NEON, SVE) against
 // an independent scalar reference implemented here in the test. Kernel level
 // only: randomized + boundary inputs on single nodes (16x u32 / 8x u64).
-// Tree-level integration is exercised on real hardware via the dispatch
-// tier log (see docs/lsmt_arm64_sve_code.md for the full story).
+// Tree-level integration is exercised on real hardware via the dispatch tier log.
 #include <gtest/gtest.h>
 #include <cstdint>
 
