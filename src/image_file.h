@@ -43,7 +43,7 @@ static std::string LEGACY_COMMIT_FILE_NAME = ".commit";
 class ImageFile : public photon::fs::ForwardFile {
 public:
     ImageFile(ImageConfigNS::ImageConfig &_conf, ImageService &is, const std::string &dev_id, const char *_config_path)
-        : ForwardFile(nullptr), image_service(is), m_lower_file(nullptr), config_path(_config_path) {
+        : ForwardFile(nullptr), config_path(_config_path), image_service(is), m_lower_file(nullptr) {
         conf.CopyFrom(_conf, conf.GetAllocator());
         m_exception = "";
         if(image_service.register_image_file(dev_id, this) != 0) { // register itself
