@@ -143,7 +143,7 @@ public:
         m_tcp_serv = new_tcp_socket_server();
         m_tcp_serv->timeout(1000UL*1000);
         if ( gconfig.globalConfig().reusePort() ){
-            m_tcp_serv->setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
+            m_tcp_serv->setsockopt<int>(SOL_SOCKET, SO_REUSEPORT, 1);
         }
         if (m_tcp_serv->bind(gconfig.globalConfig().httpPort(), IPAddr(httpAddr.c_str())) != 0) {
             LOG_ERRNO_RETURN(0, -1, "Failed to bind to port ",

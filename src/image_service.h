@@ -19,7 +19,7 @@
 #include <string>
 #include "config.h"
 #include "exporter_server.h"
-#include "overlaybd/cache/gzip_cache/cached_fs.h"
+#include "overlaybd/gzip_cache/cached_fs.h"
 #include <photon/fs/filesystem.h>
 #include <photon/common/io-alloc.h>
 #include <unordered_map>

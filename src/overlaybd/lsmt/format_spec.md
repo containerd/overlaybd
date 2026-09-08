@@ -1,4 +1,4 @@
-# Overlaybd layer blob format
+# Overlaybd read-only layer blob format
 ## Overview
 Each layer blob consists of 4 sections, namely header, data, index and trailer,
 as described below.
@@ -53,8 +53,8 @@ index.
 
 ## index
 The index section is a table that associates logical block addressing (LBA) with
-raw data. Its format is simply a sorted array of record entries. Each entry is
-a 128-bit struct defined as below:
+raw data. Its format is simply a *sorted* array of *non-overlapping* record entries.
+Each entry is a 128-bit struct defined as below:
 
 |  Field  | Offset (bits)  | Size (bits)  |     Type     | Description |
 |  :---:  |    :----:      |    :----:    |    :----:    | :---        |
@@ -68,3 +68,45 @@ a 128-bit struct defined as below:
 An updated edition of header, in the same format. Trailer is useful in
 append-only storage during creation of the blob. Use trailer whenever
 possible.
+
+# Overlaybd writable layer formats
+
+There are 2 types of writable format defined in overlaybd -- append-only and sparse.
+
+## Append-only format
+
+The append-only writable layer has 2 files, one is for appending data,
+and the other is for appending index. Both of them is structured as
+a header followed by raw data or index, as described below.
+
+| Section | Size (bytes) | Description |
+|  :---:  |    :----:    | :---        |
+| header  |     4096     | file header |
+| payload |   variable   | raw data or index |
+
+The `sealed` and `sparse_rw` flags are set to 0 (false) in both headers.
+
+The index entries have the same format as defined in previous section,
+except that they are not sorted and may have overlap. The field `moffset`
+points to location in the coresspoding data file.
+
+## Sparse format
+
+The sparse writable layer has only 1 sparse file, structured as
+a header followed by raw data, as described below.
+
+| Section | Size (bytes) | Description |
+|  :---:  |    :----:    | :---        |
+| header  |     4096     | file header |
+| raw data| virtual_size | sparse region; unwritten areas do not occupy disk space |
+
+The `sparse_rw` flag is set to 1 (true) in the header.
+The payload part of the file is initialized as a sparse region that
+is as large as the `virtual_size` of the image, without occupying
+disk space. Data will be written to coressponding locations with
+`pwrite` operations. The file must be placed on a file system that
+supports sparseness and random write. The offsets have a simple equation:
+
+```
+I/O_offset = file_header_size + disk_LBA * sector_size
+```

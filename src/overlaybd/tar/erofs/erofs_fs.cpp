@@ -20,6 +20,8 @@
 #include "erofs/dir.h"
 #include <dirent.h>
 #include <vector>
+#include <photon/fs/path.h>
+#include <photon/common/alog-stdstring.h>
 
 struct ErofsFileSystem::ErofsFileSystemInt {
 	struct erofs_sb_info sbi;
@@ -204,6 +206,37 @@ static int do_erofs_ilookup(const char *path, struct erofs_inode *vi)
 	return erofs_read_inode_from_disk(vi);
 }
 
+static int do_erofs_ilookup_not_follow(const char *path, struct erofs_inode *vi) {
+    size_t len = strlen(path);
+    while (len > 0 && path[len - 1] == '/') {
+        len--;
+    }
+    if (len == 0) {
+        // root case
+        return do_erofs_ilookup(path, vi);
+    }
+    photon::fs::Path p(std::string_view(path, len));
+    std::string dirname(p.dirname());
+    std::string basename(p.basename());
+    struct liberofs_nameidata nd = {.sbi = vi->sbi};
+    nd.nid = vi->sbi->root_nid;
+    auto ret = liberofs_link_path_walk(dirname.c_str(), &nd);
+    if (ret) {
+        LOG_ERRNO_RETURN(0, ret, "failed to namei parent", VALUE(path), VALUE(dirname));
+    }
+    ret = liberofs_namei(&nd, basename.c_str(), basename.length());
+    if (ret) {
+        LOG_ERRNO_RETURN(0, ret, "failed to namei", VALUE(path), VALUE(basename));
+    }
+    vi->sbi = nd.sbi;
+    vi->nid = nd.nid;
+    ret = erofs_read_inode_from_disk(vi);
+    if (ret) {
+        LOG_ERRNO_RETURN(0, ret, "failed to read inode", VALUE(path));
+    }
+    return 0;
+}
+
 int ErofsFile::fstat(struct stat *buf)
 {
 	buf->st_mode = file_private->inode.i_mode;
@@ -329,7 +362,6 @@ EROFS_UNIMPLEMENTED_FUNC(int, ErofsFileSystem, chown(const char *pathname, uid_t
 EROFS_UNIMPLEMENTED_FUNC(int, ErofsFileSystem, lchown(const char *pathname, uid_t owner, gid_t group), -EROFS_UNIMPLEMENTED)
 EROFS_UNIMPLEMENTED_FUNC(int, ErofsFileSystem, statfs(const char *path, struct statfs *buf), -EROFS_UNIMPLEMENTED)
 EROFS_UNIMPLEMENTED_FUNC(int, ErofsFileSystem, statvfs(const char *path, struct statvfs *buf), -EROFS_UNIMPLEMENTED)
-EROFS_UNIMPLEMENTED_FUNC(int, ErofsFileSystem, lstat(const char *path, struct stat *buf), -EROFS_UNIMPLEMENTED)
 EROFS_UNIMPLEMENTED_FUNC(int, ErofsFileSystem, access(const char *pathname, int mode), -EROFS_UNIMPLEMENTED)
 EROFS_UNIMPLEMENTED_FUNC(int, ErofsFileSystem, truncate(const char *path, off_t length), -EROFS_UNIMPLEMENTED)
 EROFS_UNIMPLEMENTED_FUNC(int, ErofsFileSystem, utime(const char *path, const struct utimbuf *file_times), -EROFS_UNIMPLEMENTED)
@@ -398,6 +430,26 @@ int ErofsFileSystem::stat(const char *path, struct stat *buf)
 	return 0;
 }
 
+int ErofsFileSystem::lstat(const char *path, struct stat *buf)
+{
+    struct erofs_inode vi;
+    int err;
+    vi.sbi = &fs_private->sbi;
+    err = do_erofs_ilookup_not_follow(path, &vi);
+    if (err)
+        LOG_ERRNO_RETURN(err, err, "[erofs] Fail to lookup inode");
+    buf->st_mode = vi.i_mode;
+    buf->st_nlink = vi.i_nlink;
+    buf->st_size = vi.i_size;
+    buf->st_blocks = roundup(vi.i_size, erofs_blksiz(vi.sbi)) >> 9;
+    buf->st_uid = vi.i_uid;
+    buf->st_gid = vi.i_gid;
+    buf->st_ctime = vi.i_mtime;
+    buf->st_mtime = vi.i_mtime;
+    buf->st_atime = vi.i_mtime;
+    return 0;
+}
+
 photon::fs::IFile* ErofsFileSystem::open(const char *pathname, int flags)
 {
 	ErofsFile *file = new ErofsFile(this);
@@ -406,7 +458,7 @@ photon::fs::IFile* ErofsFileSystem::open(const char *pathname, int flags)
 	err = do_erofs_ilookup(pathname, &file->file_private->inode);
 	if (err) {
 		delete file;
-		LOG_ERROR_RETURN(-err, nullptr, "[erofs] Fail to lookup inode by path");
+		LOG_ERROR_RETURN(-err, nullptr, "[erofs] Fail to lookup inode by path", VALUE(pathname));
 	}
 	return file;
 }

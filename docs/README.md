@@ -18,13 +18,15 @@ Overlaybd is an open-source sub-project of containerd, the industry-standard con
 [graduated at CNCF](https://www.cncf.io/projects/containerd/).
 The project has been integrated by many organizations world-wide, most notably
 [Azure Kubernetes Service's Artifact Streaming](https://learn.microsoft.com/en-us/azure/aks/artifact-streaming-overview),
+[Colab (from Google)](https://medium.com/@gogasca_/using-overlaybd-to-improve-startup-time-6c5f90f23345),
 [Databricks](https://www.databricks.com/blog/booting-databricks-vms-7x-faster-serverless-compute) +
 [Superhuman](https://www.databricks.com/blog/how-superhuman-and-databricks-built-200k-qps-inference-platform-together),
 [DeepSeek Elastic Compute (DSes)](https://arxiv.org/html/2606.19348v1),
+[Flatcar Container Linux](https://www.flatcar.org/docs/latest/os-config/network/overlaybd-artifact-streaming/),
 [fly.io](https://community.fly.io/t/experimental-speedy-machine-creation-with-overlaybd/18958),
-[hocus.dev](https://hocus.dev/blog/virtualizing-development-environments), etc.
+[hocus.dev](https://hocus.dev/blog/virtualizing-development-environments),
 [Kimi AgentEnv](https://kvcache.ai/blog/agentenv-open-sourced/),
-Overlaybd can also be used for virtual machines or micro sandboxes.
+etc. Overlaybd can also be used for virtual machines or micro sandboxes.
 
 <!-- Boss直聘, -->
 
@@ -182,12 +184,14 @@ the world:
   portfolio — Taobao, TMall, AlibabaCloud and more — and commercialized on AlibabaCloud as
   its container image acceleration offering, adopted by major customers worldwide.
 
-- **Adopted across the industry**: Integrated by organizations including
+- **Adopted across the industry**: Integrated by organizations including (but not limited to)
   [Azure Kubernetes Service (Artifact Streaming)](https://learn.microsoft.com/en-us/azure/aks/artifact-streaming-overview),
   [Databricks](https://www.databricks.com/blog/booting-databricks-vms-7x-faster-serverless-compute),
   [DeepSeek Elastic Compute](https://arxiv.org/html/2606.19348v1),
+  [Flatcar Container Linux](https://www.flatcar.org/docs/latest/os-config/network/overlaybd-artifact-streaming/),
   [fly.io](https://community.fly.io/t/experimental-speedy-machine-creation-with-overlaybd/18958),
-  and [hocus.dev](https://hocus.dev/blog/virtualizing-development-environments).
+  [hocus.dev](https://hocus.dev/blog/virtualizing-development-environments),
+  etc.
 
 - **Peer-reviewed research**: The design is documented in two USENIX Annual Technical
   Conference papers — [DADI](https://www.usenix.org/conference/atc20/presentation/li-huiba)
@@ -224,6 +228,71 @@ Overlaybd is an open-source sub-project of [containerd](https://www.cncf.io/proj
   [Get an invite to the CNCF slack.](https://communityinviter.com/apps/cloud-native/cncf)
   DingTalk Group: 186405011387.
 
+# Why Overlaybd
+
+## for Containers
+
+Container platforms benefit from low cold-start latency, efficient
+resource usage at high density, OCI-compatible layered distribution,
+and consistent image delivery across runc and VM-based
+secure-container runtimes.
+
+The conventional OCI image stack is mature and works well for
+general-purpose containers. However, for large images and bursty
+scale-out workloads, downloading, decompressing, and unpacking the
+entire image can become a significant part of startup latency.
+VM-isolated containers also require an efficient way to expose image
+data across the VM boundary.
+
+OverlayBD complements the existing container filesystem stack with an
+OCI-compatible, layered block image that supports on-demand loading and
+seekable compression. It is designed to reduce image download and
+startup costs while providing a block-device-based image path for both
+runc and VM-based secure containers. OverlayBD has been deployed at
+scale in production container platforms.
+
+Read the full article: [Why Containers and Secure Containers Should Use Overlaybd Images](ctimg.md)
+
+## for Agent Sandbox
+
+Agent-sandbox platforms often require low-latency environment startup,
+efficient creation from shared base images, strong isolation, high
+concurrency, and support for different guest operating systems. Meeting
+these requirements involves the runtime, virtualization, and image
+storage layers together.
+
+OverlayBD provides an OCI-compatible, layered block-image substrate with
+on-demand loading, seekable compression, and writable layers. It is
+designed to reduce image transfer and startup costs, support efficient
+*compute-side* snapshot and clone workflows with a *writable* block-device
+data path for VM-based sandboxes. Separate OS-specific images can use the
+same OverlayBD format and OCI distribution pipeline. OverlayBD is already
+used by agent-sandbox systems in production.
+
+Read the full article: [Why Agent Sandboxes Should Use Overlaybd](sbimg.md)
+
+## for Virtual Machines
+
+VM platforms need fast boot from shared base images, low per-VM
+metadata memory at high density, cheap snapshot and clone, and
+registry-style layered distribution.
+
+The incumbent VM disk formats — qcow2, VHD/VHDX, and VMDK — all rely
+on per-file allocation tables chained one file per snapshot. Reads
+walk the chain, per-file index caches multiply with chain depth, and write
+cost is set by a fixed cluster size that trades directly against
+index size.
+
+OverlayBD replaces the per-file tables with a single merged,
+extent-based index per device: O(1) lookup at any chain depth, an
+index small enough to stay memory-resident regardless of snapshot
+count, and 512-byte-granularity writes with no copy-on-write. Its
+image layout follows the OCI image spec — a base image is stored
+once, shared by every derivative VM, and distributed through the
+existing registry ecosystem.
+
+Read the full article: [Why Virtual Machines Should Use Overlaybd Images](vmimg.md)
+
 # Components
 
 ## Overlaybd service
@@ -250,28 +319,28 @@ Sub-project of containerd, which is a solution for remote container images by fe
 
 Uses the P2P protocol to speed up HTTP file download for registry in large-scale clusters.
 
-# Scenarios
-
-## Agent Sandbox
-
-Agent sandboxes must boot in milliseconds, fork cheaply along exploratory
-execution paths, isolate untrusted code, scale to thousands of concurrent
-instances, and support diverse guest operating systems. Traditional image
-formats — OCI tarballs, qcow2 backing-file chains, overlayfs, and
-filesystem-sharing protocols like virtio-fs — each fall short on one or
-more of these axes. Overlaybd's layered, lazily-loaded, seekably-compressed
-block-device design meets all of them at once, and is already powering
-agent-sandbox products in production.
-
-[Read the full article: Why Agent Sandboxes Should Use Overlaybd](sbimg.md)
-
 # Events
 
-<img src="assets/Scaling_up.jpg" width="400px">
+## Artifact Streaming GA for Microsoft Azure Kubernetes Service (AKS)
+It provides customers the ability to accelerate containerized workloads in
+the cloud by dramatically reducing the overall startup time with *overlaybd*
+image format. It is now GA since Jul 14, 2026.
+See [#3928](https://github.com/Azure/AKS/issues/3928#issuecomment-4969059980) for details.
 
-[Scaling up Without Slowing Down: Accelerating Pod Start Time. KubeCon+CloudNativeCon Europe 2024](https://youtu.be/RJ6Lt9bVNTw)
+## Presentation at KubeCon + CloudNativeCon Europe 2025
 
+*Streamlined Efficiency: Unshackling Kubernetes Image Volumes for Rapid AI Model and Dataset Loading*.
+Jointly given by Microsoft Azure and Alibaba Cloud.
+<div style="background:url(assets/image_volumes.jpg) center/cover no-repeat;position:relative;padding-top:56.25%;height:0;font-size:0;overflow:hidden">
+  <iframe style="position:absolute;inset:0;width:100%;height:100%;margin:0;border:0" src="https://www.youtube.com/embed/nHGzMmstR0E?si=qJ6yd8bN4ZeZttj-" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+</div>
 
+## Presentation at KubeCon + CloudNativeCon Europe 2024
+*Scaling up Without Slowing Down: Accelerating Pod Start Time*.
+Jointly given by Microsoft Azure and Alibaba Cloud.
+<div style="background:url(assets/Scaling_up.jpg) center/cover no-repeat;position:relative;padding-top:56.25%;height:0;font-size:0;overflow:hidden">
+  <iframe style="position:absolute;inset:0;width:100%;height:100%;margin:0;border:0" src="https://www.youtube.com/embed/RJ6Lt9bVNTw?si=o3pP42xwT5CzdqiP" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+</div>
 
 # Who Uses Overlaybd
 
@@ -289,6 +358,7 @@ agent-sandbox products in production.
 <a href="https://www.deepseek.com" target="_blank"><img src="assets/logos/deepseek.svg" alt="DeepSeek"></a>
 <!-- <a href="https://www.dewu.com" target="_blank"><img src="assets/logos/dewu.png" alt="Dewu"></a> -->
 <a href="https://www.ele.me" target="_blank"><img src="assets/logos/eleme.svg" alt="Ele.me"></a>
+<a href="https://www.flatcar.org" target="_blank"><img src="assets/logos/flatcar.svg" alt="Flatcar"></a>
 <a href="https://fly.io" target="_blank"><img src="assets/logos/flyio.svg" alt="Fly.io"></a>
 <a href="https://hocus.dev" target="_blank"><img src="assets/logos/hocus.png" alt="Hocus"></a>
 <a href="https://www.kimi.com" target="_blank"><img src="assets/logos/kimi.png" alt="Kimi"></a>
@@ -305,3 +375,4 @@ agent-sandbox products in production.
 <!-- <a href="https://www.xiaopeng.com" target="_blank"><img src="assets/logos/xpeng.svg" alt="XPeng"></a> -->
 </div>
 
+*The list above is by no means exhaustive — many more organizations are running overlaybd in production.*

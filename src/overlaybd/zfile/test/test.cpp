@@ -133,6 +133,31 @@ public:
     }
 };
 
+TEST_F(ZFileTest, reject_oversized_index) {
+    const char *filename = "oversized-index.zfile";
+    auto file = lfs->open(filename, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    ASSERT_NE(file, nullptr);
+
+    char ht_buf[CompressionFile::HeaderTrailer::SPACE]{};
+    auto ht = new (ht_buf) CompressionFile::HeaderTrailer;
+    CompressOptions opt;
+    ht->set_compress_option(opt);
+    ht->index_offset = CompressionFile::HeaderTrailer::SPACE;
+    ht->index_size = MAX_ZFILE_INDEX_SIZE + 1;
+    ASSERT_EQ(write_header_trailer(file, true, false, true, ht),
+              (int)CompressionFile::HeaderTrailer::SPACE);
+
+    const uint64_t trailer_offset =
+        ht->index_offset + ht->index_size * sizeof(uint32_t);
+    ASSERT_EQ(file->lseek(trailer_offset, SEEK_SET), (off_t)trailer_offset);
+    ASSERT_EQ(write_header_trailer(file, false, true, true, ht),
+              (int)CompressionFile::HeaderTrailer::SPACE);
+
+    EXPECT_EQ(zfile_open_ro(file, false), nullptr);
+    delete file;
+    lfs->unlink(filename);
+}
+
 /*
 testcases:
   checksum{disable, enable} x algorithm{lz4, zstd} x bs{4K, 8K, 16K, 32K, 64K}

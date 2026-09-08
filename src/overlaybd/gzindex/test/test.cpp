@@ -16,8 +16,8 @@
 
 #include "../gzfile.h"
 #include "../../gzip/gz.h"
-#include "../../cache/gzip_cache/cached_fs.h"
-#include "../../cache/cache.h"
+#include "../../gzip_cache/cached_fs.h"
+#include <photon/fs/cache/cache.h>
 #include <photon/photon.h>
 #include <photon/common/io-alloc.h>
 #include <photon/common/alog.h>
@@ -406,7 +406,7 @@ protected:
         }
 
         auto mediafs = photon::fs::new_localfs_adaptor("/tmp/gzip_cache_compress");
-        lfs = FileSystem::new_full_file_cached_fs(
+        lfs = photon::fs::new_full_file_cached_fs(
                 lfs, mediafs, 1024 * 1024, 1, 10000000,
                 (uint64_t)1048576 * 4096, nullptr, 0, nullptr);
         delete gzdata;
