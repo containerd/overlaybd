@@ -26,7 +26,6 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 #include <inttypes.h>
 #include <cstddef>
 #include <assert.h>
-#include <memory>
 #include <sys/types.h>
 
 namespace LSMT {
@@ -147,15 +146,6 @@ public:
     // virtual IMemoryIndex *make_read_only_index() const = 0;
 };
 
-class IWritableLayerCursor {
-public:
-    virtual ~IWritableLayerCursor() {
-    }
-
-    // Copies the next writable-layer mapping that overlaps the requested range.
-    virtual bool next(SegmentMapping &mapping) = 0;
-};
-
 class IComboIndex : public IMemoryIndex0 {
 public:
     // backing index must NOT be IMemoryIndex0!
@@ -164,8 +154,10 @@ public:
     virtual int front_index(const IMemoryIndex0 *fi) = 0;
     virtual const IMemoryIndex0 *front_index() const = 0;
 
-    // Iterates mappings that belong to the current writable layer only.
-    virtual std::unique_ptr<IWritableLayerCursor> writable_layer_cursor(Segment range) const = 0;
+    // the same as lookup(), except that only the mappings of the writable (front)
+    // layer are looked up, the backing (lower) layers are ignored.
+    virtual size_t lookup_writable_layer(Segment s, /* OUT */ SegmentMapping *pm,
+                                         size_t n) const = 0;
 
     // dump index0 which needs to compact
     // and then clear the original index0.
