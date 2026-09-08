@@ -43,7 +43,11 @@ jobs:
       working-directory: ${{github.workspace}}/build
       run: |
         git submodule update --init
-        cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TESTING=1 -DENABLE_DSA=1 -DENABLE_ISAL=1
+        # Force the ublk frontend ON: its unit test (ublk_dispatch_test) is pure
+        # logic that needs no ublk-capable kernel, and BUILD_UBLK_FRONTEND now
+        # auto-detects kernel support by default, which would skip it on a runner
+        # whose kernel/modules do not expose ublk.
+        cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TESTING=1 -DBUILD_UBLK_FRONTEND=on -DENABLE_DSA=1 -DENABLE_ISAL=1
 
     - name: Build
       working-directory: ${{github.workspace}}/build
@@ -119,6 +123,47 @@ jobs:
         ls foci_mp
         sudo umount foci_mp
         sudo unlink /sys/kernel/config/target/loopback/naa.987654321abcdef/tpgt_1/lun/lun_0/vol2
+    - name: E2E Test ublk
+      working-directory: ${{github.workspace}}/build
+      shell: bash
+      run: |
+        sudo make install
+        sudo cp ${{github.workspace}}/src/example_config/overlaybd-registryv2.json /etc/overlaybd/overlaybd.json
+        # ublk_drv ships in linux-modules-extra-$(uname -r), which the base runner
+        # image may not install; add it if the first modprobe fails (mainline >= 6.0).
+        sudo modprobe ublk_drv || {
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+          sudo modprobe ublk_drv
+        }
+        ls -l /dev/ublk-control
+        # The overlaybd test image is normally already extracted by the turboOCIv1
+        # step above (same job/runner); materialize it here as well so this step is
+        # self-contained and does not silently depend on step ordering.
+        cfg=/var/lib/overlaybd/test/20/block/config.v1.json
+        if [ ! -f "$cfg" ]; then
+          sudo mkdir -p /var/lib/overlaybd/test/
+          [ -f e2etest.tar.gz ] || sudo wget https://overlaybd.blob.core.windows.net/overlaybd/e2etest.tar.gz
+          sudo tar -zxf e2etest.tar.gz -C /var/lib/overlaybd/test/
+        fi
+        # `add` forks a detached daemon and prints /dev/ublkbN once ready. Bound it
+        # with a timeout: a broken ublk kernel leaves ADD_DEV hanging forever
+        # (actions/runner-images#14175), which would otherwise wedge the whole job.
+        dev=`sudo timeout 120 /opt/overlaybd/bin/overlaybd-ublk add --config $cfg` || {
+          echo "::error::overlaybd-ublk add failed/timed out on kernel $(uname -r) (cf. actions/runner-images#14175)"
+          sudo dmesg | tail -40 || true
+          exit 1
+        }
+        echo "ublk device: $dev"
+        lsblk
+        sudo /opt/overlaybd/bin/overlaybd-ublk list
+        devid=${dev#/dev/ublkb}
+        sudo mkdir -p ublk_mp
+        sudo mount -o ro $dev ublk_mp
+        ls ublk_mp
+        sudo umount ublk_mp
+        # always unmount before del; del stops the daemon and removes /dev/ublkbN
+        sudo /opt/overlaybd/bin/overlaybd-ublk del -n $devid
     - name: Unit Test
       working-directory: ${{github.workspace}}/build
       shell: bash

@@ -1,5 +1,7 @@
 # Overlaybd
 
+[简体中文](README_zh.md)
+
 ![logo](https://github.com/containerd/overlaybd/blob/main/docs/assets/overlaybd_logo.svg)
 
 Overlaybd (overlay block device) is a novel layering block-level image format, which is design for container, secure container and applicable to virtual machine. And it is an open-source implementation of paper [DADI: Block-Level Image Service for Agile and Elastic Application Deployment. USENIX ATC'20"](https://www.usenix.org/conference/atc20/presentation/li-huiba).
@@ -30,11 +32,13 @@ Overlaybd is a __non-core__ sub-project of containerd.
 ### System Requirements
 
 Overlaybd provides virtual block devices through TCMU, so the TCMU kernel module is required. TCMU is implemented in the Linux kernel and supported by most Linux distributions.
+__For linux v6.0+, overlaybd can provides virtual block devices via UBLK.__
 
 Check and load the target_core_user module.
 
 ```bash
-modprobe target_core_user
+modprobe target_core_user ## TCMU
+modprobe ublk_drv ## UBLK, linux v6.0+ requires
 ```
 
 ### Install From RPM/DEB
@@ -118,6 +122,23 @@ cmake -D ENABLE_QAT=1 ..
 ```
 
 For more information go to `overlaybd/src/overlaybd/zfile/README.md`.
+
+If you want to build the ublk frontend (`overlaybd-ublk`), which exposes an
+image as `/dev/ublkbN` without going through TCMU/SCSI. It is built by default
+only when the kernel supports ublk (auto-detected from the `ublk_drv` module or
+the `linux/ublk_cmd.h` uapi header); force it either way with
+`-D BUILD_UBLK_FRONTEND=on|off`. Building it additionally requires
+`autoconf`, `automake` and `libtool` (liburing and libublksrv are fetched and
+built from source automatically).
+
+```bash
+cmake -D BUILD_UBLK_FRONTEND=on ..
+```
+
+Running the ublk backend requires a kernel with the `ublk_drv` driver (mainline
+>= 6.0, or a distro kernel with ublk backported). For how to run images through
+`overlaybd-ublk` / `overlaybd-ublkd`, see the
+[UBLK backend](docs/standalone-usage.md#ublk-backend) section of Standalone Usage.
 
 Finally, setup a systemd service for overlaybd-tcmu backstore.
 
@@ -358,153 +379,22 @@ Please install overlaybd and refer to  [Accelerated Container Image](https://git
 
 ### Standalone Usage
 
-For other scenarios, users can use overlaybd manually. Overlaybd works as a backing store of TCMU, so users can run overlaybd image by interacting with configfs.
+For other scenarios, users can drive overlaybd manually. An overlaybd image is
+exposed as a virtual block device through one of two kernel backends — **TCMU**
+(`configfs`, most distributions) or **UBLK** (`/dev/ublkbN`, Linux v6.0+) — and
+can optionally carry a writable layer.
 
-#### Config file
-A config file is required to describe an overlaybd image, only local image and registry image are supported. Here is a sample json config file:
-```json
-{
-      "repoBlobUrl": "https://obd.cr.aliyuncs.com/v2/overlaybd/sample/blobs",
-      "lowers" : [
-          {
-              "file" : "/opt/overlaybd/layer0"
-          },
-          {
-              "dir": "/var/lib/containerd/root/io.containerd.snapshotter.v1.overlayfs/snapshots/1000",
-              "digest": "sha256:e3b0d67cfa3a37dfed187badc7766e3db64d492c4db2dc4260997b41af1b28f3",
-              "size": 43446424
-          }
-      ],
-      "resultFile": "/home/overlaybd/1/result"
-}
-```
-| Field               | Description |
-| ---                 | ---         |
-| repoBlobUrl         | the url of the repository blobs of the remote image. It is required for a registry image. |
-| lowers              | a list describing the lower layers of the image in bottom-upper order. |
-| file                | it means the corresponding layer is a local file. if a local file is used, other options are not needed. |
-| dir                 | it means the corresponding layer will be stored in this directory after downloading. |
-| digest and size     | the digest and size of a remote layer. It is required for a remote layer. |
-| resultFile          | the file for saving the failure reasons. If a device is successfully lauched, success is writen into the file, otherwise, the failure s reported by this file. |
-
-
-#### Start up
-
-Here is an example to start up an overlaybd image.
-First, create the overlaybd tcmu device.
-
-``` bash
-mkdir -p /sys/kernel/config/target/core/user_1/vol1
-echo -n dev_config=overlaybd//root/config.v1.json > /sys/kernel/config/target/core/user_1/vol1/control
-echo -n 1 > /sys/kernel/config/target/core/user_1/vol1/enable
-```
-Then, create a tcm loop device.
-```bash
-mkdir -p /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0
-echo -n "naa.123456789abcdef" > /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/nexus
-ln -s /sys/kernel/config/target/core/user_1/vol1 /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0/vol1
-```
-Then a block device `/dev/sdX` is generated, overlaybd image can be used locally. Furthermore, overlaybd device can be used on remote hosts by iscsi.
-
-#### Clean up
-Just remove the files and directories in configfs in reverse order.
-
-#### Writable layer
-Overlaybd provides a log-structured writable layer and a sprase-file writable layer. Log-structured layer is append only and converts all writes into sequential writes so that the image build/convert process is usually faster. Sparse-file writable layer is more suitable for container rutime.
-
-Use `overlaybd-create` to create a writable layer.
-```bash
-  /opt/overlaybd/bin/overlaybd-create ${data_file} ${index_file} ${virtual size}
-```
-use `-s` to for creating sparse-file writable layer.
-The upper option in overlaybd config file must be set to use a writable layer. Only one writable layer is avialable and it always workes as the top layer.Example:
-```json
-{
-    "repoBlobUrl": ...,
-    "lowers" : [
-        ...
-    ],
-    "upper": {
-        "index": "${index_file}",
-        "data": "${data_file}"
-    },
-    "resultFile": "/home/overlaybd/1/result"
-}
-```
-If upper is set, the overlaybd device is launched as a writable device. The differences produced by data writing are stored in the index and data files ofupper.
-
-After writing data and destroying the device, `overlaybd-commit` command is required to excute to commit the layer into a read-only layer and can be used asa lower layer later.
-```bash
-/opt/overlaybd/bin/overlaybd-commit ${data_file} ${index_file} ${commit_file}
-```
-At last, compression may be needed.
-```bash
-/opt/overlaybd/bin/overlaybd-zfile ${commit_file} ${zfile}
-```
-The zfile can be used as lower layer with online decompression.
+See [docs/standalone-usage.md](docs/standalone-usage.md) for the config file
+format, the TCMU and UBLK start-up/teardown workflows, and the writable-layer
+(create / commit / zfile) commands.
 
 ### Live Snapshot
 
-Overlaybd supports creating live snapshots without stopping the device. This feature allows you to capture the current state of a writable layer and stack a new writable layer on top.
+Overlaybd can create a live snapshot without stopping the device: capture the
+current state of a writable layer and stack a new writable layer on top.
 
-#### Device ID
-
-To use the live snapshot feature, you need to specify a device ID when creating the overlaybd device. The device ID is appended to the config path with a semicolon separator:
-
-```bash
-echo -n dev_config=overlaybd//root/config.v1.json;123 > /sys/kernel/config/target/core/user_1/vol1/control
-```
-
-#### Enable API Service
-
-Add the following to your `overlaybd.json`:
-
-```json
-"serviceConfig": {
-    "enable": true,
-    "address": "http://127.0.0.1:9862"
-}
-```
-
-#### Create Snapshot
-
-Send an HTTP POST request to the `/snapshot` endpoint:
-
-```bash
-curl -X POST "http://127.0.0.1:9862/snapshot?dev_id=123&config=/path/to/new_config.json"
-```
-
-The response will be in JSON format:
-
-```json
-{
-    "success": true,
-    "message": "Snapshot created successfully"
-}
-```
-
-#### New Config Format
-
-The new config file should include the current upper layer as the last lower layer:
-
-```json
-{
-    "lowers": [
-        {
-            "file": "/opt/overlaybd/layer0"
-        },
-        {
-            "file": "/path/to/current_upper_data.lsmt"
-        }
-    ],
-    "upper": {
-        "index": "/path/to/new_upper_index.lsmt",
-        "data": "/path/to/new_upper_data.lsmt"
-    }
-}
-```
-
-**Note**: The new upper layer must be different from the old upper layer.
+See [docs/live-snapshot.md](docs/live-snapshot.md) for the device ID, the
+API-service configuration and the `/snapshot` request/response details.
 
 ## Kernel module
 
