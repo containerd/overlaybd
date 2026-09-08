@@ -30,6 +30,7 @@
 
 #include <ublksrv.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <cerrno>
