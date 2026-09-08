@@ -1,7 +1,3 @@
-[submodule "src/overlaybd/cache/ocf_cache/ocf"]
-	path = src/overlaybd/cache/ocf_cache/ocf
-	url = https://github.com/Open-CAS/ocf
-	branch = v21.6.4
 [submodule "src/overlaybd/zfile/thirdparty/DML"]
 	path = src/overlaybd/zfile/thirdparty/DML
 	url = https://github.com/intel/DML.git

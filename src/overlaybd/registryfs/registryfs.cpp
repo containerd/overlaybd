@@ -14,7 +14,6 @@
    limitations under the License.
 */
 #include "registryfs.h"
-#include "../base64.h"
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -36,6 +35,7 @@
 #include <photon/common/alog.h>
 #include <photon/net/curl.h>
 #include <photon/net/http/url.h>
+#include <photon/net/utils.h>
 #include <photon/fs/filesystem.h>
 #include <photon/fs/virtual-file.h>
 #include <rapidjson/document.h>
@@ -43,6 +43,7 @@
 #include <rapidjson/writer.h>
 
 using namespace photon::fs;
+using photon::Timeout;
 
 static const estring kDockerRegistryAuthChallengeKeyValuePrefix = "www-authenticate";
 static const estring kAuthHeaderKey = "Authorization";
@@ -345,7 +346,8 @@ protected:
         photon::net::StringWriter writer;
         if (!username.empty()) {
             std::string basic_auth = username + ":" + password;
-            std::string encoded = base64_encode((const BYTE*) basic_auth.c_str(), basic_auth.length());
+            std::string encoded;
+            photon::net::Base64Encode(basic_auth, encoded);
             req->append_header(kAuthHeaderKey, kBasicAuthPrefix + encoded);
         }
         auto ret = req->GET(auth_url, &writer, tmo.timeout_us());
@@ -426,7 +428,7 @@ public:
 
         if (code != 200 && code != 206) {
             ERRNO eno;
-            if (timeout.expire() < photon::now) {
+            if (timeout.expiration() < photon::now) {
                 LOG_ERROR_RETURN(ETIMEDOUT, -1, "timed out in preadv ", VALUE(m_url),
                                  VALUE(offset));
             }
@@ -464,7 +466,7 @@ public:
     again:
         auto code = m_fs->GET(m_url.c_str(), &headers, -1, -1, nullptr, tmo.timeout());
         if (code != 200 && code != 206) {
-            if (tmo.expire() < photon::now)
+            if (tmo.expiration() < photon::now)
                 LOG_ERROR_RETURN(ETIMEDOUT, -1, "Get meta timedout");
             if (retry--)
                 goto again;

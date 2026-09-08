@@ -55,7 +55,7 @@ To build overlaybd from source code, the following dependencies are required:
 
 * CMake >= 3.14
 
-* gcc/g++ >= 7
+* gcc/g++ >= 8
 
 * Libaio, libcurl, libnl3, glib2 and openssl runtime and development libraries.
   * CentOS 7/Fedora: `sudo yum install libaio-devel libcurl-devel openssl-devel libnl3-devel libzstd-static e2fsprogs-devel`

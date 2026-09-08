@@ -78,7 +78,7 @@ public:
 TEST(auth, http_server) {
     auto tcpserver = photon::net::new_tcp_socket_server();
     tcpserver->timeout(1000UL*1000);
-    tcpserver->setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
+    tcpserver->setsockopt<int>(SOL_SOCKET, SO_REUSEPORT, 1);
     tcpserver->bind(19876, IPAddr("127.0.0.1"));
     tcpserver->listen();
     DEFER(delete tcpserver);

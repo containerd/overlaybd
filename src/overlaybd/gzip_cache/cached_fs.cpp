@@ -14,21 +14,21 @@
    limitations under the License.
 */
 #include "cached_fs.h"
-#include "../full_file_cache/cache_pool.h"
-#include "../cache.h"
+#include <photon/common/alog.h>
 #include <photon/common/estring.h>
+#include <photon/fs/cache/cache.h>
 
 namespace Cache {
 
 class GzipCachedFsImpl : public GzipCachedFs {
 public:
-    GzipCachedFsImpl(FileSystem::ICachePool *pool, size_t page_size,
+    GzipCachedFsImpl(photon::fs::ICachedFileSystem *cache_fs, size_t page_size,
                      size_t refill_unit, IOAlloc *io_alloc)
-                 : pool_(pool), page_size_(page_size),
+                 : cache_fs_(cache_fs), pool_(cache_fs->get_pool()), page_size_(page_size),
                  refill_unit_(refill_unit), io_alloc_(io_alloc) {
     }
     ~GzipCachedFsImpl() {
-        delete pool_;
+        delete cache_fs_;
     }
 
     photon::fs::IFile *open_cached_gzip_file(photon::fs::IFile *file, const char *file_name) {
@@ -47,7 +47,7 @@ public:
         cache_store->set_src_file(file);
         cache_store->set_allocator(io_alloc_);
         cache_store->set_page_size(page_size_);
-        auto ret = FileSystem::new_cached_file(cache_store, page_size_, nullptr);
+        auto ret = photon::fs::new_cached_file(cache_store, page_size_, nullptr);
         if (ret == nullptr) { // if create file is failed
             // file and cache_store must be release, or will leak
             delete file;
@@ -56,7 +56,8 @@ public:
         return ret;
     }
 private:
-    FileSystem::ICachePool *pool_;
+    photon::fs::ICachedFileSystem *cache_fs_;
+    photon::fs::ICachePool *pool_;
     size_t page_size_;
     size_t refill_unit_;
     IOAlloc *io_alloc_;
@@ -71,9 +72,12 @@ GzipCachedFs *new_gzip_cached_fs(photon::fs::IFileSystem *mediaFs, uint64_t refi
     if (!allocator) {
         allocator = new IOAlloc;
     }
-    FileCachePool *pool = nullptr;
-    pool = new FileCachePool(mediaFs, capacityInGB, periodInUs, diskAvailInBytes, refillUnit);
-    pool->Init();
-    return new GzipCachedFsImpl(pool, 4096, refillUnit, allocator);
+    auto cache_fs = photon::fs::new_full_file_cached_fs(
+        nullptr, mediaFs, refillUnit, capacityInGB, periodInUs, diskAvailInBytes,
+        allocator, 0);
+    if (cache_fs == nullptr) {
+        LOG_ERRNO_RETURN(0, nullptr, "Create Photon full-file cache for gzip failed");
+    }
+    return new GzipCachedFsImpl(cache_fs, 4096, refillUnit, allocator);
 }
 } // namespace Cache
