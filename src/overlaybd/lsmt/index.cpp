@@ -565,6 +565,13 @@ public:
         return m;
     }
 
+    // Index0::mapping always holds the writable layer's own mappings, even for
+    // ComboIndex, whose lookup() is the merged view of all the layers.
+    virtual size_t lookup_writable_layer(Segment s, /* OUT */ SegmentMapping *pm,
+                                         size_t n) const override {
+        return Index0::lookup(s, pm, n);
+    }
+
     // dump the the whole index as an array
     virtual SegmentMapping *dump(size_t alignment = 0) const override {
         auto size = mapping.size();

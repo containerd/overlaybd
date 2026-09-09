@@ -84,6 +84,7 @@ struct HeaderTrailer {
     static const uint32_t FLAG_SHIFT_TYPE = 1;   // 1:data file,     0:index file
     static const uint32_t FLAG_SHIFT_SEALED = 2; // 1:YES,           0:NO
     static const uint32_t FLAG_SPARSE_RW = 4;    // 1:sparse file    0:normal file
+    static const uint32_t FLAG_HYBRID_RW = 5;    // 1:hybrid rw      0:append rw
 
     uint32_t get_flag_bit(uint32_t shift) const {
         return flags & (1 << shift);
@@ -111,6 +112,9 @@ struct HeaderTrailer {
     }
     bool is_sparse_rw() const {
         return get_flag_bit(FLAG_SPARSE_RW);
+    }
+    bool is_hybrid_rw() const {
+        return get_flag_bit(FLAG_HYBRID_RW);
     }
 
     void set_header() {
@@ -141,6 +145,34 @@ struct HeaderTrailer {
     }
     void clr_sparse_rw() {
         clr_flag_bit(FLAG_SPARSE_RW);
+    }
+    void set_hybrid_rw() {
+        set_flag_bit(FLAG_HYBRID_RW);
+    }
+    void clr_hybrid_rw() {
+        clr_flag_bit(FLAG_HYBRID_RW);
+    }
+
+    void set_rw_type(RWType type) {
+        if (type == RWType::Sparse)
+            set_sparse_rw();
+        else
+            clr_sparse_rw();
+        if (type == RWType::Hybrid)
+            set_hybrid_rw();
+        else
+            clr_hybrid_rw();
+    }
+
+    // decodes the writable layer type from flags, returns -1 if they are malformed,
+    // e.g. sparse_rw and hybrid_rw are both set.
+    int get_rw_type(RWType &type) const {
+        if (is_sparse_rw() && is_hybrid_rw()) {
+            LOG_ERROR_RETURN(EINVAL, -1, "sparse_rw and hybrid_rw flags are both set");
+        }
+        type = is_sparse_rw() ? RWType::Sparse
+                              : (is_hybrid_rw() ? RWType::Hybrid : RWType::Append);
+        return 0;
     }
 
     int set_tag(char *buf, size_t n) {
@@ -185,6 +217,19 @@ static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer = false,
 
 static const int ABORT_FLAG_DETECTED = -2;
 
+static const char *rw_type_name(RWType type) {
+    switch (type) {
+    case RWType::Append:
+        return "append";
+    case RWType::Hybrid:
+        return "hybrid";
+    case RWType::Sparse:
+        return "sparse";
+    default:
+        return "unknown";
+    }
+}
+
 static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, bool is_data_file,
                                 uint64_t index_offset, uint64_t index_size, const LayerInfo &args) {
     ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
@@ -203,10 +248,7 @@ static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, boo
         pht->set_data_file();
     else
         pht->set_index_file();
-    if (args.sparse_rw)
-        pht->set_sparse_rw();
-    else
-        pht->clr_sparse_rw();
+    pht->set_rw_type(args.rw_type);
 
     pht->index_offset = index_offset;
     pht->index_size = index_size;
@@ -345,7 +387,9 @@ static int load_layer_info(IFile **src_files, size_t n, LayerInfo &layer, bool o
     }
     HeaderTrailer *pht = (HeaderTrailer *)buf_top;
     layer.virtual_size = pht->virtual_size;
-    layer.sparse_rw = pht->is_sparse_rw();
+    if (pht->get_rw_type(layer.rw_type) != 0) {
+        LOG_ERROR_RETURN(0, -1, "invalid layer info.");
+    }
     if (n != 1) {
         ALIGNED_MEM(buf_bottom, HeaderTrailer::SPACE, ALIGNMENT4K);
         //
@@ -384,7 +428,7 @@ static int compact(const CompactOptions &opt, atomic_uint64_t &compacted_idx_siz
     LayerInfo layer;
     if (load_layer_info(src_files, opt.n, layer) != 0)
         return -1;
-    layer.sparse_rw = false;
+    layer.rw_type = RWType::Append;
     layer.user_tag = commit_args->user_tag;
     layer.uuid.clear();
     if (UUID::String::is_valid((commit_args->uuid).c_str())) {
@@ -724,6 +768,7 @@ public:
     uint64_t m_data_offset = HeaderTrailer::SPACE / ALIGNMENT;
 
     uint8_t m_rw_tag = 0;
+    RWType m_rw_type = RWType::Append;
 
     Mutex m_rw_mtx;
     IFile *m_findex = nullptr;
@@ -748,6 +793,11 @@ public:
             return m_files[m_rw_tag];
         }
         return nullptr;
+    }
+
+    IComboIndex *rw_index() const {
+        assert(m_index != nullptr);
+        return static_cast<IComboIndex *>(m_index);
     }
 
     virtual int vioctl(int request, va_list args) override {
@@ -847,26 +897,73 @@ public:
             offset += MAX_IO_SIZE;
         }
         // wait unlock
-        off_t moffset = -1;
         {
             Lock lock(m_rw_mtx);
-            moffset = append(m_files[m_rw_tag], buf, count);
-            if (moffset == 0)
-                return -1;
             m_vsize = max(m_vsize, count + offset);
             if (m_vsize < count + offset) {
                 LOG_INFO("resize m_visze: `->`", m_vsize, count + offset);
             }
-            SegmentMapping m{
-                (uint64_t)offset / (uint64_t)ALIGNMENT,
-                (uint32_t)count / (uint32_t)ALIGNMENT,
-                (uint64_t)moffset / (uint64_t)ALIGNMENT,
+            auto offset_in_blocks = (uint64_t)offset / ALIGNMENT;
+            auto count_in_blocks = (uint32_t)count / ALIGNMENT;
+            auto end_in_blocks = offset_in_blocks + count_in_blocks;
+            auto update_mapping = [&](SegmentMapping m, bool append_data) -> int {
+                auto data_offset = (m.offset - offset_in_blocks) * ALIGNMENT;
+                auto data_length = (size_t)m.length * ALIGNMENT;
+                if (!append_data) {
+                    if (m_files[m_rw_tag]->pwrite((const char *)buf + data_offset, data_length,
+                                                   m.moffset * ALIGNMENT) != (ssize_t)data_length) {
+                        LOG_ERRNO_RETURN(0, -1, "rewrite data failed");
+                    }
+                    return 0;
+                }
+
+                auto moffset = append(m_files[m_rw_tag], (const char *)buf + data_offset,
+                                      data_length);
+                if (moffset == 0)
+                    return -1;
+                m.moffset = (uint64_t)moffset / ALIGNMENT;
+                m_data_offset = max(m_data_offset, m.mend());
+                m.tag = m_rw_tag;
+                rw_index()->insert(m);
+                append_index(m);
+                return 0;
             };
-            m.tag = m_rw_tag;
-            assert(m.length > (uint32_t)0);
-            m_data_offset = m.mend();
-            static_cast<IMemoryIndex0 *>(m_index)->insert(m);
-            append_index(m);
+
+            // in hybrid mode, the ranges already mapped by this writable layer are
+            // rewritten in place, everything else (holes, zeroed ranges and the ranges
+            // of the lower layers) is appended.
+            uint64_t cursor = offset_in_blocks;
+            while (m_rw_type == RWType::Hybrid && cursor < end_in_blocks) {
+                SegmentMapping upper[128];
+                auto length = min(end_in_blocks - cursor, (uint64_t)Segment::MAX_LENGTH);
+                auto n = rw_index()->lookup_writable_layer({cursor, (uint32_t)length}, upper,
+                                                           LEN(upper));
+                if (n == 0)
+                    break;
+                for (size_t i = 0; i < n; i++) {
+                    auto &m = upper[i];
+                    if (cursor < m.offset) {
+                        SegmentMapping appended(cursor, (uint32_t)(m.offset - cursor), 0);
+                        if (update_mapping(appended, true) != 0)
+                            return -1;
+                    }
+                    // a zeroed mapping owns no data payload, and the mappings of a sealed
+                    // layer (of a different tag) must never be overwritten.
+                    if (m.zeroed || m.tag != m_rw_tag) {
+                        SegmentMapping appended(m.offset, m.length, 0);
+                        if (update_mapping(appended, true) != 0)
+                            return -1;
+                    } else if (update_mapping(m, false) != 0) {
+                        return -1;
+                    }
+                    cursor = m.end();
+                }
+            }
+            if (cursor < end_in_blocks) {
+                SegmentMapping appended(cursor, (uint32_t)(end_in_blocks - cursor), 0);
+                if (update_mapping(appended, true) != 0)
+                    return -1;
+            }
         }
 
         return bytes;
@@ -1068,6 +1165,7 @@ public:
         }
         LOG_DEBUG("m_files.size(): `, rw_tag: `", m_files.size(), m_rw_tag);
         m_findex = u->m_findex;
+        m_rw_type = u->m_rw_type;
         m_vsize = u->m_vsize;
         ((IComboIndex *)m_index)->commit_index0();
 
@@ -1476,7 +1574,11 @@ IFileRO *open_file_ro(IFile *file, bool ownership) {
 IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
     ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
     auto pht = verify_ht(fdata, buf);
-    if ((pht == nullptr) || ((pht->is_sparse_rw() == false) && (!findex))) {
+    auto rw_type = RWType::Append;
+    if (pht != nullptr && pht->get_rw_type(rw_type) != 0) {
+        return nullptr;
+    }
+    if ((pht == nullptr) || ((rw_type != RWType::Sparse) && (!findex))) {
         LOG_ERRNO_RETURN(0, nullptr, "invalid file ptr, fdata: ` findex: `", fdata, findex);
     }
     struct stat stat;
@@ -1485,7 +1587,7 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
         LOG_ERRNO_RETURN(0, nullptr, "failed to stat data file.");
     }
     IMemoryIndex0 *pi = nullptr;
-    if (pht->is_sparse_rw() == false) {
+    if (rw_type != RWType::Sparse) {
         HeaderTrailer ht;
         auto p = do_load_index(findex, &ht, false);
         if (!p) {
@@ -1511,14 +1613,15 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
         }
     }
     LSMTFile *rst = nullptr;
-    if (pht->is_sparse_rw() == false) {
-        LOG_INFO("create LSMTFile object (append-only)");
+    if (rw_type != RWType::Sparse) {
+        LOG_INFO("create LSMTFile object (rw_type: `)", rw_type_name(rw_type));
         rst = new LSMTFile;
     } else {
         LOG_INFO("create LSMTSparseFile object");
         rst = new LSMTSparseFile;
     }
     rst->m_index = pi;
+    rst->m_rw_type = rw_type;
     rst->m_findex = findex;
     rst->m_files.push_back(fdata);
     rst->m_vsize = pht->virtual_size;
@@ -1526,8 +1629,8 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
     UUID raw;
     raw.parse(pht->uuid);
     rst->m_uuid.push_back(raw);
-    LOG_INFO("Layer Info: { UUID:` , Parent_UUID: `, SparseRW: `, Virtual size: `, Version: `.` }",
-             pht->uuid, pht->parent_uuid, pht->is_sparse_rw(), rst->m_vsize, pht->version,
+    LOG_INFO("Layer Info: { UUID:` , Parent_UUID: `, RWType: `, Virtual size: `, Version: `.` }",
+             pht->uuid, pht->parent_uuid, rw_type_name(rw_type), rst->m_vsize, pht->version,
              pht->sub_version);
     return rst;
 }
@@ -1535,16 +1638,22 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
 IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
     auto fdata = args.fdata;
     auto findex = args.findex;
-    if ((args.sparse_rw == false) && (!fdata || !findex)) {
+    if (args.rw_type != RWType::Append && args.rw_type != RWType::Hybrid &&
+        args.rw_type != RWType::Sparse) {
+        LOG_ERROR_RETURN(EINVAL, nullptr, "invalid writable layer type: `",
+                         static_cast<uint8_t>(args.rw_type));
+    }
+    if ((args.rw_type != RWType::Sparse) && (!fdata || !findex)) {
         LOG_ERROR_RETURN(0, nullptr, "invalid file ptr, fdata: `, findex: `", fdata, findex);
     }
     LSMTFile *rst = nullptr;
-    if (args.sparse_rw == false) {
+    if (args.rw_type != RWType::Sparse) {
         rst = new LSMTFile;
     } else {
         rst = new LSMTSparseFile;
     }
     rst->m_index = create_memory_index0((const SegmentMapping *)nullptr, 0, 0, 0);
+    rst->m_rw_type = args.rw_type;
     rst->m_findex = findex;
     rst->m_files.push_back(fdata);
     LOG_DEBUG("unparse uuid");
@@ -1555,14 +1664,15 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
     rst->m_vsize = args.virtual_size;
     rst->m_file_ownership = ownership;
     write_header_trailer(fdata, true, false, true, 0, 0, args);
-    if (!args.sparse_rw) {
+    if (args.rw_type != RWType::Sparse) {
         write_header_trailer(findex, true, false, false, HeaderTrailer::SPACE, 0, args);
     }
     HeaderTrailer tmp;
     // args.parent_uuid.to_string(parent_uuid, UUID::String::LEN);
-    LOG_INFO("Layer Info: { UUID:`, Parent_UUID: `, Sparse: ` Virtual size: `, Version: `.` }", raw,
-             args.parent_uuid, args.sparse_rw, rst->m_vsize, tmp.version, tmp.sub_version);
-    if (args.sparse_rw) {
+    LOG_INFO("Layer Info: { UUID:`, Parent_UUID: `, RWType: ` Virtual size: `, Version: `.` }", raw,
+             args.parent_uuid, rw_type_name(args.rw_type), rst->m_vsize, tmp.version,
+             tmp.sub_version);
+    if (args.rw_type == RWType::Sparse) {
         fdata->ftruncate(args.virtual_size + HeaderTrailer::SPACE);
     }
     return rst;
@@ -1572,7 +1682,7 @@ IFileRW *create_warpfile(WarpFileArgs &args, bool ownership) {
     auto rst = new LSMTWarpFile();
     rst->m_findex = args.findex;
     LayerInfo info;
-    info.sparse_rw = false;
+    info.rw_type = RWType::Append;
     info.virtual_size = args.virtual_size;
     info.parent_uuid.parse(args.parent_uuid);
     info.uuid.parse(args.uuid);
@@ -1888,11 +1998,16 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
         if (pht == nullptr) {
             LOG_ERRNO_RETURN(0, nullptr, "verify upper layer's Header failed.");
         }
-        if (!pht->is_sparse_rw()) {
+        auto rw_type = RWType::Append;
+        if (pht->get_rw_type(rw_type) != 0) {
+            return nullptr;
+        }
+        if (rw_type != RWType::Sparse) {
             rst = new LSMTFile;
         } else {
             rst = new LSMTSparseFile;
         }
+        rst->m_rw_type = rw_type;
         // TODO: also for LSMTWarpFile
         if (u->m_vsize == 0) {
             if (u->update_vsize(l->m_vsize) < 0) {

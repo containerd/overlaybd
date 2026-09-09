@@ -120,7 +120,7 @@ public:
         snprintf_names(next_layer_id++);
     }
 
-    IFileRW *create_file_rw(bool sparse = false) {
+    IFileRW *create_file_rw(RWType rw_type = RWType::Append) {
         name_next_layer();
         auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         // auto fdata = photon::fs::open_localfile_adaptor(data_name.back().c_str(), O_RDWR |
@@ -132,7 +132,7 @@ public:
         EXPECT_EQ(nullptr, ::create_file_rw(_, true));
         LOG_INFO("TEST OK");
         LayerInfo args(fdata, findex);
-        args.sparse_rw = sparse;
+        args.rw_type = rw_type;
         if (parent_uuid != "")
             args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
         args.virtual_size = vsize;
@@ -140,8 +140,10 @@ public:
         return file;
     }
     IFileRW *open_file_rw() {
-        auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_APPEND, S_IRWXU);
-        auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_APPEND, S_IRWXU);
+        // no O_APPEND, just like ImageFile does, otherwise a hybrid RW layer could not
+        // rewrite its data in place
+        auto fdata = lfs->open(data_name.back().c_str(), O_RDWR, S_IRWXU);
+        auto findex = lfs->open(idx_name.back().c_str(), O_RDWR, S_IRWXU);
         EXPECT_EQ(LSMT::open_file_rw(nullptr, findex), nullptr);
         EXPECT_EQ(LSMT::open_file_rw(nullptr, nullptr), nullptr);
         auto file = LSMT::open_file_rw(fdata, findex, true);
@@ -343,11 +345,11 @@ public:
         // memset(data, 0, vsize);
     }
 
-    IFileRW *create_file(bool sparse = false) {
+    IFileRW *create_file(RWType rw_type = RWType::Append) {
         cout << "creating a file, by randwrite()" << endl;
         // memset(data, 0, PREAD_LEN);
         cout << "create_file_rw" << endl;
-        auto file = create_file_rw(sparse);
+        auto file = create_file_rw(rw_type);
         cout << "randwrite" << endl;
         randwrite(file, FLAGS_nwrites);
         return file;
@@ -418,14 +420,13 @@ public:
     char /* layer_data[128], layer_index[128], layer[128], layer_gc[128], */ fn_merged[128] =
         "merged.lsmt";
 
-    IFileRW *create_a_layer(bool sparse = false) {
+    IFileRW *create_a_layer(RWType rw_type = RWType::Append) {
         name_next_layer();
         auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         LOG_INFO("data: ` index: `", data_name.back().c_str(), idx_name.back().c_str());
         LayerInfo args(fdata, findex);
-        if (sparse)
-            args.sparse_rw = true;
+        args.rw_type = rw_type;
 
         if (parent_uuid != "")
             args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
@@ -454,8 +455,8 @@ public:
     }
 
     IFile *create_commit_layer(int i = 0, int io_engine = 0, bool compress = false,
-                               bool verify = false, bool sparse = false) {
-        auto file = create_a_layer(sparse);
+                               bool verify = false, RWType rw_type = RWType::Append) {
+        auto file = create_a_layer(rw_type);
         IFile *as = nullptr;
         IFile *dst = nullptr;
         auto dst_filename = layer_name.back();

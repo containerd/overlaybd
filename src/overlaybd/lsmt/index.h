@@ -154,6 +154,11 @@ public:
     virtual int front_index(const IMemoryIndex0 *fi) = 0;
     virtual const IMemoryIndex0 *front_index() const = 0;
 
+    // the same as lookup(), except that only the mappings of the writable (front)
+    // layer are looked up, the backing (lower) layers are ignored.
+    virtual size_t lookup_writable_layer(Segment s, /* OUT */ SegmentMapping *pm,
+                                         size_t n) const = 0;
+
     // dump index0 which needs to compact
     // and then clear the original index0.
     // virtual IMemoryIndex0* gc_index() = 0;

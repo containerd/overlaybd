@@ -48,7 +48,7 @@ static int create_sparse_layer(const std::string &data_path,
     }
     LSMT::LayerInfo args(fdata, findex);
     args.virtual_size = vsize;
-    args.sparse_rw = true;
+    args.rw_type = LSMT::RWType::Sparse;
     LSMT::IFileRW *file = LSMT::create_file_rw(args, false);
     if (file == nullptr) {
         LOG_ERROR("create_file_rw failed for placeholder `", data_path.c_str());

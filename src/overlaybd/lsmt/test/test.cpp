@@ -461,10 +461,167 @@ TEST_F(FileTest, create_open) {
 }
 
 TEST_F(FileTest, create_open_sp) {
-    auto file1 = create_file_rw(/*sparse = */ true);
+    auto file1 = create_file_rw(RWType::Sparse);
     delete file1;
     auto file2 = open_file_rw();
     delete file2;
+}
+
+TEST_F(FileTest, create_open_hybrid) {
+    auto file1 = create_file_rw(RWType::Hybrid);
+    delete file1;
+    auto file2 = open_file_rw();
+    delete file2;
+}
+
+TEST_F(FileTest, create_unknown_rw_type) {
+    name_next_layer();
+    auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    DEFER(delete fdata);
+    DEFER(delete findex);
+    LayerInfo args(fdata, findex);
+    args.virtual_size = vsize;
+    args.rw_type = (RWType)0xff;
+    LOG_INFO("TEST: now create a rw layer with unknown rw type.. expected ret: nullptr");
+    EXPECT_EQ(nullptr, ::create_file_rw(args, true));
+}
+
+// a single I/O of a hybrid RW test case, offset and length are in ALIGNMENT-sized blocks
+struct HybridIO {
+    uint64_t offset;
+    uint32_t length;
+    // the byte filling the range, 0 means discard (fallocate) instead of write
+    unsigned char pattern;
+};
+
+struct HybridCase {
+    const char *name;
+    vector<HybridIO> seed;    // prepares the layout of the writable layer
+    HybridIO overwrite;       // the I/O of which the layer growth is measured
+    size_t appended_blocks;   // expected growth of the data file, in blocks
+    size_t appended_mappings; // expected growth of the index file, in mappings
+};
+
+class HybridFileTest : public FileTest {
+public:
+    // large enough for every case below
+    static const size_t MAX_IMAGE_SIZE = 512 * ALIGNMENT;
+
+    // the expected content of the image, updated by every do_io()
+    vector<char> expected;
+
+    void do_io(IFileRW *file, const HybridIO &io) {
+        auto offset = (size_t)io.offset * ALIGNMENT;
+        auto size = (size_t)io.length * ALIGNMENT;
+        ASSERT_LE(offset + size, MAX_IMAGE_SIZE);
+        if (expected.size() < offset + size)
+            expected.resize(offset + size, 0);
+        if (io.pattern == 0) {
+            ASSERT_EQ(0, file->fallocate(3, offset, size));
+        } else {
+            ALIGNED_MEM4K(data, MAX_IMAGE_SIZE);
+            memset(data, io.pattern, size);
+            ASSERT_EQ((ssize_t)size, file->pwrite(data, size, offset));
+        }
+        memset(&expected[offset], io.pattern, size);
+    }
+
+    void verify(IFileRO *file) {
+        ALIGNED_MEM4K(readback, MAX_IMAGE_SIZE);
+        ASSERT_EQ((ssize_t)expected.size(), file->pread(readback, expected.size(), 0));
+        EXPECT_EQ(0, memcmp(&expected[0], readback, expected.size()));
+    }
+};
+
+const size_t HybridFileTest::MAX_IMAGE_SIZE;
+
+// A hybrid RW layer rewrites the data of the mappings it already owns in place, and
+// appends everything else: holes, zeroed ranges and the ranges of the lower layers.
+TEST_F(HybridFileTest, hybrid_rw_overwrite) {
+    vector<HybridCase> cases{
+        {"rewrite a part of a mapping", {{0, 64, 0x11}}, {8, 48, 0x22}, 0, 0},
+        {"rewrite a whole mapping", {{32, 64, 0x11}}, {32, 64, 0x22}, 0, 0},
+        {"rewrite a mapping and append the tail", {{0, 64, 0x11}}, {0, 80, 0x22}, 16, 1},
+        {"rewrite a mapping and append both sides", {{32, 32, 0x11}}, {0, 96, 0x22}, 64, 2},
+        {"append the hole between two mappings",
+         {{0, 64, 0x11}, {128, 128, 0x22}},
+         {32, 160, 0x33},
+         64,
+         1},
+        {"append the exact hole between two mappings",
+         {{0, 64, 0x11}, {128, 64, 0x22}},
+         {64, 64, 0x33},
+         64,
+         1},
+        {"append the two holes among three mappings",
+         {{0, 64, 0x11}, {128, 64, 0x22}, {256, 64, 0x44}},
+         {32, 256, 0x33},
+         128,
+         2},
+        {"append a zeroed mapping and a hole",
+         {{0, 64, 0x11}, {64, 64, /* discard = */ 0}},
+         {32, 128, 0x22},
+         96,
+         2},
+    };
+
+    for (auto &c : cases) {
+        LOG_INFO("hybrid RW case: `", c.name);
+        expected.clear();
+        auto file = create_file_rw(RWType::Hybrid);
+        ASSERT_NE(nullptr, file);
+        for (auto &io : c.seed)
+            do_io(file, io);
+        auto data_size = file_size(lfs, data_name.back().c_str());
+        auto index_size = file_size(lfs, idx_name.back().c_str());
+
+        do_io(file, c.overwrite);
+        EXPECT_EQ(data_size + (ssize_t)(c.appended_blocks * ALIGNMENT),
+                  file_size(lfs, data_name.back().c_str()));
+        EXPECT_EQ(index_size + (ssize_t)(c.appended_mappings * sizeof(SegmentMapping)),
+                  file_size(lfs, idx_name.back().c_str()));
+        verify(file);
+        delete file;
+
+        // the rewritten data and the index must survive a reopen, and the reopened
+        // layer must keep rewriting in place
+        auto reopened = open_file_rw();
+        ASSERT_NE(nullptr, reopened);
+        verify(reopened);
+        data_size = file_size(lfs, data_name.back().c_str());
+        do_io(reopened, c.overwrite);
+        EXPECT_EQ(data_size, file_size(lfs, data_name.back().c_str()));
+        verify(reopened);
+        delete reopened;
+    }
+}
+
+// A hybrid upper layer still rewrites its own mappings in place after stack_files(),
+// while the ranges of the sealed lower layers are always appended.
+TEST_F(HybridFileTest, hybrid_rw_stacked_layers) {
+    auto lower_rw = create_file_rw();
+    ASSERT_NE(nullptr, lower_rw);
+    do_io(lower_rw, {64, 128, 0x11});
+    IFileRO *lower = nullptr;
+    ASSERT_EQ(0, lower_rw->close_seal(&lower));
+    delete lower_rw;
+    auto lower_data_size = file_size(lfs, data_name.front().c_str());
+
+    auto upper = create_file_rw(RWType::Hybrid);
+    ASSERT_NE(nullptr, upper);
+    auto file = stack_files(upper, lower, /* ownership = */ true, /* check_order = */ false);
+    ASSERT_NE(nullptr, file);
+    DEFER(delete file);
+    do_io(file, {0, 64, 0x22});
+    auto data_size = file_size(lfs, data_name.back().c_str());
+
+    // [0, 64) belongs to the upper layer and is rewritten in place, while [64, 128)
+    // is only mapped by the lower layer and has to be appended
+    do_io(file, {0, 128, 0x33});
+    EXPECT_EQ(data_size + (ssize_t)(64 * ALIGNMENT), file_size(lfs, data_name.back().c_str()));
+    EXPECT_EQ(lower_data_size, file_size(lfs, data_name.front().c_str()));
+    verify(file);
 }
 
 class FileTest1 : public FileTest {
@@ -489,7 +646,7 @@ TEST_F(FileTest2, sparse_rw) {
     }
     LayerInfo args;
     args.fdata = file;
-    args.sparse_rw = true;
+    args.rw_type = RWType::Sparse;
     args.virtual_size = 64 << 20;
     auto layer = ::create_file_rw(args, true);
     char raw_data[65536];
@@ -521,6 +678,37 @@ TEST_F(FileTest2, sparse_rw) {
         LOG_INFO("`", *m);
     }
     layer->close();
+}
+
+// A hybrid RW layer must survive the same random workload as an append-only one, and
+// grow slower, since the overwritten ranges are rewritten in place.
+TEST_F(FileTest2, hybrid_rw) {
+    reset_verify_file();
+    auto append_layer = create_file_rw(RWType::Append);
+    auto append_data = data_name.back();
+    auto hybrid_layer = create_file_rw(RWType::Hybrid);
+    auto hybrid_data = data_name.back();
+    // the very same writes go to both layers, twice, so that the second round mostly
+    // overwrites the ranges the writable layer already owns
+    randwrite1(append_layer, hybrid_layer, FLAGS_nwrites);
+    randwrite1(append_layer, hybrid_layer, FLAGS_nwrites);
+
+    LOG_INFO("verify the append-only RW layer");
+    EXPECT_TRUE(verify_file(append_layer));
+    LOG_INFO("verify the hybrid RW layer");
+    EXPECT_TRUE(verify_file(hybrid_layer));
+    auto append_size = file_size(lfs, append_data.c_str());
+    auto hybrid_size = file_size(lfs, hybrid_data.c_str());
+    LOG_INFO("data file size { append: `, hybrid: ` }", append_size, hybrid_size);
+    EXPECT_LT(hybrid_size, append_size);
+
+    LOG_INFO("verify the committed hybrid RW layer");
+    auto fcommit = lfs->open(layer_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    EXPECT_EQ(0, hybrid_layer->commit(fcommit));
+    delete fcommit;
+    verify_file(layer_name.back().c_str());
+    delete append_layer;
+    delete hybrid_layer;
 }
 
 TEST_F(FileTest2, commit_close_seal) {
@@ -582,7 +770,7 @@ TEST_F(FileTest2, commit_close_seal) {
 TEST_F(FileTest2, commit) {
     reset_verify_file();
     auto file0 = create_file_rw();
-    auto file1 = create_file_rw(true);
+    auto file1 = create_file_rw(RWType::Sparse);
     randwrite1(file0, file1, FLAGS_nwrites);
     LOG_INFO("compare index.");
     auto index0 = file0->index();
@@ -720,12 +908,10 @@ TEST_F(FileTest3, seek_data) {
     delete fmerged;
     delete[] data;
 }
-
-
 TEST_F(FileTest3, sparsefile_close_seal) {
     CleanUp();
     cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
-    auto file = create_a_layer(true);
+    auto file = create_a_layer(RWType::Sparse);
     IFileRO *fdup;
     file->close_seal(&fdup);
     verify_file(fdup);
@@ -744,7 +930,7 @@ TEST_F(FileTest3, stack_sparsefiles) {
     cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
     for (int i = 0; i < FLAGS_layers; ++i) {
         files[i] = create_commit_layer(0, 1 /*libaio*/, false, false,
-                                       true); //创建若干层RO Layer,文件指针保存在files中
+                                       RWType::Sparse); //创建若干层RO Layer,文件指针保存在files中
         auto lower = open_files_ro(files, i + 1);
         DEFER(delete lower);
         verify_file(lower);
@@ -765,7 +951,7 @@ TEST_F(FileTest3, stack_sparsefiles) {
     auto stat = ((LSMTReadOnlyFile *)lower)->data_stat();
     LOG_INFO("RO valid data: `", stat.valid_data_size);
     cout << "generating a RW layer by randwrite()" << endl;
-    auto upper = create_a_layer(true);
+    auto upper = create_a_layer(RWType::Sparse);
 
     auto file = stack_files(upper, lower, 0, true);
 
@@ -855,23 +1041,21 @@ TEST_F(FileTest3, restack) {
     verify_file(file);
     delete file;
 }
-
-
 TEST_F(FileTest3, restack_sparse) {
     CleanUp();
     cout << "generating " << FLAGS_layers << " RO layers by randwrite()" << endl;
     auto lowers = create_image(FLAGS_layers);
-    auto upper = create_a_layer(true);
+    auto upper = create_a_layer(RWType::Sparse);
     cout<<"stack files"<<endl;
     auto file = stack_files(upper, lowers, 0, true);
     randwrite(file, FLAGS_nwrites);
     verify_file(file);
     cout << "restack top layer 0" <<endl;
-    auto upper1 = create_file_rw(true);
+    auto upper1 = create_file_rw(RWType::Sparse);
     EXPECT_EQ(0, file->restack(upper1));
     randwrite(file, FLAGS_nwrites);
     cout << "restack top layer 2 & verify" <<endl;
-    auto upper2 = create_file_rw(true);
+    auto upper2 = create_file_rw(RWType::Sparse);
     EXPECT_EQ(0, file->restack(upper2));
     randwrite(file, FLAGS_nwrites);
     verify_file(file);

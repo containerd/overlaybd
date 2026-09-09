@@ -40,7 +40,7 @@ The format of header is described as below. All fields are little-endian.
 |    sealed   |       2       | this file is sealed (1) or not (0) |
 |   gc_layer  |       3       | this is a gc layer (1) or normal layer (0) |
 |  sparse_rw  |       4       | this is a sparse rw layer |
-| info_valid  |       5       | information validity of the fields *after* flags (they were initially invalid (0) after creation; and readers must resort to trailer when they meet such headers) |
+|  hybrid_rw  |       5       | this is a hybrid rw layer |
 |   reserved  |      6~31     | reserved for future use; must be 0s |
 
 
