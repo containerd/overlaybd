@@ -16,6 +16,7 @@
 
 #include "compressor.h"
 #include "lz4/lz4.h"
+#include <array>
 #include <cstddef>
 #include <photon/common/alog.h>
 #include <memory>
@@ -45,13 +46,10 @@ static std::atomic<int> g_qat_state{0};
 #endif
 class BaseCompressor : public ICompressor {
 public:
+    enum : size_t { MAX_BATCH = 256 };
     uint32_t max_dst_size = 0;
     uint32_t src_blk_size = 0;
-    // vector<unsigned char *> raw_data;
-    vector<unsigned char *> compressed_data;
-    vector<unsigned char *> uncompressed_data;
-
-    const int DEFAULT_N_BATCH = 256;
+    enum { DEFAULT_N_BATCH = MAX_BATCH };
 
     virtual int init(const CompressArgs *args) {
         auto opt = &args->opt;
@@ -61,9 +59,6 @@ public:
 
         src_blk_size = opt->block_size;
         LOG_DEBUG("create batch buffer, size: `", nbatch());
-        // raw_data.resize(nbatch());
-        compressed_data.resize(nbatch());
-        uncompressed_data.resize(nbatch());
         return 0;
     }
 
@@ -72,11 +67,15 @@ public:
     }
 
     virtual int do_compress(size_t *src_chunk_len /* uncompressed length per block */,
-                            size_t *dst_chunk_len, size_t dst_buffer_capacity, size_t nblock) = 0;
+                            size_t *dst_chunk_len, size_t dst_buffer_capacity, size_t nblock,
+                            unsigned char **compressed_data,
+                            unsigned char **uncompressed_data) = 0;
 
     virtual int do_decompress(size_t *src_chunk_len,
                               /* compressed length per block */ size_t *dst_chunk_len,
-                              size_t dst_buffer_capacity, size_t nblock) = 0;
+                              size_t dst_buffer_capacity, size_t nblock,
+                              unsigned char **compressed_data,
+                              unsigned char **uncompressed_data) = 0;
 
     virtual int compress(const unsigned char *src, size_t src_len, unsigned char *dst,
                          size_t dst_len) override {
@@ -91,9 +90,14 @@ public:
     int compress_batch(const unsigned char *src, size_t *src_chunk_len, unsigned char *dst,
                        size_t dst_buffer_capacity, size_t *dst_chunk_len, size_t n) override {
 
+        if (n == 0 || n > MAX_BATCH) {
+            LOG_ERROR_RETURN(EINVAL, -1, "invalid batch size (`), maximum is `", n, MAX_BATCH);
+        }
         if (dst_buffer_capacity / n < max_dst_size) {
             LOG_ERROR_RETURN(ENOBUFS, -1, "dst_len should be greater than `", max_dst_size - 1);
         }
+        std::array<unsigned char *, MAX_BATCH> compressed_data;
+        std::array<unsigned char *, MAX_BATCH> uncompressed_data;
         off_t src_offset = 0, dst_offset = 0;
         for (size_t i = 0; i < n; i++) {
             uncompressed_data[i] = ((unsigned char *)src + src_offset);
@@ -101,7 +105,8 @@ public:
             src_offset += src_chunk_len[i];
             dst_offset += dst_buffer_capacity / n;
         }
-        return do_compress(src_chunk_len, dst_chunk_len, dst_buffer_capacity, n);
+        return do_compress(src_chunk_len, dst_chunk_len, dst_buffer_capacity, n,
+                           compressed_data.data(), uncompressed_data.data());
     }
 
     virtual int decompress(const unsigned char *src, size_t src_len, unsigned char *dst,
@@ -117,11 +122,16 @@ public:
     int decompress_batch(const unsigned char *src, size_t *src_chunk_len, unsigned char *dst,
                          size_t dst_buffer_capacity, size_t *dst_chunk_len, size_t n) override {
 
+        if (n == 0 || n > MAX_BATCH) {
+            LOG_ERROR_RETURN(EINVAL, -1, "invalid batch size (`), maximum is `", n, MAX_BATCH);
+        }
         if (dst_buffer_capacity / n < src_blk_size) {
             LOG_ERROR_RETURN(ENOBUFS, -1,
                              "dst_len (`) should be greater than compressed block size `",
                              dst_buffer_capacity / n, src_blk_size);
         }
+        std::array<unsigned char *, MAX_BATCH> compressed_data;
+        std::array<unsigned char *, MAX_BATCH> uncompressed_data;
         off_t src_offset = 0, dst_offset = 0;
         for (size_t i = 0; i < n; i++) {
             compressed_data[i] = ((unsigned char *)src + src_offset);
@@ -130,7 +140,8 @@ public:
             dst_offset += dst_buffer_capacity / n;
         }
 
-        return do_decompress(src_chunk_len, dst_chunk_len, dst_buffer_capacity, n);
+        return do_decompress(src_chunk_len, dst_chunk_len, dst_buffer_capacity, n,
+                             compressed_data.data(), uncompressed_data.data());
     }
 };
 
@@ -195,9 +206,6 @@ public:
             if (qat_init(pQat) == 0) {
                 qat_enable = true;
                 g_qat_state.store(1, std::memory_order_release);
-                /* nbatch() now returns DEFAULT_N_BATCH (was 1 when BaseCompressor::init ran). */
-                compressed_data.resize(DEFAULT_N_BATCH);
-                uncompressed_data.resize(DEFAULT_N_BATCH);
             } else {
                 delete pQat;
                 pQat = nullptr;
@@ -213,7 +221,9 @@ public:
     }
 
     virtual int do_compress(size_t *src_chunk_len, size_t *dst_chunk_len,
-                            size_t dst_buffer_capacity, size_t nblock) override {
+                            size_t dst_buffer_capacity, size_t nblock,
+                            unsigned char **compressed_data,
+                            unsigned char **uncompressed_data) override {
 
         int ret = 0;
 #ifdef ENABLE_QAT
@@ -245,7 +255,8 @@ public:
     }
 
     int do_decompress(size_t *src_chunk_len, size_t *dst_chunk_len, size_t dst_buffer_capacity,
-                      size_t n) override {
+                      size_t n, unsigned char **compressed_data,
+                      unsigned char **uncompressed_data) override {
 
         int ret = 0;
 #ifdef ENABLE_QAT
@@ -310,7 +321,8 @@ public:
 
     virtual int do_compress(size_t *src_chunk_len /* uncompressed length per block */,
                             size_t *dst_chunk_len, size_t dst_buffer_capacity,
-                            size_t nblock) override {
+                            size_t nblock, unsigned char **compressed_data,
+                            unsigned char **uncompressed_data) override {
 
         int ret = 0;
         for (size_t i = 0; i < nblock; i++) {
@@ -326,7 +338,9 @@ public:
 
     virtual int do_decompress(size_t *src_chunk_len,
                               /* compressed length per block */ size_t *dst_chunk_len,
-                              size_t dst_buffer_capacity, size_t nblock) override {
+                              size_t dst_buffer_capacity, size_t nblock,
+                              unsigned char **compressed_data,
+                              unsigned char **uncompressed_data) override {
 
         int ret = 0;
         for (size_t i = 0; i < nblock; i++) {

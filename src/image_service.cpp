@@ -459,10 +459,6 @@ int ImageService::init() {
             global_fs.srcfs = global_fs.underlay_registryfs;
         }
 
-        if (global_conf.enableThread() == true && cache_type == "file") {
-            LOG_ERROR_RETURN(0, -1, "multi-thread has not been valid for file cache");
-        }
-
         global_fs.io_alloc = new IOAlloc;
 
         if (cache_type == "file") {
