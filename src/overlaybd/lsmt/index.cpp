@@ -623,10 +623,6 @@ public:
     UNIMPLEMENTED(int commit_index0() override);
 };
 
-static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const Index **pindexes,
-                          std::size_t n, uint64_t begin, uint64_t end, bool change_tag = true,
-                          size_t max_level = 0);
-
 static bool merge_indexes_catch(uint8_t level, vector<SegmentMapping> &mapping,
                                 const Index **pindexes, std::size_t n, uint64_t begin,
                                 uint64_t end, bool change_tag = true, size_t max_level = 0);
