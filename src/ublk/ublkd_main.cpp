@@ -35,8 +35,10 @@
 #include <photon/net/socket.h>
 #include <photon/photon.h>
 
+#include <cerrno>
 #include <csignal>
 #include <climits>
+#include <cstring>
 #include <fcntl.h>
 #include <map>
 #include <memory>

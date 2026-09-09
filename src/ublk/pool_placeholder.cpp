@@ -24,6 +24,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <cerrno>
+#include <cstring>
 #include <fstream>
 
 // mirrors overlaybd-create's sparse path: open data/index, create a sparse RW
