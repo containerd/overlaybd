@@ -866,7 +866,7 @@ static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const 
     for (auto it = pi0->lower_bound(begin); it != pi0->end() && it->offset < end; ++it) {
         if (it->offset > begin) {
             if (change_tag)
-                merge_indexes(level + 1, mapping, pindexes + 1, n - 1, begin, it->offset);
+                merge_indexes(level + 1, mapping, pindexes + 1, n - 1, begin, it->offset, true, 0);
             else {
                 int k = (n <= 1 ? 0 : 1);
                 merge_indexes(level + 1, mapping, pindexes + k, 0, begin, it->offset, false,
@@ -889,7 +889,7 @@ static void merge_indexes(uint8_t level, vector<SegmentMapping> &mapping, const 
 
     if (begin < end) {
         if (change_tag)
-            merge_indexes(level + 1, mapping, pindexes + 1, n - 1, begin, end);
+            merge_indexes(level + 1, mapping, pindexes + 1, n - 1, begin, end, true, 0);
         else {
             int k = (n <= 1 ? 0 : 1);
             merge_indexes(level + 1, mapping, pindexes + k, 0, begin, end, false,
