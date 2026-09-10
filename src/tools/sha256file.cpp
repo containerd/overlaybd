@@ -1,5 +1,5 @@
 #include <fcntl.h>
-#include <openssl/sha.h>
+#include <photon/common/checksum/digest.h>
 #include "sha256file.h"
 #include <photon/common/alog.h>
 #include <string>
@@ -13,12 +13,11 @@ using namespace std;
 class SHA256CheckedFile: public SHA256File {
 public:
     IFile *m_file;
-    SHA256_CTX ctx = {0};
+    photon::sha256 m_sha256;
     size_t total_read = 0;
     bool m_ownership = false;
 
     SHA256CheckedFile(IFile *file, bool ownership): m_file(file), m_ownership(ownership) {
-        SHA256_Init(&ctx);
     }
     ~SHA256CheckedFile() {
         if (m_ownership) delete m_file;
@@ -28,10 +27,7 @@ public:
     }
     ssize_t read(void *buf, size_t count) override {
         auto rc = m_file->read(buf, count);
-        if (rc > 0 && SHA256_Update(&ctx, buf, rc) < 0) {
-            LOG_ERROR("sha256 calculate error");
-            return -1;
-        }
+        if (rc > 0) m_sha256.update(buf, rc);
         return rc;
     }
     off_t lseek(off_t offset, int whence) override {
@@ -45,15 +41,12 @@ public:
         // if (rc == 64*1024) {
         //     LOG_WARN("too much trailing data");
         // }
-            if (rc > 0 && SHA256_Update(&ctx, buf, rc) < 0) {
-                LOG_ERROR("sha256 calculate error");
-                return "";
-            }
+            m_sha256.update(buf, rc);
             rc = m_file->read(buf, 64*1024);
         }
         // calc sha256 result
         unsigned char sha[32];
-        SHA256_Final(sha, &ctx);
+        m_sha256.finalize(sha);
         char res[SHA256_DIGEST_LENGTH * 2];
         for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
             sprintf(res + (i * 2), "%02x", sha[i]);
@@ -86,8 +79,7 @@ string sha256sum(const char *fn) {
         LOG_ERROR("failed to stat `", fn);
         return "";
     }
-    SHA256_CTX ctx = {0};
-    SHA256_Init(&ctx);
+    photon::sha256 digest;
     __attribute__((aligned(ALIGNMENT_4K))) char buffer[65536];
     unsigned char sha[32];
     ssize_t recv = 0;
@@ -97,12 +89,9 @@ string sha256sum(const char *fn) {
             LOG_ERROR("io error: `", fn);
             return "";
         }
-        if (SHA256_Update(&ctx, buffer, recv) < 0) {
-            LOG_ERROR("sha256 calculate error: `", fn);
-            return "";
-        }
+        digest.update(buffer, recv);
     }
-    SHA256_Final(sha, &ctx);
+    digest.finalize(sha);
     char res[SHA256_DIGEST_LENGTH * 2 + 1];
     for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
         sprintf(res + (i * 2), "%02x", sha[i]);
