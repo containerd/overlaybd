@@ -44,7 +44,7 @@
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
-#include <openssl/sha.h>
+#include <photon/common/checksum/digest.h>
 #include <thread>
 #include <fcntl.h>
 
@@ -548,7 +548,7 @@ IFileSystem *new_registryfs_v2(PasswordCB callback, const char *caFile, uint64_t
 class RegistryUploader : public VirtualFile {
 public:
     photon::semaphore m_sem, m_init_sem;
-    SHA256_CTX m_sha256_ctx = {0};
+    photon::sha256 m_sha256;
     std::string m_sha256sum;
     std::thread m_upload_th;
     IFile *m_local_file;
@@ -570,7 +570,6 @@ public:
           m_timeout(timeout), m_tls_ctx(ctx) {
         if (upload_bs != -1)
             m_upload_chunk_size = upload_bs;
-        SHA256_Init(&m_sha256_ctx);
     }
 
     int init() {
@@ -594,7 +593,7 @@ public:
         }
         // calc sha256 result
         unsigned char sha[32];
-        SHA256_Final(sha, &m_sha256_ctx);
+        m_sha256.finalize(sha);
         char res[SHA256_DIGEST_LENGTH * 2];
         for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
             sprintf(res + (i * 2), "%02x", sha[i]);
@@ -634,9 +633,7 @@ public:
         if (rc < 0) {
             LOG_ERRNO_RETURN(0, -1, "failed to write local file", VALUE(rc));
         }
-        if (rc > 0 && SHA256_Update(&m_sha256_ctx, buf, rc) < 0) {
-            LOG_ERRNO_RETURN(0, -1, "sha256 calculate error");
-        }
+        if (rc > 0) m_sha256.update(buf, rc);
         m_write_pos += rc;
         m_sem.signal(1);
         return rc;
