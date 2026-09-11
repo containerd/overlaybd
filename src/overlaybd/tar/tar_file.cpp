@@ -191,8 +191,8 @@ private:
         auto record = format_pax_record("size", to_string(size));
         LOG_DEBUG(VALUE(record.c_str()), VALUE(record.size()));
         int_to_oct_nonull(record.size(), th_buf->size, 12);             // size
-        strncpy(th_buf->version, TVERSION, TVERSLEN);                   // version
-        strncpy(th_buf->magic, TMAGIC, TMAGLEN);                        // magic
+        memcpy(th_buf->version, TVERSION, TVERSLEN);                    // version
+        memcpy(th_buf->magic, TMAGIC, TMAGLEN);                         // magic
         int_to_oct(th_buf->crc_calc(), th_buf->chksum, 8);              // checksum
         memcpy(buf + T_BLOCKSIZE, record.c_str(), record.size());
         // tar header, 1 block
@@ -208,7 +208,7 @@ private:
         if (gr != NULL)
             strlcpy(th_buf->gname, gr->gr_name, sizeof(th_buf->gname)); // gname
         int_to_oct(0, th_buf->gid, 8);                                  // gid
-        int_to_oct(s.st_mode, th_buf->mode, 8);                         // mode
+        int_to_oct(s.st_mode&0777777, th_buf->mode, 8);                         // mode
 #ifndef NO_TIMESTAMP
         int_to_oct_nonull(s.st_mtime, th_buf->mtime, 12);               // mtime
 #else
@@ -216,8 +216,8 @@ private:
 #endif
         int_to_oct_nonull(0, th_buf->size, 12);                         // size
         snprintf(th_buf->name, 100, "%.100s", "overlaybd.commit");      // name
-        strncpy(th_buf->version, TVERSION, TVERSLEN);                   // version
-        strncpy(th_buf->magic, TMAGIC, TMAGLEN);                        // magic
+        memcpy(th_buf->version, TVERSION, TVERSLEN);                    // version
+        memcpy(th_buf->magic, TMAGIC, TMAGLEN);                         // magic
         int_to_oct(th_buf->crc_calc(), th_buf->chksum, 8);              // checksum
         // write header
         m_file->pwrite(buf, 3 * T_BLOCKSIZE, 0);
@@ -245,8 +245,8 @@ private:
         // tar header, 1 block
         th_buf = (TarHeader *)(buf + 2 * T_BLOCKSIZE);
         snprintf(th_buf->name, 100, "%.100s", "overlaybd.new"); // name
-        strncpy(th_buf->version, TVERSION_EMPTY, TVERSLEN);     // version
-        strncpy(th_buf->magic, TMAGIC_EMPTY, TMAGLEN);          // magic
+        memcpy(th_buf->version, TVERSION_EMPTY, TVERSLEN);      // version
+        memcpy(th_buf->magic, TMAGIC_EMPTY, TMAGLEN);           // magic
         int_to_oct_nonull(0, th_buf->size, 12);                 // size
         // write header
         return (m_file->pwrite(buf, 3 * T_BLOCKSIZE, 0) == 3 * T_BLOCKSIZE);

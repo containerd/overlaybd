@@ -15,8 +15,8 @@ endif()
 
 FetchContent_Declare(
   liburing
-  GIT_REPOSITORY https://github.com/axboe/liburing.git
-  GIT_TAG        liburing-2.8
+  GIT_REPOSITORY ${DEPENDENCY_LIBURING_REPOSITORY}
+  GIT_TAG        ${DEPENDENCY_LIBURING_TAG}
 )
 
 # download only, no add_subdirectory (liburing is a plain Makefile project)

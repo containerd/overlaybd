@@ -93,6 +93,10 @@ class ImageFileTarget;
 // lives in ublk_device.cpp, so hot-swap callers need this factory. Caller
 // owns the result and hands it to UblkDevice::swap_image().
 ImageFileTarget *ublk_make_image_target(ImageFile *file);
+// Releases a target, be it one ublk_make_image_target() returned or the one
+// swap_image() hands back. Needed because the type is only complete in
+// ublk_device.cpp, and deleting an incomplete type is undefined.
+void ublk_free_image_target(ImageFileTarget *target);
 struct ublksrv_ctrl_dev;
 struct ublksrv_dev;
 namespace photon {

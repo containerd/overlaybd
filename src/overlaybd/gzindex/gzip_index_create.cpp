@@ -41,7 +41,7 @@ public:
     explicit IndexFilterRecorder(IndexFileHeader* h, INDEX *index,
         photon::fs::IFile* index_file):h_(h),index_(index),index_file_(index_file) {
         buf_ = new unsigned char[DEFLATE_BLOCK_UNCOMPRESS_MAX_SIZE];
-        memset(&last_, 0, sizeof(last_));
+        last_ = {};
     }
     virtual ~IndexFilterRecorder(){
         delete []buf_;

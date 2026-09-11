@@ -52,10 +52,11 @@ static size_t oct_to_size(char *oct) {
     size_t i;
     return sscanf(oct, "%zo", &i) == 1 ? i : 0;
 }
-#define int_to_oct(num, oct, octlen)                                                               \
+
+#define int_to_oct(num, oct, octlen) \
     snprintf((oct), (octlen), "%*lo ", (octlen)-2, (unsigned long)(num))
 
-static void int_to_oct_nonull(int num, char *oct, size_t octlen) {
+static inline void int_to_oct_nonull(int num, char *oct, size_t octlen) {
     snprintf(oct, octlen, "%*lo", (int)(octlen - 1), (unsigned long)num);
     oct[octlen - 1] = ' ';
 }
@@ -82,8 +83,8 @@ public:
     char devminor[8];
     char prefix[155];
     char padding[12];
-    char *gnu_longname = nullptr;
-    char *gnu_longlink = nullptr;
+    char *gnu_longname;
+    char *gnu_longlink;
 
     mode_t get_mode();
     gid_t get_gid();
@@ -151,6 +152,7 @@ public:
     TarCore(photon::fs::IFile *file, int options, uint64_t fs_blocksize = FS_BLOCKSIZE)
         : file(file), options(options), fs_blocksize(fs_blocksize) {
         fs_blockmask = ~(fs_blocksize - 1);
+        memset(&header, 0, sizeof(header));
     }
     virtual ~TarCore() {
         if (th_pathname != nullptr)
