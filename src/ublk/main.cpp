@@ -16,6 +16,8 @@
 #include "cli.h"
 #include "ublk_device.h"
 
+#include <photon/common/alog.h>
+
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -28,6 +30,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+__attribute__((constructor(101))) static void set_early_log_level() {
+    set_log_output_level(ALOG_ERROR);
+}
 
 // A pidfile under the run dir may belong to a one-device CLI daemon or to
 // overlaybd-ublkd (libublksrv writes <dev_id>.pid with the serving process'
