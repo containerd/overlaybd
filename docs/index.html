@@ -64,6 +64,53 @@
     .sidebar-nav li.toc-folded > ul {
       display: none;
     }
+    html {
+      scroll-padding-top: calc(var(--navbar-height) + var(--margin-block));
+    }
+    .app-nav,
+    body:where(:has(.sidebar.show)) .app-nav {
+      position: fixed;
+      left: 0;
+      height: auto;
+      min-height: var(--navbar-height);
+      padding-block: 0.4em;
+      padding-inline: 1em;
+      background: color-mix(in srgb, var(--color-mono-1) 90%, transparent);
+      border-bottom: 1px solid var(--sidebar-border-color);
+      z-index: calc(var(--z-sidebar) + 1);
+    }
+    .app-nav > ul {
+      width: 100%;
+      justify-content: flex-start;
+      flex-wrap: nowrap;
+      gap: 0 1.6em;
+    }
+    .app-nav > ul > li:first-child {
+      margin-right: auto;
+    }
+    .app-nav > ul > li:first-child > a {
+      display: flex;
+      align-items: center;
+    }
+    .app-nav img {
+      display: block;
+      height: 1.7em;
+      width: auto;
+    }
+    .sidebar {
+      top: var(--navbar-height);
+    }
+    .content {
+      top: var(--navbar-height);
+    }
+    @media (max-width: 768px) {
+      .app-nav {
+        font-size: var(--font-size-s);
+      }
+      .app-nav > ul {
+        gap: 0 1em;
+      }
+    }
   </style>
 </head>
 <body>
@@ -71,6 +118,7 @@
   <script>
     window.$docsify = {
       auto2top: true,
+      loadNavbar: true,
       maxLevel: 3,
       name: '',
       repo: '',
