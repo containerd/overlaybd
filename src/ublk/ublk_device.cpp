@@ -35,6 +35,7 @@
 #include <cctype>
 #include <cerrno>
 #include <csignal>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -71,7 +72,8 @@ public:
         auto time_st = photon::now;
         uint64_t try_cnt = 0, sleep_period = 20UL * 1000;
     again:
-        if (photon::now - time_st > 7LL * 24 * 60 * 60 * 1000 * 1000 /*7days*/) {
+        int64_t elapsed = static_cast<int64_t>(photon::now - time_st);
+        if (elapsed > 7LL * 24 * 60 * 60 * 1000 * 1000 /*7days*/) {
             LOG_ERROR_RETURN(EIO, -1, "sure request timeout, offset: `", offset);
         }
         ssize_t ret = m_file->preadv(iov, iovcnt, offset);

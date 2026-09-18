@@ -19,6 +19,7 @@
 #include <vector>
 #include <set>
 #include <algorithm>
+#include <atomic>
 #include <memory>
 #include <stdexcept>
 #include <photon/common/alog.h>
@@ -464,16 +465,17 @@ public:
     typedef set<SegmentMapping>::iterator iterator;
 
     struct block_usage {
-        uint64_t m_alloc = 0;
+        // updated under the RW lock, read lock-free by block_count()
+        atomic<uint64_t> m_alloc{0};
         inline void operator-=(const SegmentMapping &m) {
             if (m.zeroed)
                 return;
-            m_alloc = m_alloc - m.length;
+            m_alloc.fetch_sub(m.length, memory_order_relaxed);
         }
         inline void operator+=(const SegmentMapping &m) {
             if (m.zeroed)
                 return;
-            m_alloc = m_alloc + m.length;
+            m_alloc.fetch_add(m.length, memory_order_relaxed);
         }
     } alloc_blk;
 
@@ -595,7 +597,7 @@ public:
     }
 
     virtual uint64_t block_count() const override {
-        return alloc_blk.m_alloc;
+        return alloc_blk.m_alloc.load(memory_order_relaxed);
     }
 
     // returns the first and last mapping in the index

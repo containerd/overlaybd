@@ -503,14 +503,21 @@ public:
     vector<IFile *> m_files;
     vector<UUID> m_uuid;
     IMemoryIndex *m_index = nullptr;
+    // guards the writable index, which is mutated in place while other vCPUs
+    // read it; mutable because commit() is const
+    mutable photon::rwlock m_index_rwlock;
+    // false for a read-only file, whose immutable index needs no lock
+    bool m_index_mutable = false;
     bool m_file_ownership = false;
     uint64_t m_data_offset = HeaderTrailer::SPACE / ALIGNMENT;
-    uint32_t lsmt_io_cnt = 0;
-    uint64_t lsmt_io_size = 0;
+    // read-path statistics, updated by every vCPU serving this file
+    atomic<uint32_t> lsmt_io_cnt{0};
+    atomic<uint64_t> lsmt_io_size{0};
     LSMTFileType m_filetype = LSMTFileType::RO;
 
     virtual ~LSMTReadOnlyFile() {
-        LOG_INFO("pread times: `, size: `M", lsmt_io_cnt, lsmt_io_size >> 20);
+        LOG_INFO("pread times: `, size: `M", lsmt_io_cnt.load(memory_order_relaxed),
+                 lsmt_io_size.load(memory_order_relaxed) >> 20);
         close();
         if (m_file_ownership) {
             LOG_DEBUG("m_file_ownership:`, m_files.size:`", m_file_ownership, m_files.size());
@@ -612,10 +619,19 @@ public:
         LOG_ERROR_RETURN(EFAULT, -1, "arguments must be aligned!");
 
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
+        if (!m_index_mutable)
+            return do_pread(buf, count, offset);
+        photon::scoped_rwlock ilock(m_index_rwlock, photon::RLOCK);
+        return do_pread(buf, count, offset);
+    }
+
+    // the caller holds m_index_rwlock for reading; the rwlock is not reentrant,
+    // so the MAX_IO_SIZE splitting recurses here rather than into pread()
+    ssize_t do_pread(void *buf, size_t count, off_t offset) {
         CHECK_ALIGNMENT(count, offset);
         auto nbytes = count;
         while (count > MAX_IO_SIZE) {
-            auto ret = pread(buf, MAX_IO_SIZE, offset);
+            auto ret = do_pread(buf, MAX_IO_SIZE, offset);
             if (ret < (ssize_t)MAX_IO_SIZE)
                 return -1;
             if (buf != nullptr) {
@@ -660,8 +676,8 @@ public:
                         memset((char *)buf + ret, 0, size - ret);
                     }
                 }
-                lsmt_io_size += ret;
-                lsmt_io_cnt++;
+                lsmt_io_size.fetch_add((uint64_t)ret, memory_order_relaxed);
+                lsmt_io_cnt.fetch_add(1, memory_order_relaxed);
                 (char *&)buf += size;
                 return 0;
             });
@@ -731,6 +747,7 @@ public:
 
         begin /= ALIGNMENT;
         end /= ALIGNMENT;
+        photon::scoped_rwlock ilock(m_index_rwlock, photon::RLOCK);
         while (begin < end) {
             SegmentMapping mappings[128];
             auto length = (end - begin < Segment::MAX_LENGTH ? end - begin : Segment::MAX_LENGTH);
@@ -771,6 +788,7 @@ public:
     RWType m_rw_type = RWType::Append;
 
     Mutex m_rw_mtx;
+    // lock order: m_rw_mtx, then m_index_rwlock; readers take only the latter
     IFile *m_findex = nullptr;
 
     vector<SegmentMapping> m_stacked_mappings;
@@ -781,6 +799,7 @@ public:
     LSMTFile() {
         m_compacted_idx_size.store(0);
         m_filetype = LSMTFileType::RW;
+        m_index_mutable = true;
     }
 
     ~LSMTFile() {
@@ -798,6 +817,17 @@ public:
     IComboIndex *rw_index() const {
         assert(m_index != nullptr);
         return static_cast<IComboIndex *>(m_index);
+    }
+
+    // every access to the writable index goes through these two, or takes
+    // m_index_rwlock explicitly
+    void index_insert(const SegmentMapping &m) {
+        photon::scoped_rwlock ilock(m_index_rwlock, photon::WLOCK);
+        rw_index()->insert(m);
+    }
+    size_t index_lookup_writable(Segment s, SegmentMapping *pm, size_t n) {
+        photon::scoped_rwlock ilock(m_index_rwlock, photon::RLOCK);
+        return rw_index()->lookup_writable_layer(s, pm, n);
     }
 
     virtual int vioctl(int request, va_list args) override {
@@ -924,7 +954,7 @@ public:
                 m.moffset = (uint64_t)moffset / ALIGNMENT;
                 m_data_offset = max(m_data_offset, m.mend());
                 m.tag = m_rw_tag;
-                rw_index()->insert(m);
+                index_insert(m);
                 append_index(m);
                 return 0;
             };
@@ -936,8 +966,7 @@ public:
             while (m_rw_type == RWType::Hybrid && cursor < end_in_blocks) {
                 SegmentMapping upper[128];
                 auto length = min(end_in_blocks - cursor, (uint64_t)Segment::MAX_LENGTH);
-                auto n = rw_index()->lookup_writable_layer({cursor, (uint32_t)length}, upper,
-                                                           LEN(upper));
+                auto n = index_lookup_writable({cursor, (uint32_t)length}, upper, LEN(upper));
                 if (n == 0)
                     break;
                 for (size_t i = 0; i < n; i++) {
@@ -1003,8 +1032,9 @@ public:
         m.moffset = (uint64_t)(pos / ALIGNMENT);
         m.tag = m_rw_tag;
         LOG_DEBUG(m);
-        static_cast<IMemoryIndex0 *>(m_index)->insert(m);
+        // the insert and its index log record are one critical section
         Lock lock(m_rw_mtx);
+        index_insert(m);
         append_index(m);
         return 0;
     }
@@ -1040,8 +1070,14 @@ public:
         }
 
         auto m_index0 = (IMemoryIndex0 *)m_index;
-        unique_ptr<SegmentMapping[]> mapping(m_index0->dump());
-        CompactOptions opts(&m_files, mapping.get(), m_index->size(), m_vsize, &args);
+        unique_ptr<SegmentMapping[]> mapping;
+        size_t index_size;
+        {
+            photon::scoped_rwlock ilock(m_index_rwlock, photon::RLOCK);
+            mapping.reset(m_index0->dump());
+            index_size = m_index->size();
+        }
+        CompactOptions opts(&m_files, mapping.get(), index_size, m_vsize, &args);
 
         atomic_uint64_t _no_use_var(0);
         return compact(opts, _no_use_var);
@@ -1049,9 +1085,15 @@ public:
 
     virtual int close_seal(IFileRO **reopen_as = nullptr) override {
         auto m_index0 = (IMemoryIndex0 *)m_index;
-        unique_ptr<SegmentMapping[]> mapping(m_index0->dump(ALIGNMENT));
+        unique_ptr<SegmentMapping[]> mapping;
+        size_t index_size;
+        {
+            photon::scoped_rwlock ilock(m_index_rwlock, photon::RLOCK);
+            mapping.reset(m_index0->dump(ALIGNMENT));
+            index_size = m_index0->size();
+        }
         uint64_t index_offset = m_files[m_rw_tag]->lseek(0, SEEK_END);
-        ssize_t index_bytes = m_index0->size() * sizeof(SegmentMapping);
+        ssize_t index_bytes = index_size * sizeof(SegmentMapping);
         index_bytes = (index_bytes + ALIGNMENT - 1) / ALIGNMENT * ALIGNMENT;
         auto ret = m_files[m_rw_tag]->write(mapping.get(), index_bytes);
         if (ret < index_bytes)
@@ -1060,13 +1102,13 @@ public:
         LayerInfo layer;
         if (load_layer_info(&m_files[m_rw_tag], 1, layer, true) != 0)
             return -1;
-        ret = write_header_trailer(m_files[m_rw_tag], false, true, true, index_offset,
-                                   m_index0->size(), layer);
+        ret = write_header_trailer(m_files[m_rw_tag], false, true, true, index_offset, index_size,
+                                   layer);
         if (ret < 0)
             LOG_ERRNO_RETURN(0, -1, "failed to write trailer.");
         if (reopen_as) {
             auto new_index =
-                create_memory_index(mapping.release(), m_index0->size(),
+                create_memory_index(mapping.release(), index_size,
                                     HeaderTrailer::SPACE / ALIGNMENT, index_offset / ALIGNMENT);
             if (new_index == nullptr) {
                 LOG_ERROR("create memory index of reopen file failed.");
@@ -1125,7 +1167,11 @@ public:
 
     virtual int flatten(IFile *as) override {
 
-        unique_ptr<IComboIndex> pmi((IComboIndex*)(m_index->make_read_only_index()));
+        unique_ptr<IComboIndex> pmi;
+        {
+            photon::scoped_rwlock ilock(m_index_rwlock, photon::RLOCK);
+            pmi.reset((IComboIndex *)(m_index->make_read_only_index()));
+        }
         if (!pmi)
             LOG_ERROR_RETURN(0, -1, "failed to make read only index.");
 
@@ -1137,6 +1183,8 @@ public:
 
     int reserve_top_layer(LSMTFile *top_layer)
     {
+        // restack also reshuffles m_files, so no reader may be in flight
+        photon::scoped_rwlock ilock(m_index_rwlock, photon::WLOCK);
         std::vector<SegmentMapping> pmappings; // temp index for reserved layer
         /* ==== close_seal the top RW layer and reopen it. ==== */
         IFileRO* gc_layer = nullptr;
@@ -1226,7 +1274,7 @@ public:
                                  m_files[m_rw_tag], ret, moffset, count);
             }
             LOG_DEBUG("insert segment: `", m);
-            static_cast<IMemoryIndex0 *>(m_index)->insert(m);
+            index_insert(m);
         }
         return ret;
     }
@@ -1235,7 +1283,7 @@ public:
     virtual int discard(SegmentMapping &m) override {
         m.moffset = (uint64_t)(m.offset + (HeaderTrailer::SPACE / ALIGNMENT));
         LOG_DEBUG(m);
-        static_cast<IMemoryIndex0 *>(m_index)->insert(m);
+        index_insert(m);
         return m_files[m_rw_tag]->trim(m.offset * ALIGNMENT + HeaderTrailer::SPACE,
                                        m.length * ALIGNMENT);
     }
@@ -1318,7 +1366,8 @@ public:
             LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`", file, ret,
                              offset, count);
         }
-        static_cast<IMemoryIndex0 *>(m_index)->insert(m);
+        Lock lock(m_rw_mtx);
+        index_insert(m);
         append_index(m);
         return count;
     }
@@ -1337,6 +1386,7 @@ public:
         LOG_DEBUG("RemoteMapping: {offset: `, count: `, roffset: `}", lba.offset, lba.count,
                   lba.roffset);
         size_t nwrite = 0;
+        Lock lock(m_rw_mtx);
         while (lba.count > 0) {
             SegmentMapping m;
             m.offset = lba.offset / ALIGNMENT;
@@ -1345,7 +1395,7 @@ public:
             m.moffset = lba.roffset / ALIGNMENT;
             m.tag = m_rw_tag + (uint8_t)SegmentType::remoteData;
             LOG_DEBUG("insert segment: ` into findex: `", m, m_findex);
-            static_cast<IMemoryIndex0 *>(m_index)->insert(m);
+            index_insert(m);
             append_index(m);
             nwrite += m.length * ALIGNMENT;
             lba.offset += m.length * ALIGNMENT;
@@ -1398,8 +1448,14 @@ public:
     int commit(const CommitArgs &args) const override {
 
         auto m_index0 = (IMemoryIndex0 *)m_index;
-        unique_ptr<SegmentMapping[]> mapping(m_index0->dump());
-        CompactOptions opts(&m_files, mapping.get(), m_index->size(), m_vsize, &args);
+        unique_ptr<SegmentMapping[]> mapping;
+        size_t raw_index_size;
+        {
+            photon::scoped_rwlock ilock(m_index_rwlock, photon::RLOCK);
+            mapping.reset(m_index0->dump());
+            raw_index_size = m_index->size();
+        }
+        CompactOptions opts(&m_files, mapping.get(), raw_index_size, m_vsize, &args);
         LayerInfo info;
         info.virtual_size = m_vsize;
         info.uuid.clear();

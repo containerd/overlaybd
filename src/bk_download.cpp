@@ -54,6 +54,7 @@ bool check_downloaded(const std::string &dir) {
 }
 
 static std::set<std::string> lock_files;
+static photon::mutex lock_files_mutex;
 
 void BkDownload::switch_to_local_file() {
     std::string path = dir + "/" + COMMIT_FILE_NAME;
@@ -114,6 +115,7 @@ bool BkDownload::download() {
 }
 
 bool BkDownload::lock_file() {
+    photon::scoped_lock lock(lock_files_mutex);
     if (lock_files.find(dir) != lock_files.end()) {
         LOG_WARN("failed to lock download path:`", dir);
         return false;
@@ -123,6 +125,7 @@ bool BkDownload::lock_file() {
 }
 
 void BkDownload::unlock_file() {
+    photon::scoped_lock lock(lock_files_mutex);
     lock_files.erase(dir);
 }
 
@@ -227,13 +230,15 @@ void bk_download_proc(std::list<BKDL::BkDownload *> &dl_list, uint64_t delay_sec
 
         LOG_INFO("start downloading for dir `", dl_item->dir);
 
-        if (!dl_item->lock_file()) {
-            dl_list.push_back(dl_item);
-            continue;
+        bool succ;
+        {
+            if (!dl_item->lock_file()) {
+                dl_list.push_back(dl_item);
+                continue;
+            }
+            DEFER(dl_item->unlock_file());
+            succ = dl_item->download();
         }
-
-        bool succ = dl_item->download();
-        dl_item->unlock_file();
 
         if (running != 1) {
             LOG_WARN("image exited, background download exit...");

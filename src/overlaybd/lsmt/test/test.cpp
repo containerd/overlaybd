@@ -25,6 +25,7 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 #include "lsmt-filetest.h"
 #include "photon/fs/localfs.h"
 #include <fcntl.h>
+#include <thread>
 #include <sys/time.h>
 #include <photon/photon.h>
 #include <sys/stat.h>
@@ -1105,6 +1106,147 @@ TEST_F(FileTest3, photon_verify) {
     }
     for (auto thd : threads)
         thread_join((photon::join_handle *)thd);
+}
+
+// The read-path counters belong to the file, not to the vCPU that reads it, so
+// all the vCPUs serving the same image update them concurrently.
+TEST_F(FileTest, multi_vcpu_io_counters) {
+    const uint64_t VSIZE = 8 << 20;
+    const size_t WLEN = 1 << 20; // length of each write, hence of each mapping
+    const size_t BLOCK = 4096;   // length of each read
+    const int NVCPU = 4;         // one OS thread (vCPU) each
+    const int NREADS = 8192;     // reads per vCPU
+
+    name_next_layer();
+    auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    ASSERT_NE(nullptr, fdata);
+    ASSERT_NE(nullptr, findex);
+    LayerInfo args(fdata, findex);
+    args.virtual_size = VSIZE;
+    auto rw = LSMT::create_file_rw(args, true);
+    ASSERT_NE(nullptr, rw);
+
+    // fill the image, so that every read below hits exactly one mapping
+    ALIGNED_MEM4K(wbuf, WLEN);
+    memset(wbuf, 0xab, WLEN);
+    for (uint64_t off = 0; off < VSIZE; off += WLEN) {
+        ASSERT_EQ((ssize_t)WLEN, rw->pwrite(wbuf, WLEN, off));
+    }
+    ASSERT_EQ(0, rw->close_seal());
+    delete rw;
+
+    auto fro = lfs->open(data_name.back().c_str(), O_RDONLY);
+    ASSERT_NE(nullptr, fro);
+    auto file = dynamic_cast<LSMTReadOnlyFile *>(LSMT::open_file_ro(fro, true));
+    ASSERT_NE(nullptr, file);
+    DEFER(delete file);
+    ASSERT_EQ(0u, file->lsmt_io_cnt.load());
+    ASSERT_EQ(0u, file->lsmt_io_size.load());
+
+    atomic<int> failed{0};
+    vector<std::thread> vcpus;
+    for (int i = 0; i < NVCPU; i++) {
+        vcpus.emplace_back([&] {
+            photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+            DEFER(photon::fini());
+            ALIGNED_MEM4K(rbuf, BLOCK);
+            for (int j = 0; j < NREADS; j++) {
+                // keep every read within the first mapping: [0, WLEN)
+                auto off = (off_t)((j % (WLEN / BLOCK)) * BLOCK);
+                if (file->pread(rbuf, BLOCK, off) != (ssize_t)BLOCK)
+                    failed.fetch_add(1);
+            }
+        });
+    }
+    for (auto &t : vcpus)
+        t.join();
+
+    EXPECT_EQ(0, failed.load());
+    EXPECT_EQ((uint64_t)NVCPU * NREADS, (uint64_t)file->lsmt_io_cnt.load());
+    EXPECT_EQ((uint64_t)NVCPU * NREADS * BLOCK, file->lsmt_io_size.load());
+}
+
+// A writable layer mutates its index in place, so without the index lock the
+// readers of the other vCPUs walk a tree that is being rebalanced.
+TEST_F(FileTest, multi_vcpu_concurrent_rw) {
+    const uint64_t VSIZE = 1 << 20;
+    const size_t BLOCK = 4096;
+    const size_t NBLOCK = VSIZE / BLOCK;
+    const int NWRITER = 2, NREADER = 2;
+    const int NWRITES = 4000;  // per writer
+    const int NREADS = 20000;  // per reader
+
+    // every block mixes its own number into its bytes, so neither a hole nor
+    // another block passes for it, and a block must agree on one version
+    auto byte_at = [](size_t b, size_t i, uint8_t v) {
+        return (uint8_t)(b * 31 + ((i ^ (b * 13)) * 7) + v + 1);
+    };
+
+    name_next_layer();
+    auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    ASSERT_NE(nullptr, fdata);
+    ASSERT_NE(nullptr, findex);
+    LayerInfo args(fdata, findex);
+    args.virtual_size = VSIZE;
+    auto file = LSMT::create_file_rw(args, true);
+    ASSERT_NE(nullptr, file);
+    DEFER(delete file);
+
+    // map every block first, so that no read below may legitimately hit a hole
+    ALIGNED_MEM4K(wbuf, BLOCK);
+    for (size_t b = 0; b < NBLOCK; b++) {
+        for (size_t i = 0; i < BLOCK; i++)
+            wbuf[i] = byte_at(b, i, 0);
+        ASSERT_EQ((ssize_t)BLOCK, file->pwrite(wbuf, BLOCK, (off_t)(b * BLOCK)));
+    }
+
+    atomic<int> bad{0};
+    vector<std::thread> vcpus;
+    for (int w = 0; w < NWRITER; w++) {
+        vcpus.emplace_back([&, w] {
+            photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+            DEFER(photon::fini());
+            ALIGNED_MEM4K(buf, BLOCK);
+            uint32_t seed = 0x9e3779b9u * (w + 1);
+            for (int j = 0; j < NWRITES; j++) {
+                seed = seed * 1103515245 + 12345;
+                auto b = (size_t)((seed >> 16) % NBLOCK);
+                for (size_t i = 0; i < BLOCK; i++)
+                    buf[i] = byte_at(b, i, (uint8_t)(j + 1));
+                if (file->pwrite(buf, BLOCK, (off_t)(b * BLOCK)) != (ssize_t)BLOCK)
+                    bad.fetch_add(1);
+            }
+        });
+    }
+    for (int r = 0; r < NREADER; r++) {
+        vcpus.emplace_back([&, r] {
+            photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+            DEFER(photon::fini());
+            ALIGNED_MEM4K(buf, BLOCK);
+            uint32_t seed = 0x85ebca6bu * (r + 1);
+            for (int j = 0; j < NREADS; j++) {
+                seed = seed * 1103515245 + 12345;
+                auto b = (size_t)((seed >> 16) % NBLOCK);
+                if (file->pread(buf, BLOCK, (off_t)(b * BLOCK)) != (ssize_t)BLOCK) {
+                    bad.fetch_add(1);
+                    continue;
+                }
+                auto v = (uint8_t)(((uint8_t *)buf)[0] - byte_at(b, 0, 0));
+                for (size_t i = 0; i < BLOCK; i++) {
+                    if (((uint8_t *)buf)[i] != byte_at(b, i, v)) {
+                        bad.fetch_add(1);
+                        break;
+                    }
+                }
+            }
+        });
+    }
+    for (auto &t : vcpus)
+        t.join();
+
+    EXPECT_EQ(0, bad.load());
 }
 
 void WarpFileTest::randwrite_warpfile(IFile *file, size_t nwrites) {

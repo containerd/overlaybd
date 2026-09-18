@@ -39,7 +39,6 @@ public:
 
     BkDownload() = delete;
     ~BkDownload() {
-        unlock_file();
         delete src_file;
     }
     BkDownload(ISwitchFile *sw_file, photon::fs::IFile *src_file, size_t file_size,
