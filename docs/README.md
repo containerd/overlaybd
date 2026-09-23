@@ -21,7 +21,7 @@ The project has been integrated by many organizations world-wide, most notably
 [Colab (from Google)](https://medium.com/@gogasca_/using-overlaybd-to-improve-startup-time-6c5f90f23345),
 [Databricks](https://www.databricks.com/blog/booting-databricks-vms-7x-faster-serverless-compute) +
 [Superhuman](https://www.databricks.com/blog/how-superhuman-and-databricks-built-200k-qps-inference-platform-together),
-[DeepSeek Elastic Compute (DSes)](https://arxiv.org/html/2606.19348v1),
+[DeepSeek Elastic Compute (DSec)](https://arxiv.org/html/2609.22978v1),
 [Flatcar Container Linux](https://www.flatcar.org/docs/latest/os-config/network/overlaybd-artifact-streaming/),
 [fly.io](https://community.fly.io/t/experimental-speedy-machine-creation-with-overlaybd/18958),
 [hocus.dev](https://hocus.dev/blog/virtualizing-development-environments),
@@ -187,7 +187,7 @@ the world:
 - **Adopted across the industry**: Integrated by organizations including (but not limited to)
   [Azure Kubernetes Service (Artifact Streaming)](https://learn.microsoft.com/en-us/azure/aks/artifact-streaming-overview),
   [Databricks](https://www.databricks.com/blog/booting-databricks-vms-7x-faster-serverless-compute),
-  [DeepSeek Elastic Compute](https://arxiv.org/html/2606.19348v1),
+  [DeepSeek Elastic Compute (DSec)](https://arxiv.org/html/2609.22978v1),
   [Flatcar Container Linux](https://www.flatcar.org/docs/latest/os-config/network/overlaybd-artifact-streaming/),
   [fly.io](https://community.fly.io/t/experimental-speedy-machine-creation-with-overlaybd/18958),
   [hocus.dev](https://hocus.dev/blog/virtualizing-development-environments),

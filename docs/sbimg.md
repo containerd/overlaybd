@@ -240,7 +240,7 @@ This is not a theoretical argument. Overlaybd is deployed at scale today.
 
 ### In agent sandboxes specifically
 
-- **[DeepSeek Elastic Compute](https://arxiv.org/html/2606.19348v1).**
+- **[DeepSeek Elastic Compute (DSec)](https://arxiv.org/html/2609.22978v1).**
   DeepSeek's agent sandbox uses overlaybd-format images for its
   execution environment.
 

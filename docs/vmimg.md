@@ -253,7 +253,7 @@ today, across VMs, microVMs, and containers alike.
   [Superhuman](https://www.databricks.com/blog/how-superhuman-and-databricks-built-200k-qps-inference-platform-together)
   built a 200K-QPS inference platform on the same infrastructure.
 
-- **[DeepSeek Elastic Compute](https://arxiv.org/html/2606.19348v1)**
+- **[DeepSeek Elastic Compute (DSec)](https://arxiv.org/html/2609.22978v1)**
   runs its execution environment on overlaybd-format images.
 
 - **[fly.io](https://community.fly.io/t/experimental-speedy-machine-creation-with-overlaybd/18958)**
