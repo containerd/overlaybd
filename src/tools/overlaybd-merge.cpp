@@ -16,7 +16,6 @@
 
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
-#include <photon/fs/subfs.h>
 #include <photon/fs/virtual-file.h>
 #include <photon/fs/extfs/extfs.h>
 #include <photon/photon.h>

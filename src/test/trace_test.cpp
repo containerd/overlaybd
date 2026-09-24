@@ -103,7 +103,7 @@ TEST(trace, case0) {
     ASSERT_NE(src, nullptr);
     // src = open_gzfile_adaptor(src);
     DEFER(delete src);
-    auto fs = create_ext4fs(dst, true, false, "/");
+    auto fs = create_ext4fs(dst, true, false);
     ASSERT_NE(fs, nullptr);
     DEFER(delete fs);
     auto tar = new UnTar(src, fs, 0, 4096, nullptr, false);

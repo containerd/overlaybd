@@ -16,7 +16,6 @@
 
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
-#include <photon/fs/subfs.h>
 #include <photon/fs/virtual-file.h>
 #include <photon/fs/extfs/extfs.h>
 #include <photon/photon.h>
@@ -135,7 +134,7 @@ int main(int argc, char **argv) {
 
     bool gen_turboOCI = (gz_index_path != "" );
 
-    auto target = create_ext4fs(imgfile, mkfs, !gen_turboOCI, "/");
+    auto target = create_ext4fs(imgfile, mkfs, !gen_turboOCI);
     DEFER({ delete target; });
 
     photon::fs::IFile* src_file = nullptr;
