@@ -16,7 +16,6 @@
 
 #include "comm_func.h"
 #include "../overlaybd/tar/tar_file.h"
-#include <openssl/sha.h>
 #include <photon/fs/subfs.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/extfs/extfs.h>

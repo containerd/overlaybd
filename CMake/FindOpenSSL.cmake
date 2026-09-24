@@ -5,10 +5,9 @@ if(${BUILD_CURL_FROM_SOURCE})
     include(FetchContent)
 
     # make openssl into bundle
-    FetchContent_Declare(
-        openssl102
-        GIT_REPOSITORY https://github.com/openssl/openssl.git
-        GIT_TAG OpenSSL_1_0_2-stable
+    FetchContent_Declare(openssl102
+        GIT_REPOSITORY ${DEPENDENCY_OPENSSL_REPOSITORY}
+        GIT_TAG ${DEPENDENCY_OPENSSL_TAG}
         GIT_PROGRESS 1)
 
     FetchContent_GetProperties(openssl102)

@@ -24,8 +24,8 @@ endif()
 
 FetchContent_Declare(
   ublksrv
-  GIT_REPOSITORY https://github.com/ublk-org/ublksrv.git
-  GIT_TAG        f6c643952d1cdc7f6460630638fe6b5454ca1c4d   # v1.7
+  GIT_REPOSITORY ${DEPENDENCY_UBLKSRV_REPOSITORY}
+  GIT_TAG        ${DEPENDENCY_UBLKSRV_TAG}
 )
 
 FetchContent_GetProperties(ublksrv)

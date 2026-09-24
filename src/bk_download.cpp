@@ -26,7 +26,6 @@
 #include <photon/fs/localfs.h>
 #include <photon/fs/throttled-file.h>
 #include <photon/thread/thread.h>
-#include <openssl/sha.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include "switch_file.h"

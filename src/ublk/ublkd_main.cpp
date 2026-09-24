@@ -186,7 +186,7 @@ private:
         if (realpath(areq.config.c_str(), resolved) == nullptr) {
             code = 400;
             msg = ublkd_msg_error("image config " + areq.config + ": " +
-                                  strerror(errno));
+                                  std::string(strerror(errno)));
             return;
         }
         if (!adds_in_flight_.insert(resolved).second) {
@@ -325,7 +325,7 @@ private:
         if (realpath(areq.config.c_str(), resolved) == nullptr) {
             code = 400;
             msg = ublkd_msg_error("image config " + areq.config + ": " +
-                                  strerror(errno));
+                                  std::string(strerror(errno)));
             return;
         }
         // shared leases only when the feature is enabled; otherwise the
@@ -513,7 +513,7 @@ private:
             ImageFileTarget *old_target = nullptr;
             auto *new_target = ublk_make_image_target(real);
             if (cand->swap_image(real, new_target, &old_file, &old_target) != 0) {
-                delete new_target;
+                ublk_free_image_target(new_target);
                 // a device we cannot swap is not trustworthy: drop it
                 int slot = it->slot;
                 pool_idle_.erase(it);
@@ -526,7 +526,7 @@ private:
             }
             *slot_out = it->slot;
             pool_idle_.erase(it);
-            delete old_target;
+            ublk_free_image_target(old_target);
             delete old_file; // placeholder image released
             return cand;
         }
@@ -557,12 +557,12 @@ private:
         auto *ph_target = ublk_make_image_target(ph);
         UblkDevice *dev = entry.dev.release();
         if (dev->swap_image(ph, ph_target, &old_file, &old_target) != 0) {
-            delete ph_target;
+            ublk_free_image_target(ph_target);
             delete ph;
             entry.dev.reset(dev); // give it back so the caller tears it down
             return false;
         }
-        delete old_target;
+        ublk_free_image_target(old_target);
         delete old_file; // the tenant's image
         pool_idle_.push_back({dev, entry.pool_slot});
         return true;
