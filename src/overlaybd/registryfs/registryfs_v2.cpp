@@ -149,6 +149,19 @@ public:
 
     long get_data(const estring &url, off_t offset, size_t count, uint64_t timeout, HTTP_OP &op) {
         Timeout tmo(timeout);
+
+        if (m_accelerate.size() > 0) {
+            estring canonical_url = estring().appends(m_accelerate, "/", url);
+            op.req.reset(Verb::GET, canonical_url);
+            op.req.headers.range(offset, offset + count - 1);
+            op.set_enable_proxy(m_client->has_proxy());
+            op.retry = 0;
+            op.timeout = tmo.timeout();
+            m_client->call(&op);
+            if (op.status_code == 200 || op.status_code == 206)
+                return op.status_code;
+        }
+
         long ret = 0;
         UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
             return get_actual_url(url, tmo.timeout(), ret);
