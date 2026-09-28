@@ -119,7 +119,9 @@ Overlaybd 提供了一种日志结构（log-structured）可写层和一种稀�
     "resultFile": "/home/overlaybd/1/result"
 }
 ```
-如果设置了 upper，overlaybd 设备将作为可写设备启动。数据写入产生的差异会存储在 upper 的 index 和 data 文件中。
+如果配置了 `upper.index` 和 `upper.data`，overlaybd 设备将作为可写设备启动。数据写入产生的差异会存储在这两个文件中。
+
+配置可写 `upper` 时，必须同时提供 `index` 和 `data` 路径。默认 `create: false`，两个文件都必须已存在。设置 `"create": true` 后，两个文件都不存在时创建（父目录必须已存在），两个文件都存在时直接复用；只存在一个时会报错，不修改已有文件。`vsize` 以 GiB 为单位，0 表示继承下层大小；`rwType` 可选 `append`（默认）、`hybrid` 或 `sparse`。至少有一个 lower 层时，省略 `upper`、设置为 `{}`，或两个路径均为空且 `create: false` 的镜像保持只读。没有任何层的镜像会打开失败。
 
 在写入数据并销毁设备之后，需要执行 `overlaybd-commit` 命令，将该层提交（commit）为一个只读层，之后便可作为下层（lower layer）使用。
 ```bash
