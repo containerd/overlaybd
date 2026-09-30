@@ -24,9 +24,10 @@
 #if defined(__aarch64__)
 #include <sys/auxv.h>
 
-// NEON is architecturally mandatory on aarch64. The SVE kernels live in
-// the separately-compiled SVE TU and are callable only when that TU was
-// built (see lsmt/CMakeLists.txt for the toolchain probe).
+// NEON is architecturally mandatory on aarch64. The SVE kernels are
+// compiled inside index.cpp under OVERLAYBD_ENABLE_SVE (defined by the
+// toolchain probe in lsmt/CMakeLists.txt) and are callable only when that
+// macro is defined.
 extern "C" uint32_t lsmt_neon_inner_search_u32(const uint32_t *base, uint32_t x);
 extern "C" uint32_t lsmt_neon_inner_search_u64(const uint64_t *base, uint64_t x);
 #if defined(OVERLAYBD_ENABLE_SVE)

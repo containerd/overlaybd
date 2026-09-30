@@ -1,12 +1,5 @@
 file(GLOB SOURCE_LSMT "*.cpp")
 
-# index_sve.cpp must not be compiled unconditionally: it requires a
-# toolchain that supports SVE code generation (gcc >= 10, via ACLE
-# <arm_sve.h>). Exclude it from the glob and re-add only when the
-# toolchain probe passes, so older toolchains (e.g. devtoolset-7)
-# keep building without it.
-list(REMOVE_ITEM SOURCE_LSMT "${CMAKE_CURRENT_SOURCE_DIR}/index_sve.cpp")
-
 add_library(lsmt_lib STATIC ${SOURCE_LSMT})
 target_include_directories(lsmt_lib PUBLIC
     ${PHOTON_INCLUDE_DIR}
@@ -14,30 +7,27 @@ target_include_directories(lsmt_lib PUBLIC
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
   option(OVERLAYBD_DISABLE_SVE "Force-disable LSMT SVE acceleration" OFF)
-  include(CheckCXXCompilerFlag)
   include(CheckCXXSourceCompiles)
   if(NOT OVERLAYBD_DISABLE_SVE)
-  check_cxx_compiler_flag("-march=armv8.2-a+sve" COMPILER_HAS_SVE_FLAG)
+  # The SVE kernels live in index.cpp under OVERLAYBD_ENABLE_SVE,
+  # scoped by a #pragma GCC target region. Probe the same
+  # pragma+intrinsics shape with the build's own compiler, without
+  # overriding -march, to ensure SVE is supported at code-block scope.
   set(SVE_PROBE_SOURCE "#include <arm_sve.h>
 #include <cstdint>
+#pragma GCC push_options
+#pragma GCC target(\"arch=armv8.2-a+sve\")
 extern \"C\" uint32_t probe(const uint32_t *p, uint32_t x) {
   svbool_t pg = svwhilelt_b32(0UL, 4UL);
   svuint32_t d = svld1_u32(pg, p);
   svbool_t c = svcmple_u32(pg, d, svdup_u32(x));
   return (uint32_t)svaddv_u32(c, svdup_u32(1));
 }
+#pragma GCC pop_options
 int main() { return 0; }
 ")
-  set(CMAKE_REQUIRED_FLAGS "-march=armv8.2-a+sve")
-  check_cxx_source_compiles("${SVE_PROBE_SOURCE}" SVE_HEADER_USABLE)
-  unset(CMAKE_REQUIRED_FLAGS)
-  if(COMPILER_HAS_SVE_FLAG AND SVE_HEADER_USABLE)
-    target_sources(lsmt_lib PRIVATE index_sve.cpp)
-    # armv8.2-a is the minimal architecture baseline that can carry the
-    # +sve extension -- a permission floor for code generation, not a
-    # per-generation target: newer SVE hardware runs this same object
-    # unchanged, and runtime dispatch (HWCAP_SVE) gates execution.
-    set_source_files_properties(index_sve.cpp PROPERTIES COMPILE_OPTIONS "-march=armv8.2-a+sve")
+  check_cxx_source_compiles("${SVE_PROBE_SOURCE}" SVE_TARGET_PRAGMA_USABLE)
+  if(SVE_TARGET_PRAGMA_USABLE)
     target_compile_definitions(lsmt_lib PUBLIC OVERLAYBD_ENABLE_SVE)
     message(STATUS "LSMT SVE acceleration: ENABLED")
   else()

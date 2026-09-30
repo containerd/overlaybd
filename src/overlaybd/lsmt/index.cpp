@@ -30,6 +30,12 @@
 #include <arm_neon.h>
 #include <sys/auxv.h>
 #endif
+// arm_sve.h is only usable when the toolchain probe in lsmt/CMakeLists.txt
+// passed (per-block SVE support verified for gcc >= 10.3). Included here at
+// namespace scope; the pragma region further below holds the SVE kernels.
+#if defined(__aarch64__) && defined(OVERLAYBD_ENABLE_SVE)
+#include <arm_sve.h>
+#endif
 using namespace std;
 
 namespace LSMT {
@@ -164,17 +170,57 @@ extern "C" uint32_t lsmt_neon_inner_search_u64(const uint64_t *base, uint64_t x)
 #endif // __aarch64__
 
 #if defined(__aarch64__) && defined(OVERLAYBD_ENABLE_SVE)
-// SVE1 inner search, bridged to the separately-compiled SVE TU
-// (index_sve.cpp, compiled with -march=armv8.2-a+sve). SVE1 code is a
-// strict architectural subset of SVE2, so this same code also serves
-// SVE2-capable hardware; benefits scale with the runtime vector length.
-// NOTE: never compile this TU with +sve2 -- hardware without SVE2
-// would fault on SVE2 instructions.
-extern "C" {
-uint32_t lsmt_sve_inner_search_u32(const uint32_t *base, uint32_t x);
-uint32_t lsmt_sve_inner_search_u64(const uint64_t *base, uint64_t x);
-uint32_t lsmt_sve_vl_bytes();
+// SVE1 inner search, compiled in-place: the pragma below scopes
+// -march=armv8.2-a+sve to this region only. Everything defined between
+// push_options/pop_options is compiled for SVE. 
+
+// OVERLAYBD_ENABLE_SVE comes from the toolchain probe in lsmt/CMakeLists.txt, 
+// which compiles this exact pragma+intrinsics shape with the build's own compiler: 
+// toolchains without SVE support (gcc <= 9 / devtoolset-7: no arm_sve.h, or no +sve
+// feature modifier at all) fail the probe, never see this block, and keep
+// building with the NEON tier only.
+
+// armv8.2-a is the minimal architecture baseline that can carry the
+// +sve extension -- a permission floor for code generation, not a
+// per-generation target: SVE hardware is at least ARMv8.2-A, newer
+// generations run this same binary unchanged, and runtime dispatch
+// (HWCAP_SVE, see sve_supported()) decides whether this path is taken at
+// all. SVE1 code is a strict architectural subset of SVE2, so the same
+// code serves SVE1 and SVE2-capable hardware. Never widen this region to
+// +sve2 -- hardware without SVE2 would fault with SIGILL on SVE2
+// instructions.
+#pragma GCC push_options
+#pragma GCC target("arch=armv8.2-a+sve")
+
+extern "C" uint32_t lsmt_sve_inner_search_u32(const uint32_t *base, uint32_t x) {
+    uint32_t cnt = 0;
+    for (uint32_t i = 0; i < 16;) {
+        svbool_t pg = svwhilelt_b32((uint64_t)i, (uint64_t)16);
+        svuint32_t d = svld1_u32(pg, base + i);
+        svbool_t c = svcmple_u32(pg, d, svdup_u32(x));
+        cnt += (uint32_t)svcntp_b32(pg, c);
+        i += svcntw();
+    }
+    return cnt;
 }
+
+extern "C" uint32_t lsmt_sve_inner_search_u64(const uint64_t *base, uint64_t x) {
+    uint32_t cnt = 0;
+    for (uint32_t i = 0; i < 8;) {
+        svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)8);
+        svuint64_t d = svld1_u64(pg, base + i);
+        svbool_t c = svcmple_u64(pg, d, svdup_u64(x));
+        cnt += (uint32_t)svcntp_b64(pg, c);
+        i += svcntd();
+    }
+    return cnt;
+}
+
+extern "C" uint32_t lsmt_sve_vl_bytes() {
+    return svcntb();
+}
+
+#pragma GCC pop_options
 
 template<typename KeyType> struct SveInnerSearchImpl;
 
@@ -196,7 +242,7 @@ struct SveInnerSearch {
         return SveInnerSearchImpl<KeyType>::inner_search(base, x);
     }
 };
-#endif // SVE bridge
+#endif // __aarch64__ && OVERLAYBD_ENABLE_SVE
 
 #ifdef __x86_64__
 template<typename KeyType>
@@ -1103,5 +1149,4 @@ IMemoryIndex *merge_memory_indexes(const IMemoryIndex **pindexes, size_t n) {
 
     return new_index_with_lineriazed_bptree<uint64_t>(std::move(mapping), pindexes[0]->vsize());
 }
-
 } // namespace LSMT
