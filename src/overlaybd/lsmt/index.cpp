@@ -28,6 +28,16 @@
 #ifdef __x86_64__
 #include <immintrin.h>
 #endif
+#ifdef __aarch64__
+#include <arm_neon.h>
+#include <sys/auxv.h>
+#endif
+// arm_sve.h is only usable when the toolchain probe in lsmt/CMakeLists.txt
+// passed (per-block SVE support verified for gcc >= 10.3). Included here at
+// namespace scope; the pragma region further below holds the SVE kernels.
+#if defined(__aarch64__) && defined(OVERLAYBD_ENABLE_SVE)
+#include <arm_sve.h>
+#endif
 using namespace std;
 
 namespace LSMT {
@@ -69,6 +79,24 @@ bool is_avx512f_supported() {
 #endif
 }
 
+#if defined(__aarch64__)
+// Runtime capability ladder on aarch64: SVE2 / SVE1 / NEON / scalar.
+// HWCAP_SVE gates the SVE code path; HWCAP2_SVE2 only refines tier
+// reporting -- this kernel uses no SVE2-only instructions, and SVE1 code
+// is a strict architectural subset of SVE2.
+bool sve_supported() {
+    return getauxval(AT_HWCAP) & (1UL << 22); // HWCAP_SVE
+}
+
+bool sve2_supported() {
+#ifdef AT_HWCAP2
+    return getauxval(AT_HWCAP2) & (1UL << 1); // HWCAP2_SVE2
+#else
+    return false;
+#endif
+}
+#endif // __aarch64__
+
 const static uint32_t KEYS_PER_NODE_64 = 8;
 const static uint32_t MAX_LEVEL_64 = 10;
 static constexpr uint32_t NODES_PER_LEVEL_64[MAX_LEVEL_64] = {8, 72, 648, 5832, 52488, 472392, 4251528, 38263752, 344373768, 3099363912};
@@ -95,6 +123,128 @@ struct DefaultInnerSearch {
         return __builtin_popcount(mask);
     }
 };
+
+#ifdef __aarch64__
+// AdvSIMD (NEON) inner search: counts keys <= x among the node's keys,
+// semantics identical to DefaultInnerSearch. NEON is architecturally
+// mandatory on aarch64, so this tier needs no runtime capability check.
+template<typename KeyType> struct NeonInnerSearchImpl;
+
+template<> struct NeonInnerSearchImpl<uint32_t> {
+    static uint32_t inner_search(const uint32_t *base, uint32_t x) {
+        uint32x4_t vx = vdupq_n_u32(x);
+        uint32_t c = 0;
+        c += vaddvq_u32(vshrq_n_u32(vcleq_u32(vld1q_u32(base), vx), 31));
+        c += vaddvq_u32(vshrq_n_u32(vcleq_u32(vld1q_u32(base + 4), vx), 31));
+        c += vaddvq_u32(vshrq_n_u32(vcleq_u32(vld1q_u32(base + 8), vx), 31));
+        c += vaddvq_u32(vshrq_n_u32(vcleq_u32(vld1q_u32(base + 12), vx), 31));
+        return c;
+    }
+};
+
+template<> struct NeonInnerSearchImpl<uint64_t> {
+    static uint32_t inner_search(const uint64_t *base, uint64_t x) {
+        uint64x2_t vx = vdupq_n_u64(x);
+        uint64_t c = 0;
+        c += vaddvq_u64(vshrq_n_u64(vcleq_u64(vld1q_u64(base), vx), 63));
+        c += vaddvq_u64(vshrq_n_u64(vcleq_u64(vld1q_u64(base + 2), vx), 63));
+        c += vaddvq_u64(vshrq_n_u64(vcleq_u64(vld1q_u64(base + 4), vx), 63));
+        c += vaddvq_u64(vshrq_n_u64(vcleq_u64(vld1q_u64(base + 6), vx), 63));
+        return (uint32_t)c;
+    }
+};
+
+template<typename KeyType>
+struct NeonInnerSearch {
+    static uint32_t inner_search(const KeyType *base, KeyType x) {
+        return NeonInnerSearchImpl<KeyType>::inner_search(base, x);
+    }
+};
+
+// C-linkage bridges so the test binary (test/inner_search_test.cpp) can
+// exercise the NEON kernels directly, mirroring the SVE TU's interface.
+extern "C" uint32_t lsmt_neon_inner_search_u32(const uint32_t *base, uint32_t x) {
+    return NeonInnerSearch<uint32_t>::inner_search(base, x);
+}
+extern "C" uint32_t lsmt_neon_inner_search_u64(const uint64_t *base, uint64_t x) {
+    return NeonInnerSearch<uint64_t>::inner_search(base, x);
+}
+#endif // __aarch64__
+
+#if defined(__aarch64__) && defined(OVERLAYBD_ENABLE_SVE)
+// SVE1 inner search, compiled in-place: the pragma below scopes
+// -march=armv8.2-a+sve to this region only. Everything defined between
+// push_options/pop_options is compiled for SVE. 
+
+// OVERLAYBD_ENABLE_SVE comes from the toolchain probe in lsmt/CMakeLists.txt, 
+// which compiles this exact pragma+intrinsics shape with the build's own compiler: 
+// toolchains without SVE support (gcc <= 9 / devtoolset-7: no arm_sve.h, or no +sve
+// feature modifier at all) fail the probe, never see this block, and keep
+// building with the NEON tier only.
+
+// armv8.2-a is the minimal architecture baseline that can carry the
+// +sve extension -- a permission floor for code generation, not a
+// per-generation target: SVE hardware is at least ARMv8.2-A, newer
+// generations run this same binary unchanged, and runtime dispatch
+// (HWCAP_SVE, see sve_supported()) decides whether this path is taken at
+// all. SVE1 code is a strict architectural subset of SVE2, so the same
+// code serves SVE1 and SVE2-capable hardware. Never widen this region to
+// +sve2 -- hardware without SVE2 would fault with SIGILL on SVE2
+// instructions.
+#pragma GCC push_options
+#pragma GCC target("arch=armv8.2-a+sve")
+
+extern "C" uint32_t lsmt_sve_inner_search_u32(const uint32_t *base, uint32_t x) {
+    uint32_t cnt = 0;
+    for (uint32_t i = 0; i < 16;) {
+        svbool_t pg = svwhilelt_b32((uint64_t)i, (uint64_t)16);
+        svuint32_t d = svld1_u32(pg, base + i);
+        svbool_t c = svcmple_u32(pg, d, svdup_u32(x));
+        cnt += (uint32_t)svcntp_b32(pg, c);
+        i += svcntw();
+    }
+    return cnt;
+}
+
+extern "C" uint32_t lsmt_sve_inner_search_u64(const uint64_t *base, uint64_t x) {
+    uint32_t cnt = 0;
+    for (uint32_t i = 0; i < 8;) {
+        svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)8);
+        svuint64_t d = svld1_u64(pg, base + i);
+        svbool_t c = svcmple_u64(pg, d, svdup_u64(x));
+        cnt += (uint32_t)svcntp_b64(pg, c);
+        i += svcntd();
+    }
+    return cnt;
+}
+
+extern "C" uint32_t lsmt_sve_vl_bytes() {
+    return svcntb();
+}
+
+#pragma GCC pop_options
+
+template<typename KeyType> struct SveInnerSearchImpl;
+
+template<> struct SveInnerSearchImpl<uint32_t> {
+    static uint32_t inner_search(const uint32_t *base, uint32_t x) {
+        return lsmt_sve_inner_search_u32(base, x);
+    }
+};
+
+template<> struct SveInnerSearchImpl<uint64_t> {
+    static uint32_t inner_search(const uint64_t *base, uint64_t x) {
+        return lsmt_sve_inner_search_u64(base, x);
+    }
+};
+
+template<typename KeyType>
+struct SveInnerSearch {
+    static uint32_t inner_search(const KeyType *base, KeyType x) {
+        return SveInnerSearchImpl<KeyType>::inner_search(base, x);
+    }
+};
+#endif // __aarch64__ && OVERLAYBD_ENABLE_SVE
 
 #ifdef __x86_64__
 template<typename KeyType>
@@ -361,6 +511,15 @@ public:
 template<typename KeyType>
 using IndexLBPTAcc = IndexLBPT<KeyType, Avx512InnerSearch>;
 
+#ifdef __aarch64__
+template<typename KeyType>
+using IndexLBPTNeon = IndexLBPT<KeyType, NeonInnerSearch>;
+#if defined(OVERLAYBD_ENABLE_SVE)
+template<typename KeyType>
+using IndexLBPTSve = IndexLBPT<KeyType, SveInnerSearch>;
+#endif
+#endif
+
 template <typename KeyType>
 static inline Index* new_index_with_lineriazed_bptree(vector<SegmentMapping> &&m, uint64_t vsize = 0) {
     static_assert(std::is_same<KeyType, uint32_t>::value || std::is_same<KeyType, uint64_t>::value,
@@ -376,6 +535,17 @@ static inline Index* new_index_with_lineriazed_bptree(vector<SegmentMapping> &&m
         LOG_INFO("using accelerated search for linearized b+tree");
         return new IndexLBPTAcc<KeyType>(std::move(m), vsize, tree);
     }
+#if defined(__aarch64__) && defined(OVERLAYBD_ENABLE_SVE)
+    if (sve_supported()) {
+        LOG_INFO("using SVE search for linearized b+tree, tier=",
+                 sve2_supported() ? "SVE2" : "SVE1", ", vl_bytes=", lsmt_sve_vl_bytes());
+        return new IndexLBPTSve<KeyType>(std::move(m), vsize, tree);
+    }
+#endif
+#ifdef __aarch64__
+    LOG_INFO("using NEON search for linearized b+tree, tier=NEON");
+    return new IndexLBPTNeon<KeyType>(std::move(m), vsize, tree);
+#endif
     return new IndexLBPT<KeyType>(std::move(m), vsize, tree);
 }
 
