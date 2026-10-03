@@ -25,9 +25,9 @@ The format of header is described as below. All fields are little-endian.
 | digest  |      28        |   uint32_t   | checksum for the range 28-511 bytes in header |
 | flags   |      32        |   uint64_t   | bits for flags* (see later for details) |
 | index_offset | 40        |   uint64_t   | index offset |
-| index_size   | 48        |   uint64_t   | size of the index section, possibly compressed base on flags |
+| index_size   | 48        |   uint64_t   | entry count when bit 5 is 0; compressed byte count when bit 5 is 1 |
 | original_file_size | 56  |   uint64_t   | size of the orignal file before compression |
-| index_crc |    64        |   uint32_t   | checksum value of index |
+| index_crc |    64        |   uint32_t   | CRC32C of the stored index bytes (compressed bytes when bit 5 is 1) |
 | reserved|      68        |      4       | reserved space, should be 0 |
 | block_size|    72        |   uint32_t   | size of each compression block |
 | algo    |      76        |   uint8_t    | compression algorithm |
@@ -53,8 +53,27 @@ The format of header is described as below. All fields are little-endian.
 
 ## index
 The index section is a table of (uint32_t) compressed size of each data block.
-The whole section may be compressed with the same compression algorithm and
-level.
+The whole section may be compressed with the same compression algorithm as the
+data blocks (raw LZ4 block or ZSTD frame). The current implementation uses the
+same codec settings as data compression: LZ4 default and ZSTD level 3.
+
+When flag bit 5 is clear, `index_size` is the number of uint32_t entries and the
+stored length is `index_size * 4`, preserving existing files. When bit 5 is set,
+`index_size` is the compressed byte length. The decoded entry count is
+`original_file_size / block_size + (original_file_size % block_size != 0)`;
+the decoded byte length must equal exactly four times that count. Validate
+block size, entry count, codec limits and file bounds before allocating buffers.
+The uncompressed entry count must also match the original file size. In a data
+file, the sum of the block lengths must end at `index_offset`.
+`index_crc` covers the stored bytes and is checked before decompression when
+flag bit 4 is set. Header/trailer structure sizes and offsets are unchanged.
+
+Writers opt in using `CompressArgs::compress_index` or the zfile tool's
+`--compress-index` flag. Empty indexes, indexes which do not shrink, and indexes
+above the single-call codec size limit remain uncompressed. Compressed indexes
+use signed-int-sized codec buffers (and LZ4's smaller input limit when applicable).
+New readers support both forms. Older readers do not understand bit 5, so keep
+compression disabled when files must be read by older deployments.
 
 ## trailer
 An updated edition of header, in the same format. Trailer is useful in
