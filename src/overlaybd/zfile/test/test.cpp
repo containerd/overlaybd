@@ -374,6 +374,281 @@ TEST_F(ZFileTest, verify_builder) {
     }
 }
 
+
+TEST_F(ZFileTest, index_compression_roundtrip) {
+    class ShortReadFile : public ForwardFile {
+    public:
+        explicit ShortReadFile(IFile *file) : ForwardFile(file) {}
+        ssize_t read(void *buf, size_t count) override {
+            return m_file->read(buf, std::min(count, size_t(3001)));
+        }
+    };
+    enum class Writer { WholeFile, SingleWorker, MultiWorker, ShortReads };
+    // All writers and both metadata paths, including an index larger than a data block.
+    for (auto algo : {CompressOptions::LZ4, CompressOptions::ZSTD}) {
+        for (auto writer : {Writer::WholeFile, Writer::SingleWorker,
+                            Writer::MultiWorker, Writer::ShortReads}) {
+            for (bool overwrite : {false, true}) {
+                for (bool enabled : {false, true}) {
+                    for (size_t size : {size_t(0), size_t(1), size_t(4096 * 128),
+                                       size_t(4096 * 128 + 17), size_t(4096 * 2048 + 17)}) {
+                        SCOPED_TRACE(::testing::Message() << "algo=" << int(algo)
+                            << " writer=" << int(writer) << " overwrite=" << overwrite
+                            << " enabled=" << enabled << " size=" << size);
+                        auto src = unique_ptr<IFile>(lfs->open("index-src", O_CREAT | O_TRUNC | O_RDWR, 0644));
+                        auto dst = unique_ptr<IFile>(lfs->open("index-dst", O_CREAT | O_TRUNC | O_RDWR, 0644));
+                        ASSERT_NE(src, nullptr);
+                        ASSERT_NE(dst, nullptr);
+                        DEFER(lfs->unlink("index-src"); lfs->unlink("index-dst"););
+                        std::vector<unsigned char> input(size);
+                        for (size_t i = 0; i < size; ++i)
+                            input[i] = (i % 4096) % 251;
+                        if (size)
+                            ASSERT_EQ(src->write(input.data(), size), (ssize_t)size);
+                        ASSERT_EQ(src->lseek(0, SEEK_SET), 0);
+                        CompressOptions opt(algo, 4096, 1);
+                        CompressArgs args(opt);
+                        args.compress_index = enabled;
+                        args.overwrite_header = overwrite;
+                        args.workers = writer == Writer::MultiWorker ? 2 : 1;
+                        if (writer == Writer::WholeFile) {
+                            ASSERT_EQ(zfile_compress(src.get(), dst.get(), &args), 0);
+                        } else if (writer == Writer::ShortReads) {
+                            ShortReadFile short_src(src.get());
+                            ASSERT_EQ(zfile_compress(&short_src, dst.get(), &args), 0);
+                        } else {
+                            auto builder = unique_ptr<IFile>(new_zfile_builder(dst.get(), &args, false));
+                            ASSERT_NE(builder, nullptr);
+                            for (size_t offset = 0; offset < size;) {
+                                size_t count = std::min(size - offset, size_t(3001));
+                                ASSERT_EQ(builder->write(input.data() + offset, count), (ssize_t)count);
+                                offset += count;
+                            }
+                            ASSERT_EQ(builder->close(), 0);
+                        }
+                        CompressionFile::HeaderTrailer ht;
+                        CompressionFile::JumpTable table;
+                        ASSERT_TRUE(load_jump_table(dst.get(), &ht, table));
+                        EXPECT_EQ(ht.is_index_compressed(), enabled && size > 4096);
+                        const size_t entries = size / 4096 + (size % 4096 != 0);
+                        if (ht.is_index_compressed())
+                            EXPECT_LT(ht.index_size, entries * sizeof(uint32_t));
+                        else
+                            EXPECT_EQ(ht.index_size, entries);
+                        auto opened = unique_ptr<IFile>(zfile_open_ro(dst.get(), true, false));
+                        ASSERT_NE(opened, nullptr);
+                        struct stat st;
+                        ASSERT_EQ(opened->fstat(&st), 0);
+                        EXPECT_EQ(st.st_size, (off_t)size);
+                        std::vector<unsigned char> output(size);
+                        if (size) {
+                            ASSERT_EQ(opened->pread(output.data(), size, 0), (ssize_t)size);
+                            EXPECT_EQ(output, input);
+                            // Deliberately unaligned reads spanning data-block boundaries.
+                            for (size_t offset : {size_t(1), size_t(4090), size_t(8191)}) {
+                                if (offset >= size) continue;
+                                size_t count = std::min(size - offset, size_t(6013));
+                                ASSERT_EQ(opened->pread(output.data(), count, offset), (ssize_t)count);
+                                EXPECT_EQ(memcmp(output.data(), input.data() + offset, count), 0);
+                            }
+                        }
+                        unsigned char byte;
+                        EXPECT_EQ(opened->pread(&byte, 1, size), 0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(ZFileTest, index_compression_rejects_bad_metadata_and_payload) {
+    for (auto algo : {CompressOptions::LZ4, CompressOptions::ZSTD}) {
+        for (bool overwrite : {false, true}) {
+            SCOPED_TRACE(::testing::Message() << "algo=" << int(algo)
+                         << " overwrite=" << overwrite);
+            auto src = unique_ptr<IFile>(lfs->open("bad-index-src", O_CREAT | O_TRUNC | O_RDWR, 0644));
+            auto dst = unique_ptr<IFile>(lfs->open("bad-index-dst", O_CREAT | O_TRUNC | O_RDWR, 0644));
+            ASSERT_NE(src, nullptr);
+            ASSERT_NE(dst, nullptr);
+            DEFER(lfs->unlink("bad-index-src"); lfs->unlink("bad-index-dst"););
+            std::vector<char> input(4096 * 128, 'a');
+            ASSERT_EQ(src->write(input.data(), input.size()), (ssize_t)input.size());
+            ASSERT_EQ(src->lseek(0, SEEK_SET), 0);
+            CompressOptions opt(algo);
+            CompressArgs args(opt);
+            args.compress_index = true;
+            args.overwrite_header = overwrite;
+            ASSERT_EQ(zfile_compress(src.get(), dst.get(), &args), 0);
+            struct stat st;
+            ASSERT_EQ(dst->fstat(&st), 0);
+            const off_t metadata_offset = overwrite ? 0 : st.st_size - 512;
+            alignas(CompressionFile::HeaderTrailer) char original[512];
+            ASSERT_EQ(dst->pread(original, sizeof(original), metadata_offset), 512);
+            auto original_ht = (CompressionFile::HeaderTrailer *)original;
+            ASSERT_TRUE(original_ht->is_index_compressed());
+            CompressionFile::JumpTable table;
+            ASSERT_TRUE(load_jump_table(dst.get(), nullptr, table));
+            unsigned char first_byte;
+            ASSERT_EQ(dst->pread(&first_byte, 1, original_ht->index_offset), 1);
+            auto reject_metadata = [&](const char *description, auto mutate) {
+                SCOPED_TRACE(description);
+                alignas(CompressionFile::HeaderTrailer) char data[512];
+                memcpy(data, original, sizeof(data));
+                auto ht = (CompressionFile::HeaderTrailer *)data;
+                mutate(*ht);
+                ht->digest = 0;
+                ht->digest = crc32::crc32c(data, sizeof(data));
+                ASSERT_EQ(dst->pwrite(data, sizeof(data), metadata_offset), 512);
+                EXPECT_FALSE(load_jump_table(dst.get(), nullptr, table));
+            };
+            reject_metadata("offset past EOF", [&](auto &ht) { ht.index_offset = st.st_size + 1; });
+            reject_metadata("offset before data", [](auto &ht) { ht.index_offset = 511; });
+            reject_metadata("index overlaps trailer", [&](auto &ht) { ht.index_size = st.st_size; });
+            reject_metadata("too many entries", [](auto &ht) {
+                ht.original_file_size = (MAX_ZFILE_INDEX_SIZE + 1) * 4096;
+            });
+            reject_metadata("more entries than data bytes", [](auto &ht) {
+                ht.original_file_size = (ht.index_offset - 512 + 1) * 4096;
+            });
+            reject_metadata("decoded bytes exceed codec limit", [](auto &ht) {
+                ht.original_file_size = ((uint64_t)INT_MAX / sizeof(uint32_t) + 1) * 4096;
+            });
+            reject_metadata("zero block size", [](auto &ht) { ht.opt.block_size = 0; });
+            reject_metadata("non-power-of-two block size", [](auto &ht) { ht.opt.block_size = 3; });
+            reject_metadata("unsupported block size", [](auto &ht) { ht.opt.block_size = MAX_READ_SIZE * 2; });
+            reject_metadata("unsupported codec", [](auto &ht) { ht.opt.algo = CompressOptions::MINI_LZO; });
+            reject_metadata("empty compressed index", [](auto &ht) { ht.index_size = 0; });
+            reject_metadata("empty decoded index", [](auto &ht) { ht.original_file_size = 0; });
+            reject_metadata("wrong decoded entry count", [](auto &ht) { ht.original_file_size += 4096; });
+            reject_metadata("wrong index checksum", [](auto &ht) { ht.index_crc ^= 1; });
+            reject_metadata("truncated codec stream with valid CRC", [&](auto &ht) {
+                ht.index_size = 1;
+                ht.index_crc = crc32::crc32c(&first_byte, 1);
+            });
+
+            // Metadata integrity must be checked before using any changed fields.
+            alignas(CompressionFile::HeaderTrailer) char bad_digest[512];
+            memcpy(bad_digest, original, sizeof(bad_digest));
+            ((CompressionFile::HeaderTrailer *)bad_digest)->digest ^= 1;
+            ASSERT_EQ(dst->pwrite(bad_digest, sizeof(bad_digest), metadata_offset), 512);
+            EXPECT_FALSE(load_jump_table(dst.get(), nullptr, table));
+            ASSERT_EQ(dst->pwrite(original, sizeof(original), metadata_offset), 512);
+            first_byte ^= 0xff;
+            ASSERT_EQ(dst->pwrite(&first_byte, 1, original_ht->index_offset), 1);
+            EXPECT_FALSE(load_jump_table(dst.get(), nullptr, table));
+        }
+    }
+}
+
+TEST_F(ZFileTest, index_compression_rejects_inconsistent_raw_index) {
+    for (bool overwrite : {false, true}) {
+        auto src = unique_ptr<IFile>(lfs->open("raw-index-src", O_CREAT | O_TRUNC | O_RDWR, 0644));
+        auto dst = unique_ptr<IFile>(lfs->open("raw-index-dst", O_CREAT | O_TRUNC | O_RDWR, 0644));
+        ASSERT_NE(src, nullptr);
+        ASSERT_NE(dst, nullptr);
+        DEFER(lfs->unlink("raw-index-src"); lfs->unlink("raw-index-dst"););
+        ASSERT_EQ(src->write("a", 1), 1);
+        ASSERT_EQ(src->lseek(0, SEEK_SET), 0);
+        CompressOptions opt;
+        CompressArgs args(opt);
+        args.compress_index = true; // A one-entry index must fall back to raw storage.
+        args.overwrite_header = overwrite;
+        ASSERT_EQ(zfile_compress(src.get(), dst.get(), &args), 0);
+        CompressionFile::HeaderTrailer loaded;
+        CompressionFile::JumpTable table;
+        ASSERT_TRUE(load_jump_table(dst.get(), &loaded, table));
+        ASSERT_FALSE(loaded.is_index_compressed());
+        struct stat st;
+        ASSERT_EQ(dst->fstat(&st), 0);
+        const off_t metadata_offset = overwrite ? 0 : st.st_size - 512;
+        alignas(CompressionFile::HeaderTrailer) char metadata[512];
+        ASSERT_EQ(dst->pread(metadata, sizeof(metadata), metadata_offset), 512);
+        auto ht = (CompressionFile::HeaderTrailer *)metadata;
+        // The file claims two blocks but the raw index contains only one entry.
+        ht->original_file_size = 8192;
+        ht->digest = 0;
+        ht->digest = crc32::crc32c(metadata, sizeof(metadata));
+        ASSERT_EQ(dst->pwrite(metadata, sizeof(metadata), metadata_offset), 512);
+        EXPECT_FALSE(load_jump_table(dst.get(), nullptr, table));
+    }
+}
+
+TEST_F(ZFileTest, index_compression_checks_data_extent) {
+    for (auto algo : {CompressOptions::LZ4, CompressOptions::ZSTD}) {
+        for (bool compressed : {false, true}) {
+            for (bool overwrite : {false, true}) {
+                for (int adjustment : {-1, 0, 1}) {
+                    SCOPED_TRACE(::testing::Message() << "algo=" << int(algo)
+                        << " compressed=" << compressed << " overwrite=" << overwrite
+                        << " adjustment=" << adjustment);
+                    auto dst = unique_ptr<IFile>(lfs->open("index-extent", O_CREAT | O_TRUNC | O_RDWR, 0644));
+                    ASSERT_NE(dst, nullptr);
+                    DEFER(lfs->unlink("index-extent"););
+                    alignas(CompressionFile::HeaderTrailer) char metadata[512]{};
+                    auto ht = new (metadata) CompressionFile::HeaderTrailer;
+                    ht->set_compress_option(CompressOptions(algo));
+                    ASSERT_EQ(write_header_trailer(dst.get(), true, false, true, ht), 512);
+                    // Only the index is read; the data area has a known total length.
+                    std::vector<char> data(128 * 20);
+                    ASSERT_EQ(dst->write(data.data(), data.size()), (ssize_t)data.size());
+                    std::vector<uint32_t> lengths(128, 20);
+                    lengths[0] = 20 + adjustment;
+                    ASSERT_EQ(write_index(dst.get(), lengths, ht, 512 + data.size(), compressed), 0);
+                    ASSERT_EQ(ht->is_index_compressed(), compressed);
+                    ht->original_file_size = lengths.size() * 4096;
+                    ASSERT_EQ(write_header_trailer(dst.get(), false, true, true, ht), 512);
+                    if (overwrite)
+                        ASSERT_EQ(write_header_trailer(dst.get(), true, false, true, ht, 0), 512);
+                    CompressionFile::JumpTable table;
+                    EXPECT_EQ(load_jump_table(dst.get(), nullptr, table), adjustment == 0);
+                }
+            }
+        }
+    }
+}
+
+TEST_F(ZFileTest, index_compression_rejects_oversized_builder_write) {
+    for (int workers : {1, 2}) {
+        auto dst = unique_ptr<IFile>(lfs->open("index-write-limit", O_CREAT | O_TRUNC | O_RDWR, 0644));
+        ASSERT_NE(dst, nullptr);
+        DEFER(lfs->unlink("index-write-limit"););
+        CompressOptions opt;
+        CompressArgs args(opt);
+        args.compress_index = true;
+        args.workers = workers;
+        auto builder = unique_ptr<IFile>(new_zfile_builder(dst.get(), &args, false));
+        ASSERT_NE(builder, nullptr);
+        // The fixed limit is enforced before touching the caller's buffer or workers.
+        const uint64_t max_input = MAX_ZFILE_INDEX_SIZE * opt.block_size;
+        EXPECT_EQ(builder->write(nullptr, max_input + 1), -1);
+        EXPECT_EQ(errno, EFBIG);
+        ASSERT_EQ(builder->write("a", 1), 1);
+        ASSERT_EQ(builder->close(), 0);
+        auto opened = unique_ptr<IFile>(zfile_open_ro(dst.get(), false, false));
+        ASSERT_NE(opened, nullptr);
+        char byte;
+        ASSERT_EQ(opened->pread(&byte, 1, 0), 1);
+        EXPECT_EQ(byte, 'a');
+    }
+}
+
+TEST_F(ZFileTest, index_compression_codec_boundaries) {
+    for (auto algo : {CompressOptions::LZ4, CompressOptions::ZSTD}) {
+        std::vector<unsigned char> encoded;
+        EXPECT_EQ(compress_index_buffer(nullptr, 0, algo, encoded), 0);
+        EXPECT_EQ(compress_index_buffer(nullptr, (size_t)INT_MAX + 1, algo, encoded), 0);
+        uint32_t tiny = 123;
+        EXPECT_EQ(compress_index_buffer(&tiny, sizeof(tiny), algo, encoded), 0);
+        for (size_t count : {size_t(100), size_t(4096), size_t(32768)}) {
+            std::vector<uint32_t> raw(count, 123), restored(count);
+            ASSERT_EQ(compress_index_buffer(raw.data(), count * 4, algo, encoded), 1);
+            EXPECT_EQ(decompress_index_buffer(encoded.data(), encoded.size(), restored.data(), count * 4, algo), 0);
+            EXPECT_EQ(raw, restored);
+            EXPECT_EQ(decompress_index_buffer(encoded.data(), encoded.size(), restored.data(), count * 4 - 4, algo), -1);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     auto seed = 154702356;
     cerr << "seed = " << seed << endl;
