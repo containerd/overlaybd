@@ -139,7 +139,7 @@ int main(int argc, char **argv) {
             exit(-1);
         }
     } else {
-        auto target = create_ext4fs(imgfile, mkfs, false, "/");
+        auto target = create_ext4fs(imgfile, mkfs, false);
         DEFER({ delete target; });
 
         photon::fs::IFile *base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();

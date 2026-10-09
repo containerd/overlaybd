@@ -17,7 +17,6 @@
 #include "comm_func.h"
 #include "../overlaybd/tar/tar_file.h"
 #include <openssl/sha.h>
-#include <photon/fs/subfs.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/extfs/extfs.h>
 #include "../overlaybd/registryfs/registryfs.h"
@@ -61,8 +60,10 @@ int create_overlaybd(const std::string &srv_config, const std::string &dev_confi
     return 0;
 };
 
-photon::fs::IFileSystem *create_ext4fs(photon::fs::IFile *imgfile, bool mkfs,
-    bool enable_buffer, const char* root){
+// the extraction target is the ext4 image itself, mounted at its own root, so
+// the fs is used as is -- wrapping it in a subfs("/") would prepend a slash to
+// already rooted names and turn "/x" into "//x", which namei() cannot resolve
+photon::fs::IFileSystem *create_ext4fs(photon::fs::IFile *imgfile, bool mkfs, bool enable_buffer) {
     if (mkfs) {
         if (make_extfs(imgfile) < 0) {
             fprintf(stderr, "mkfs failed, %s\n", strerror(errno));
@@ -75,12 +76,7 @@ photon::fs::IFileSystem *create_ext4fs(photon::fs::IFile *imgfile, bool mkfs,
         fprintf(stderr, "new extfs failed, %s\n", strerror(errno));
         exit(-1);
     }
-    auto target = new_subfs(extfs, root, true);
-    if (!target) {
-        fprintf(stderr, "new subfs failed, %s\n", strerror(errno));
-        exit(-1);
-    }
-    return target;
+    return extfs;
 }
 
 bool is_erofs_fs(const photon::fs::IFile *imgfile)

@@ -62,6 +62,7 @@ static void int_to_oct_nonull(int num, char *oct, size_t octlen) {
 
 char *clean_name(char *name);
 std::string remove_last_slash(const std::string_view &path);
+std::string rooted_name(const char *name);
 
 class TarHeader {
 public:

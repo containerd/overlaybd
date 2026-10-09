@@ -58,6 +58,9 @@ int UnTar::remove_all(const std::string &path, bool rmdir) {
             }
             return 0;
         }
+    } else if (errno == ENOENT) {
+        // a whiteout for an absent entry is a no-op, not a failure
+        return 0;
     } else {
         LOG_ERRNO_RETURN(0, -1, "get path ` stat failed", path);
     }
@@ -69,7 +72,10 @@ int UnTar::remove_all(const std::string &path, bool rmdir) {
     dirent *dirInfo;
     while ((dirInfo = dirs->get()) != nullptr) {
         if (strcmp(dirInfo->d_name, ".") != 0 && strcmp(dirInfo->d_name, "..") != 0) {
-            remove_all(path + "/" + dirInfo->d_name);
+            // joining the root entry with a slash would give "//x", which the
+            // target fs does not resolve; a rooted path already carries its slash
+            auto child = path.back() == '/' ? path + dirInfo->d_name : path + "/" + dirInfo->d_name;
+            remove_all(child);
         }
         dirs->next();
     }
