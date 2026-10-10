@@ -9,14 +9,27 @@ on:
 
 jobs:
   build:
-    name: "Build Release"
-    runs-on: ubuntu-latest
+    name: "Build Release (${{ matrix.images }}, ${{ matrix.target.platform }})"
+    runs-on: ${{ matrix.target.runner }}
     strategy:
       fail-fast: false
       matrix:
         images: [ubuntu_20.04, ubuntu_22.04, ubuntu_24.04, ubuntu_26.04, centos_8, mcr.microsoft.com/cbl-mariner/base/core_2.0, mcr.microsoft.com/azurelinux/base/core_3.0, mcr.microsoft.com/azurelinux-beta/base/core_4.0]
-        platforms: [linux/amd64, linux/arm64]
+        target:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: x86_64
+          - platform: linux/arm64
+            runner: ubuntu-22.04-arm
+            arch: aarch64
     steps:
+    - name: Verify native architecture
+      shell: bash
+      env:
+        EXPECTED_ARCH: ${{ matrix.target.arch }}
+      run: |
+        uname -a
+        test "$(uname -m)" = "$EXPECTED_ARCH"
     - name: Set Release Version
       if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
       shell: bash
@@ -28,8 +41,6 @@ jobs:
       uses: actions/checkout@v7
       with:
         submodules: true
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v4
     - name: Setup buildx instance
       uses: docker/setup-buildx-action@v4
     - name: Build
@@ -72,7 +83,7 @@ jobs:
         echo "OS=${OS}"
 
 
-        docker buildx build --build-arg COMMIT_ID=${COMMIT_ID} --build-arg BUILD_IMAGE=${BUILD_IMAGE} --build-arg OS=${OS} --build-arg RELEASE_VERSION=${RELEASE_VERSION} --build-arg RELEASE_NO=${RELEASE_NO} -f .github/workflows/release/Dockerfile --platform=${{ matrix.platforms }} -o releases/ .
+        docker buildx build --build-arg COMMIT_ID=${COMMIT_ID} --build-arg BUILD_IMAGE=${BUILD_IMAGE} --build-arg OS=${OS} --build-arg RELEASE_VERSION=${RELEASE_VERSION} --build-arg RELEASE_NO=${RELEASE_NO} -f .github/workflows/release/Dockerfile --platform=${{ matrix.target.platform }} -o releases/ .
 
         # remove unused package
         if [[ "${OS}" =~ "ubuntu" ]]; then
@@ -91,7 +102,7 @@ jobs:
       name: Upload name
       run: |
         image=${{ matrix.images }}
-        platform=${{ matrix.platforms }}
+        platform=${{ matrix.target.platform }}
         name="releases-${image//\//_}-${platform/\//_}"
         echo "name=${name}" >> "$GITHUB_OUTPUT"
     - name: Upload
