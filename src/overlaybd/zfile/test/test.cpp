@@ -584,23 +584,59 @@ TEST_F(ZFileTest, index_compression_checks_data_extent) {
                     auto dst = unique_ptr<IFile>(lfs->open("index-extent", O_CREAT | O_TRUNC | O_RDWR, 0644));
                     ASSERT_NE(dst, nullptr);
                     DEFER(lfs->unlink("index-extent"););
-                    alignas(CompressionFile::HeaderTrailer) char metadata[512]{};
-                    auto ht = new (metadata) CompressionFile::HeaderTrailer;
-                    ht->set_compress_option(CompressOptions(algo));
-                    ASSERT_EQ(write_header_trailer(dst.get(), true, false, true, ht), 512);
+                    CompressArgs args{CompressOptions(algo)};
+                    args.compress_index = compressed;
+                    args.overwrite_header = overwrite;
+                    ZFileBuilderBase builder(dst.get(), &args, false);
+                    ASSERT_EQ(builder.init(), 0);
                     // Only the index is read; the data area has a known total length.
                     std::vector<char> data(128 * 20);
                     ASSERT_EQ(dst->write(data.data(), data.size()), (ssize_t)data.size());
-                    std::vector<uint32_t> lengths(128, 20);
-                    lengths[0] = 20 + adjustment;
-                    ASSERT_EQ(write_index(dst.get(), lengths, ht, 512 + data.size(), compressed), 0);
+                    builder.m_block_len.assign(128, 20);
+                    builder.m_block_len[0] = 20 + adjustment;
+                    builder.moffset += data.size();
+                    builder.raw_data_size = builder.m_block_len.size() * 4096;
+                    ASSERT_EQ(builder.fini(), 0);
+                    auto ht = (CompressionFile::HeaderTrailer *)builder.m_ht;
                     ASSERT_EQ(ht->is_index_compressed(), compressed);
-                    ht->original_file_size = lengths.size() * 4096;
-                    ASSERT_EQ(write_header_trailer(dst.get(), false, true, true, ht), 512);
-                    if (overwrite)
-                        ASSERT_EQ(write_header_trailer(dst.get(), true, false, true, ht, 0), 512);
                     CompressionFile::JumpTable table;
                     EXPECT_EQ(load_jump_table(dst.get(), nullptr, table), adjustment == 0);
+                }
+            }
+        }
+    }
+}
+
+TEST_F(ZFileTest, index_compression_checks_stored_block_limit) {
+    for (auto algo : {CompressOptions::LZ4, CompressOptions::ZSTD}) {
+        for (bool compressed : {false, true}) {
+            for (bool overwrite : {false, true}) {
+                for (bool verify : {false, true}) {
+                    for (uint32_t length : {uint32_t(MAX_READ_SIZE - 1), uint32_t(MAX_READ_SIZE),
+                                            uint32_t(MAX_READ_SIZE + 1), uint32_t(MAX_READ_SIZE + 4)}) {
+                        SCOPED_TRACE(::testing::Message() << "algo=" << int(algo)
+                            << " compressed=" << compressed << " overwrite=" << overwrite
+                            << " verify=" << verify << " length=" << length);
+                        auto dst = unique_ptr<IFile>(lfs->open("index-block-limit", O_CREAT | O_TRUNC | O_RDWR, 0644));
+                        ASSERT_NE(dst, nullptr);
+                        DEFER(lfs->unlink("index-block-limit"););
+                        CompressArgs args{CompressOptions(algo, MAX_READ_SIZE, verify)};
+                        args.compress_index = compressed;
+                        args.overwrite_header = overwrite;
+                        ZFileBuilderBase builder(dst.get(), &args, false);
+                        ASSERT_EQ(builder.init(), 0);
+                        builder.m_block_len.assign(128, 20);
+                        builder.m_block_len[0] = length;
+                        // Keep the total data extent valid so only the per-block bound can reject it.
+                        builder.moffset += length + (builder.m_block_len.size() - 1) * 20;
+                        builder.raw_data_size = builder.m_block_len.size() * MAX_READ_SIZE;
+                        ASSERT_EQ(dst->lseek(builder.moffset, SEEK_SET), builder.moffset);
+                        ASSERT_EQ(builder.fini(), 0);
+                        auto ht = (CompressionFile::HeaderTrailer *)builder.m_ht;
+                        ASSERT_EQ(ht->is_index_compressed(), compressed);
+                        CompressionFile::JumpTable table;
+                        EXPECT_EQ(load_jump_table(dst.get(), nullptr, table), length <= MAX_READ_SIZE);
+                    }
                 }
             }
         }
