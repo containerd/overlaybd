@@ -42,6 +42,15 @@ struct UpperConfig : public ConfigUtils::Config {
     APPCFG_PARA(data, std::string, "");
     APPCFG_PARA(target, std::string, "");
     APPCFG_PARA(gzipIndex, std::string, "");
+    // index and data are required for a writable upper. With `create`, create
+    // the pair if absent or reuse it if present; a partial pair is an error.
+    // Without `create`, a pathless upper is read-only; otherwise both paths
+    // must already exist.
+    // `vsize` (GB) applies only on creation; 0 means inherit from lowers.
+    // `rwType`: "append" (default), "hybrid" or "sparse".
+    APPCFG_PARA(create, bool, false);
+    APPCFG_PARA(vsize, uint64_t, 0);
+    APPCFG_PARA(rwType, std::string, "append");
 };
 
 struct DownloadConfig : public ConfigUtils::Config {
