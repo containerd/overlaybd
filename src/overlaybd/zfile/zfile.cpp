@@ -31,6 +31,10 @@
 #include <photon/thread/thread.h>
 #include "crc32/crc32c.h"
 #include "compressor.h"
+#include "lz4/lz4.h"
+#include <zstd.h>
+#include <climits>
+#include <limits>
 #include <atomic>
 #include <thread>
 #include "photon/thread/thread11.h"
@@ -103,6 +107,9 @@ public:
         void clr_flag_bit(uint32_t shift) {
             flags &= ~(1 << shift);
         }
+        bool is_index_compressed() const {
+            return get_flag_bit(FLAG_SHIFT_IDX_COMP);
+        }
         bool is_header() const {
             return get_flag_bit(FLAG_SHIFT_HEADER);
         }
@@ -172,7 +179,7 @@ public:
 
         // offset 40, 48, 56, 64
         uint64_t index_offset; // in bytes
-        uint64_t index_size;   // # of SegmentMappings
+        uint64_t index_size;   // raw entry count, or compressed index bytes when bit 5 is set
         uint64_t original_file_size;
         uint32_t index_crc;
         uint32_t reserved_0;
@@ -217,7 +224,8 @@ public:
             deltas.push_back(0);
             size_t min_blksize = (enable_crc ? sizeof(uint32_t) : 0);
             for (ssize_t i = 1; i < (ssize_t)n + 1; i++) {
-                if (ibuf[i - 1] <= min_blksize) {
+                // The stored length includes the CRC and must fit in BlockReader's buffer.
+                if (ibuf[i - 1] <= min_blksize || ibuf[i - 1] > MAX_READ_SIZE) {
                     LOG_ERRNO_RETURN(EIO, -1, "unexpected block size(id: `):", i - 1, ibuf[i - 1]);
                 }
                 raw_offset += ibuf[i - 1];
@@ -672,17 +680,174 @@ ssize_t compress_data(ICompressor *compressor, const unsigned char *buf, size_t 
     return compressed_len;
 }
 
+// Whole-index codecs use CPU routines: data-block/QAT buffer limits do not apply.
+// Return 1 for compressed output, 0 to keep the original, or -1 on codec error.
+static int compress_index_buffer(const void *src, size_t size, uint8_t algo,
+                                 std::vector<unsigned char> &dst) {
+    dst.clear();
+    if (algo != CompressOptions::LZ4 && algo != CompressOptions::ZSTD) {
+        errno = EINVAL;
+        return -1;
+    }
+    // A raw index remains valid even when a single codec call cannot represent it.
+    if (size == 0 || size > INT_MAX ||
+        (algo == CompressOptions::LZ4 && size > LZ4_MAX_INPUT_SIZE))
+        return 0;
+    size_t bound = algo == CompressOptions::LZ4
+                       ? (size_t)LZ4_compressBound((int)size) : ZSTD_compressBound(size);
+    if (bound == 0 || bound > INT_MAX)
+        return 0;
+    dst.resize(bound);
+    size_t written;
+    if (algo == CompressOptions::LZ4) {
+        int ret = LZ4_compress_default((const char *)src, (char *)dst.data(),
+                                       (int)size, (int)bound);
+        if (ret <= 0) {
+            errno = EIO;
+            return -1;
+        }
+        written = ret;
+    } else {
+        // Match Compressor_zstd's current data compression level.
+        written = ZSTD_compress(dst.data(), bound, src, size, 3);
+        if (ZSTD_isError(written)) {
+            errno = EIO;
+            return -1;
+        }
+    }
+    if (written >= size) {
+        dst.clear();
+        return 0;
+    }
+    dst.resize(written);
+    return 1;
+}
+
+// A successful decode must restore exactly the expected index byte count.
+static int decompress_index_buffer(const void *src, size_t size, void *dst,
+                                   size_t expected, uint8_t algo) {
+    if (size == 0 || expected == 0 || size > INT_MAX || expected > INT_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    size_t written;
+    if (algo == CompressOptions::LZ4) {
+        if (expected > LZ4_MAX_INPUT_SIZE) {
+            errno = EINVAL;
+            return -1;
+        }
+        int ret = LZ4_decompress_safe((const char *)src, (char *)dst,
+                                     (int)size, (int)expected);
+        if (ret < 0) {
+            errno = EIO;
+            return -1;
+        }
+        written = ret;
+    } else if (algo == CompressOptions::ZSTD) {
+        written = ZSTD_decompress(dst, expected, src, size);
+        if (ZSTD_isError(written)) {
+            errno = EIO;
+            return -1;
+        }
+    } else {
+        errno = EINVAL;
+        return -1;
+    }
+    if (written != expected) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+
+// Check before buffering or queueing data, not after the index has already grown.
+static int check_input_size(uint64_t current_size, size_t count, uint32_t block_size) {
+    const uint64_t max_size = MAX_ZFILE_INDEX_SIZE * (uint64_t)block_size;
+    if (current_size > max_size || count > max_size - current_size)
+        LOG_ERROR_RETURN(EFBIG, -1, "input exceeds maximum index entry count");
+    return 0;
+}
+
 class ZFileBuilderBase : public VirtualReadOnlyFile {
 public:
-    virtual int init() = 0;
-    virtual int fini() = 0;
+    ZFileBuilderBase(IFile *file, const CompressArgs *args, bool ownership)
+        : m_dest(file), m_args(args), m_opt(args->opt), m_ownership(ownership) {}
+
+    virtual int init() {
+        auto pht = new (m_ht) CompressionFile::HeaderTrailer;
+        pht->set_compress_option(m_opt);
+        LOG_INFO("write header.");
+        if (write_header_trailer(m_dest, true, false, true, pht) < 0)
+            LOG_ERRNO_RETURN(0, -1, "failed to write header");
+        moffset = CompressionFile::HeaderTrailer::SPACE + (uint64_t)m_opt.dict_size;
+        return 0;
+    }
+
+    int write_index() {
+        auto ht = (CompressionFile::HeaderTrailer *)m_ht;
+        if (m_block_len.size() > MAX_ZFILE_INDEX_SIZE ||
+            m_block_len.size() > (size_t)std::numeric_limits<ssize_t>::max() / sizeof(uint32_t))
+            LOG_ERROR_RETURN(EINVAL, -1, "index is too large");
+        const size_t raw_bytes = m_block_len.size() * sizeof(uint32_t);
+        const void *data = m_block_len.data();
+        size_t stored_bytes = raw_bytes;
+        std::vector<unsigned char> compressed;
+        ht->clr_flag_bit(CompressionFile::HeaderTrailer::FLAG_SHIFT_IDX_COMP);
+        ht->index_size = m_block_len.size();
+        if (m_args->compress_index) {
+            int ret = compress_index_buffer(data, raw_bytes, ht->opt.algo, compressed);
+            if (ret < 0)
+                LOG_ERRNO_RETURN(0, -1, "failed to compress index");
+            if (ret > 0) {
+                data = compressed.data();
+                stored_bytes = compressed.size();
+                ht->set_compress_index();
+                ht->index_size = stored_bytes;
+            }
+        }
+        LOG_INFO("write index (offset: `, count: `, bytes: `, compressed: `)",
+                 moffset, m_block_len.size(), stored_bytes, ht->is_index_compressed());
+        if (stored_bytes && m_dest->write(data, stored_bytes) != (ssize_t)stored_bytes)
+            LOG_ERRNO_RETURN(0, -1, "failed to write index");
+        // Checksum covers the stored representation, before any decompression.
+        ht->index_crc = stored_bytes ? crc32::crc32c(data, stored_bytes) : 0;
+        ht->index_offset = moffset;
+        return 0;
+    }
+
+    virtual int fini() {
+        if (write_index() != 0)
+            return -1;
+        auto pht = (CompressionFile::HeaderTrailer *)m_ht;
+        pht->original_file_size = raw_data_size;
+        LOG_INFO("write trailer.");
+        if (write_header_trailer(m_dest, false, true, true, pht) < 0)
+            LOG_ERRNO_RETURN(0, -1, "failed to write trailer");
+        if (m_args->overwrite_header) {
+            LOG_INFO("overwrite file header.");
+            if (write_header_trailer(m_dest, true, false, true, pht, 0) < 0)
+                LOG_ERRNO_RETURN(0, -1, "failed to overwrite header");
+        }
+        return 0;
+    }
+
+    IFile *m_dest;
+    const CompressArgs *m_args;
+    CompressOptions m_opt;
+    bool m_ownership;
+    off_t moffset = 0;
+    size_t raw_data_size = 0;
+    std::vector<uint32_t> m_block_len;
+    alignas(CompressionFile::HeaderTrailer) char m_ht[CompressionFile::HeaderTrailer::SPACE]{};
+
+    UNIMPLEMENTED_POINTER(IFileSystem *filesystem() override);
+    UNIMPLEMENTED(int fstat(struct stat *buf) override);
 };
 
 class ZFileBuilder : public ZFileBuilderBase {
 public:
     ZFileBuilder(IFile *file, const CompressArgs *args, bool ownership)
-        : m_dest(file), m_args(args), m_ownership(ownership) {
-        m_opt = m_args->opt;
+        : ZFileBuilderBase(file, args, ownership) {
         LOG_INFO("create stream compressing object. [ block size: `, type: `, enable_checksum: `]",
                  m_opt.block_size, m_opt.algo, m_opt.verify);
     }
@@ -692,16 +857,8 @@ public:
         if (m_compressor == nullptr) {
             LOG_ERRNO_RETURN(0, -1, "create compressor failed.");
         }
-        auto pht = new (m_ht)(CompressionFile::HeaderTrailer);
-        pht->set_compress_option(m_opt);
-        LOG_INFO("write header.");
-        auto ret = write_header_trailer(m_dest, true, false, true, pht);
-        if (ret < 0) {
-            LOG_ERRNO_RETURN(0, -1, "failed to write header");
-        }
-        moffset =
-            CompressionFile::HeaderTrailer::SPACE + 0; // opt.dict_size;
-                                                       // currently dictionary is not supported.
+        if (ZFileBuilderBase::init() != 0)
+            return -1;
         m_buf_size = m_opt.block_size + BUF_SIZE;
         compressed_data = new unsigned char[m_buf_size];
         reserved_buf = new unsigned char[m_buf_size];
@@ -728,31 +885,7 @@ public:
             if (write_buffer(reserved_buf, reserved_size) != 0)
                 return -1;
         }
-        uint64_t index_offset = moffset;
-        uint64_t index_size = m_block_len.size();
-        ssize_t index_bytes = index_size * sizeof(uint32_t);
-        LOG_INFO("write index (offset: `, count: ` size: `)", index_offset, index_size,
-                 index_bytes);
-        if (m_dest->write(&m_block_len[0], index_bytes) != index_bytes) {
-            LOG_ERRNO_RETURN(0, -1, "failed to write index.");
-        }
-        auto pht = (CompressionFile::HeaderTrailer *)m_ht;
-        pht->index_crc = crc32::crc32c(&m_block_len[0], index_bytes);
-        pht->index_offset = index_offset;
-        pht->index_size = index_size;
-        pht->original_file_size = raw_data_size;
-        LOG_INFO("write trailer.");
-        auto ret = write_header_trailer(m_dest, false, true, true, pht);
-        if (ret < 0)
-            LOG_ERRNO_RETURN(0, -1, "failed to write trailer");
-        if (m_args->overwrite_header) {
-            LOG_INFO("overwrite file header.");
-            ret = write_header_trailer(m_dest, true, false, true, pht, 0);
-            if (ret < 0) {
-                LOG_ERRNO_RETURN(0, -1, "failed to overwrite header");
-            }
-        }
-        return 0;
+        return ZFileBuilderBase::fini();
     }
 
     virtual int close() override {
@@ -768,6 +901,8 @@ public:
 
     virtual ssize_t write(const void *buf, size_t count) override {
         LOG_DEBUG("generate zfile data(raw_data size: `)", count);
+        if (check_input_size(raw_data_size, count, m_opt.block_size) != 0)
+            return -1;
         raw_data_size += count;
         auto expected_ret = count;
         if (reserved_size != 0) {
@@ -801,31 +936,19 @@ public:
         return expected_ret;
     }
 
-    IFile *m_dest;
-    off_t moffset = 0;
-    size_t raw_data_size = 0;
     size_t m_buf_size = 0;
-    const CompressArgs *m_args;
-    CompressOptions m_opt;
     ICompressor *m_compressor = nullptr;
-    bool m_ownership = false;
-    std::vector<uint32_t> m_block_len;
     unsigned char *compressed_data = nullptr;
     unsigned char *reserved_buf = nullptr;
     size_t reserved_size = 0;
-    char m_ht[CompressionFile::HeaderTrailer::SPACE]{};
-
-    UNIMPLEMENTED_POINTER(IFileSystem *filesystem() override);
-    UNIMPLEMENTED(int fstat(struct stat *buf) override);
 };
 
 // multi-processor supported zfile builder
 class ZFileBuilderMP : public ZFileBuilderBase {
 public:
     ZFileBuilderMP(IFile *file, const CompressArgs *args, bool ownership)
-        : m_dest(file), m_args(args), m_ownership(ownership) {
+        : ZFileBuilderBase(file, args, ownership) {
         m_workers = args->workers;
-        m_opt = m_args->opt;
         LOG_INFO("create multi-processor stream compressing object. [ block size: `, alog: `, enable_checksum: `, workers: `]",
                  m_opt.block_size, m_opt.algo, m_opt.verify, m_workers);
     }
@@ -836,7 +959,7 @@ public:
         bool writable = false;
         unsigned char* ibuf = nullptr;
         unsigned char* obuf = nullptr;
-        size_t size;
+        size_t size = 0;
         size_t buf_size;
         photon::semaphore writable_sem;
         photon::semaphore compress_sem;
@@ -861,16 +984,8 @@ public:
     };
 
     int init() {
-        auto pht = new (m_ht)(CompressionFile::HeaderTrailer);
-        pht->set_compress_option(m_opt);
-        LOG_INFO("write header.");
-        auto ret = write_header_trailer(m_dest, true, false, true, pht);
-        if (ret < 0) {
-            LOG_ERRNO_RETURN(0, -1, "failed to write header");
-        }
-        moffset =
-            CompressionFile::HeaderTrailer::SPACE + 0; // opt.dict_size;
-                                                       // currently dictionary is not supported.
+        if (ZFileBuilderBase::init() != 0)
+            return -1;
         m_buf_size = m_opt.block_size + BUF_SIZE;
         cur_id = 0;
         for (int i = 0; i < m_workers; i++)
@@ -942,31 +1057,7 @@ public:
         }
 
         // compress done
-        uint64_t index_offset = moffset;
-        uint64_t index_size = m_block_len.size();
-        ssize_t index_bytes = index_size * sizeof(uint32_t);
-        LOG_INFO("write index (offset: `, count: ` size: `)", index_offset, index_size, index_bytes);
-        if (m_dest->write(&m_block_len[0], index_bytes) != index_bytes) {
-            LOG_ERRNO_RETURN(0, -1, "failed to write index.");
-        }
-        auto pht = (CompressionFile::HeaderTrailer *)m_ht;
-        pht->index_crc = crc32::crc32c(&m_block_len[0], index_bytes);
-        LOG_INFO("index crc: ", pht->index_crc);
-        pht->index_offset = index_offset;
-        pht->index_size = index_size;
-        pht->original_file_size = raw_data_size;
-        LOG_INFO("write trailer.");
-        auto ret = write_header_trailer(m_dest, false, true, true, pht);
-        if (ret < 0)
-            LOG_ERRNO_RETURN(0, -1, "failed to write trailer");
-        if (m_args->overwrite_header) {
-            LOG_INFO("overwrite file header.");
-            ret = write_header_trailer(m_dest, true, false, true, pht, 0);
-            if (ret < 0) {
-                LOG_ERRNO_RETURN(0, -1, "failed to overwrite header");
-            }
-        }
-        return 0;
+        return ZFileBuilderBase::fini();
     }
 
     virtual int close() override {
@@ -988,6 +1079,8 @@ public:
     }
 
     virtual ssize_t write(const void *buf, size_t count) override {
+        if (check_input_size(raw_data_size, count, m_opt.block_size) != 0)
+            return -1;
         raw_data_size += count;
         auto expected_ret = count;
         auto ctx = workers[cur_id];
@@ -1027,21 +1120,10 @@ public:
     std::vector<WorkerCtx*> workers;
     bool m_stop_flag = false;
     int m_workers;
-    IFile *m_dest;
-    off_t moffset = 0;
-    size_t raw_data_size = 0;
     size_t m_buf_size = 0;
-    const CompressArgs *m_args;
-    CompressOptions m_opt;
-    bool m_ownership = false;
-    std::vector<uint32_t> m_block_len;
     std::vector<std::thread> ths;
     size_t reserved_size = 0;
-    char m_ht[CompressionFile::HeaderTrailer::SPACE]{};
     int cur_id;
-
-    UNIMPLEMENTED_POINTER(IFileSystem *filesystem() override);
-    UNIMPLEMENTED(int fstat(struct stat *buf) override);
 };
 
 ssize_t read_chunk(IFile *file, char *buf, off_t offset, size_t length, ssize_t *result) {
@@ -1070,22 +1152,16 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
         LOG_ERROR_RETURN(0, false, "digest verification failed.");
     }
 
-    if (pht->index_size > MAX_ZFILE_INDEX_SIZE)
-        LOG_ERROR_RETURN(0, false, "ZFile index size ` exceeds maximum `",
-                        pht->index_size + 0, MAX_ZFILE_INDEX_SIZE);
-
     struct stat stat;
     ret = file->fstat(&stat);
     if (ret < 0) {
         LOG_ERRNO_RETURN(0, false, "failed to stat file.");
     }
-    uint64_t index_bytes = 0;
+    const auto metadata_size = CompressionFile::HeaderTrailer::SPACE;
+    if (stat.st_size < (off_t)(pht->is_data_file() ? 2 * metadata_size : metadata_size))
+        LOG_ERROR_RETURN(EINVAL, false, "file is smaller than its metadata");
+    const uint64_t index_end = stat.st_size - (pht->is_data_file() ? metadata_size : 0);
     if (!pht->is_header_overwrite()) {
-        struct stat stat;
-        ret = file->fstat(&stat);
-        if (ret < 0) {
-            LOG_ERRNO_RETURN(0, false, "failed to stat file.");
-        }
         if (!pht->is_data_file()) {
             LOG_ERROR_RETURN(0, false, "uncognized file type");
         }
@@ -1096,28 +1172,47 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
             LOG_ERRNO_RETURN(0, false, "failed to read file trailer.");
 
         if (!pht->verify_magic() || !pht->is_trailer() || !pht->is_data_file() ||
-            !pht->is_sealed()) {
-            LOG_ERROR_RETURN(0, false,
-                             "trailer magic, trailer type, file type or sealedness doesn't match");
+            !pht->is_sealed() || !pht->is_valid()) {
+            LOG_ERROR_RETURN(0, false, "invalid file trailer");
         }
-
-        if (pht->index_size > MAX_ZFILE_INDEX_SIZE)
-            LOG_ERROR_RETURN(0, false, "ZFile index size ` exceeds maximum `",
-                             pht->index_size + 0, MAX_ZFILE_INDEX_SIZE);
-
-        index_bytes = pht->index_size * sizeof(uint32_t);
-        LOG_INFO("trailer_offset: `, idx_offset: `, idx_bytes: `, dict_size: `, use_dict: `",
-                 trailer_offset, pht->index_offset, index_bytes, pht->opt.dict_size,
-                 pht->opt.use_dict);
-
-        if (index_bytes > trailer_offset - pht->index_offset)
-            LOG_ERROR_RETURN(0, false, "invalid index bytes or size. ");
-    } else {
-        index_bytes = pht->index_size * sizeof(uint32_t);
-        LOG_INFO("read overwrite header. idx_offset: `, idx_bytes: `, dict_size: `, use_dict: `",
-                 pht->index_offset, index_bytes, pht->opt.dict_size, pht->opt.use_dict);
     }
-    auto ibuf = std::unique_ptr<uint32_t[]>(new uint32_t[pht->index_size]);
+    const uint32_t block_size = pht->opt.block_size;
+    if (block_size == 0 || block_size > MAX_READ_SIZE ||
+        (block_size & (block_size - 1)) != 0)
+        LOG_ERROR_RETURN(EINVAL, false, "invalid block size");
+    const bool compressed = pht->is_index_compressed();
+    // Division plus remainder avoids overflow from rounding up by addition.
+    const uint64_t entry_count = pht->original_file_size / block_size +
+                                 (pht->original_file_size % block_size != 0);
+    if (entry_count > MAX_ZFILE_INDEX_SIZE ||
+        entry_count > (size_t)std::numeric_limits<ssize_t>::max() / sizeof(uint32_t))
+        LOG_ERROR_RETURN(EINVAL, false, "index entry count exceeds maximum");
+    if (!compressed && pht->index_size != entry_count)
+        LOG_ERROR_RETURN(EINVAL, false, "index entry count does not match original file size");
+    const uint64_t raw_bytes = entry_count * sizeof(uint32_t);
+    const uint64_t index_bytes = compressed ? pht->index_size : raw_bytes;
+    const uint64_t data_offset = CompressionFile::HeaderTrailer::SPACE +
+                                 (uint64_t)pht->opt.dict_size;
+    if (pht->index_offset < data_offset ||
+        pht->index_offset > index_end || index_bytes > index_end - pht->index_offset)
+        LOG_ERROR_RETURN(EINVAL, false, "index lies outside file bounds");
+    // Every block needs at least one payload byte in addition to its optional CRC.
+    const size_t min_block_bytes = 1 + (pht->opt.verify ? sizeof(uint32_t) : 0);
+    if (pht->is_data_file() && entry_count > (pht->index_offset - data_offset) / min_block_bytes)
+        LOG_ERROR_RETURN(EINVAL, false, "not enough data for index entry count");
+    if (compressed) {
+        if (pht->opt.algo != CompressOptions::LZ4 && pht->opt.algo != CompressOptions::ZSTD)
+            LOG_ERROR_RETURN(EINVAL, false, "unsupported index compression algorithm");
+        if (index_bytes == 0 || index_bytes > INT_MAX || raw_bytes == 0 || raw_bytes > INT_MAX)
+            LOG_ERROR_RETURN(EINVAL, false, "invalid compressed index size");
+        if (pht->opt.algo == CompressOptions::LZ4 && raw_bytes > LZ4_MAX_INPUT_SIZE)
+            LOG_ERROR_RETURN(EINVAL, false, "index exceeds LZ4 input limit");
+    }
+    auto ibuf = std::unique_ptr<uint32_t[]>(new uint32_t[entry_count]);
+    std::vector<unsigned char> compressed_buf;
+    if (compressed)
+        compressed_buf.resize(index_bytes);
+    char *read_buf = compressed ? (char *)compressed_buf.data() : (char *)ibuf.get();
     LOG_DEBUG("index_offset: `", pht->index_offset);
 
     size_t delta = 1UL<<20;
@@ -1127,7 +1222,7 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
     int idx = 0;
     for (off_t offset = 0; offset < (off_t)index_bytes; offset += delta) {
         size_t chunk_size = std::min(index_bytes - offset, delta);
-        auto th = photon::thread_create11(&ZFile::read_chunk, file, (char*)ibuf.get() + offset, pht->index_offset + offset, chunk_size, &r[idx++]);
+        auto th = photon::thread_create11(&ZFile::read_chunk, file, read_buf + offset, pht->index_offset + offset, chunk_size, &r[idx++]);
         ths.push_back(photon::thread_enable_join(th));
     }
     ret = 0;
@@ -1142,19 +1237,22 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
     }
     if (pht->is_digest_enabled()) {
         LOG_INFO("check jumptable CRC32 (` expected)", HEX(pht->index_crc).width(8));
-        auto crc = crc32::crc32c(ibuf.get(), index_bytes);
+        auto crc = index_bytes ? crc32::crc32c(read_buf, index_bytes) : 0;
         if (crc != pht->index_crc) {
             LOG_ERRNO_RETURN(0, false, "checksum of jumptable is incorrect. {got: `, expected: `}",
                  HEX(crc).width(8),  HEX(pht->index_crc).width(8)
             );
         }
     }
-    ret = jump_table.build(ibuf.get(), pht->index_size,
-                           CompressionFile::HeaderTrailer::SPACE + pht->opt.dict_size,
-                           pht->opt.block_size, pht->opt.verify);
+    if (compressed && decompress_index_buffer(read_buf, index_bytes, ibuf.get(),
+                                               raw_bytes, pht->opt.algo) != 0)
+        LOG_ERRNO_RETURN(0, false, "failed to decompress index");
+    ret = jump_table.build(ibuf.get(), entry_count, data_offset, block_size, pht->opt.verify);
     if (ret != 0) {
         LOG_ERRNO_RETURN(0, false, "failed to build jump table");
     }
+    if (pht->is_data_file() && (uint64_t)jump_table[entry_count] != pht->index_offset)
+        LOG_ERROR_RETURN(EINVAL, false, "data block lengths do not match index offset");
 
     if (pheader_trailer)
         *pheader_trailer = *pht;
@@ -1240,20 +1338,13 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     DEFER(delete compressor);
     if (compressor == nullptr)
         return -1;
-    char buf[CompressionFile::HeaderTrailer::SPACE] = {};
-    auto pht = new (buf) CompressionFile::HeaderTrailer;
-    pht->set_compress_option(opt);
-    LOG_INFO("write header.");
-    auto ret = write_header_trailer(as, true, false, true, pht);
-    if (ret < 0) {
-        LOG_ERRNO_RETURN(0, -1, "failed to write header");
-    }
+    ZFileBuilderBase builder(as, args, false);
+    if (builder.init() != 0)
+        return -1;
     auto block_size = opt.block_size;
     LOG_INFO("block size: `", block_size);
     auto buf_size = block_size + BUF_SIZE;
     bool crc32_verify = opt.verify;
-    std::vector<uint32_t> block_len{};
-    uint64_t moffset = CompressionFile::HeaderTrailer::SPACE + opt.dict_size;
     int nbatch = compressor->nbatch();
     LOG_DEBUG("nbatch: `, buffer need allocate: `", nbatch, nbatch * buf_size);
     auto raw_data = new unsigned char[nbatch * buf_size];
@@ -1264,17 +1355,25 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
     compressed_len.resize(nbatch);
     raw_chunk_len.resize(nbatch);
     LOG_INFO("compress with start....");
-    off_t infile_size = 0;
     while (true) {
         int n = 0;
-        auto readn = file->read(raw_data, block_size * nbatch);
+        // Only the final block may be short, including when reading from a pipe.
+        ssize_t readn = 0;
+        const size_t batch_size = (size_t)block_size * nbatch;
+        while ((size_t)readn < batch_size) {
+            auto ret = file->read(raw_data + readn, batch_size - readn);
+            if (ret < 0)
+                LOG_ERRNO_RETURN(0, -1, "failed to read from source file");
+            if (ret == 0)
+                break;
+            readn += ret;
+        }
         if (readn == 0) {
             break;
         }
-        if (readn < 0) {
-            LOG_ERRNO_RETURN(0, -1, "failed to read from source file. (readn: `)", readn);
-        }
-        infile_size += readn;
+        if (check_input_size(builder.raw_data_size, readn, block_size) != 0)
+            return -1;
+        builder.raw_data_size += readn;
         while (readn > 0) {
             if (readn < block_size) {
                 raw_chunk_len[n++] = readn;
@@ -1295,42 +1394,19 @@ int zfile_compress(IFile *file, IFile *as, const CompressArgs *args) {
             if (crc32_verify) {
                 auto crc32_code = crc32c_salt(&compressed_data[j * buf_size], compressed_len[j]);
                 LOG_DEBUG("append ` bytes crc32_code: {offset: `, count: `, crc32: `}",
-                          sizeof(uint32_t), moffset, compressed_len[j], HEX(crc32_code).width(8));
+                          sizeof(uint32_t), builder.moffset, compressed_len[j], HEX(crc32_code).width(8));
                 compressed_len[j] += sizeof(uint32_t);
                 readn = as->write(&crc32_code, sizeof(uint32_t));
                 if (readn < (ssize_t)sizeof(uint32_t)) {
                     LOG_ERRNO_RETURN(0, -1, "failed to write crc32code, offset: `, crc32: `",
-                                     moffset, HEX(crc32_code).width(8));
+                                     builder.moffset, HEX(crc32_code).width(8));
                 }
             }
-            block_len.push_back(compressed_len[j]);
-            moffset += compressed_len[j];
+            builder.m_block_len.push_back(compressed_len[j]);
+            builder.moffset += compressed_len[j];
         }
     }
-    uint64_t index_offset = moffset;
-    uint64_t index_size = block_len.size();
-    ssize_t index_bytes = index_size * sizeof(uint32_t);
-    LOG_INFO("write index (offset: `, count: ` size: `)", index_offset, index_size, index_bytes);
-    if (as->write(&block_len[0], index_bytes) != index_bytes) {
-        LOG_ERRNO_RETURN(0, -1, "failed to write index.");
-    }
-    pht->index_crc = crc32::crc32c(&block_len[0], index_bytes);
-    LOG_INFO("index checksum: `", HEX(pht->index_crc).width(8));
-    pht->index_offset = index_offset;
-    pht->index_size = index_size;
-    pht->original_file_size = infile_size;
-    LOG_INFO("write trailer. (source file size: `)", infile_size);
-    ret = write_header_trailer(as, false, true, true, pht);
-    if (ret < 0)
-        LOG_ERRNO_RETURN(0, -1, "failed to write trailer");
-    if (args->overwrite_header) {
-        LOG_INFO("overwrite file header.");
-        ret = write_header_trailer(as, true, false, true, pht, 0);
-        if (ret < 0) {
-            LOG_ERRNO_RETURN(0, -1, "failed to overwrite header");
-        }
-    }
-    return 0;
+    return builder.fini();
 }
 
 int zfile_decompress(IFile *src, IFile *dst) {
