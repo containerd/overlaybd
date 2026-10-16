@@ -63,15 +63,14 @@ int create_overlaybd(const std::string &srv_config, const std::string &dev_confi
 // the extraction target is the ext4 image itself, mounted at its own root, so
 // the fs is used as is -- wrapping it in a subfs("/") would prepend a slash to
 // already rooted names and turn "/x" into "//x", which namei() cannot resolve
-photon::fs::IFileSystem *create_ext4fs(photon::fs::IFile *imgfile, bool mkfs, bool enable_buffer) {
+photon::fs::IFileSystem *create_ext4fs(photon::fs::IFile *imgfile, bool mkfs) {
     if (mkfs) {
         if (make_extfs(imgfile) < 0) {
             fprintf(stderr, "mkfs failed, %s\n", strerror(errno));
             exit(-1);
         }
     }
-    // for now, buffer_file can't be used with turboOCI
-    auto extfs = new_extfs(imgfile, enable_buffer);
+    auto extfs = new_extfs_with_buffer(imgfile, 128 << 20, 4 << 10);
     if (!extfs) {
         fprintf(stderr, "new extfs failed, %s\n", strerror(errno));
         exit(-1);

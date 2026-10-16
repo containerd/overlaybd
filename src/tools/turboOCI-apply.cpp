@@ -125,7 +125,6 @@ int main(int argc, char **argv) {
         delete imgservice;
     });
 
-    // for now, buffer_file can't be used with turboOCI
     if (fstype == "erofs") {
         ImageConfigNS::ImageConfig cfg;
         if (!cfg.ParseJSON(image_config_path)) {
@@ -139,7 +138,7 @@ int main(int argc, char **argv) {
             exit(-1);
         }
     } else {
-        auto target = create_ext4fs(imgfile, mkfs, false);
+        auto target = create_ext4fs(imgfile, mkfs);
         DEFER({ delete target; });
 
         photon::fs::IFile *base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
