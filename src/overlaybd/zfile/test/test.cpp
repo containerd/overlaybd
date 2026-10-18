@@ -671,16 +671,19 @@ TEST_F(ZFileTest, index_compression_rejects_oversized_builder_write) {
 TEST_F(ZFileTest, index_compression_codec_boundaries) {
     for (auto algo : {CompressOptions::LZ4, CompressOptions::ZSTD}) {
         std::vector<unsigned char> encoded;
-        EXPECT_EQ(compress_index_buffer(nullptr, 0, algo, encoded), 0);
-        EXPECT_EQ(compress_index_buffer(nullptr, (size_t)INT_MAX + 1, algo, encoded), 0);
+        EXPECT_EQ(ZFileBuilderBase::compress_index_buffer(nullptr, 0, algo, encoded), 0);
+        EXPECT_EQ(ZFileBuilderBase::compress_index_buffer(
+                      nullptr, (size_t)INT_MAX + 1, algo, encoded), 0);
         uint32_t tiny = 123;
-        EXPECT_EQ(compress_index_buffer(&tiny, sizeof(tiny), algo, encoded), 0);
+        EXPECT_EQ(ZFileBuilderBase::compress_index_buffer(&tiny, sizeof(tiny), algo, encoded), 0);
         for (size_t count : {size_t(100), size_t(4096), size_t(32768)}) {
             std::vector<uint32_t> raw(count, 123), restored(count);
-            ASSERT_EQ(compress_index_buffer(raw.data(), count * 4, algo, encoded), 1);
-            EXPECT_EQ(decompress_index_buffer(encoded.data(), encoded.size(), restored.data(), count * 4, algo), 0);
+            ASSERT_EQ(ZFileBuilderBase::compress_index_buffer(raw.data(), count * 4, algo, encoded), 1);
+            EXPECT_EQ(ZFileBuilderBase::decompress_index_buffer(
+                          encoded.data(), encoded.size(), restored.data(), count * 4, algo), 0);
             EXPECT_EQ(raw, restored);
-            EXPECT_EQ(decompress_index_buffer(encoded.data(), encoded.size(), restored.data(), count * 4 - 4, algo), -1);
+            EXPECT_EQ(ZFileBuilderBase::decompress_index_buffer(
+                          encoded.data(), encoded.size(), restored.data(), count * 4 - 4, algo), -1);
         }
     }
 }

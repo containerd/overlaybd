@@ -680,86 +680,6 @@ ssize_t compress_data(ICompressor *compressor, const unsigned char *buf, size_t 
     return compressed_len;
 }
 
-// Whole-index codecs use CPU routines: data-block/QAT buffer limits do not apply.
-// Return 1 for compressed output, 0 to keep the original, or -1 on codec error.
-static int compress_index_buffer(const void *src, size_t size, uint8_t algo,
-                                 std::vector<unsigned char> &dst) {
-    dst.clear();
-    if (algo != CompressOptions::LZ4 && algo != CompressOptions::ZSTD) {
-        errno = EINVAL;
-        return -1;
-    }
-    // A raw index remains valid even when a single codec call cannot represent it.
-    if (size == 0 || size > INT_MAX ||
-        (algo == CompressOptions::LZ4 && size > LZ4_MAX_INPUT_SIZE))
-        return 0;
-    size_t bound = algo == CompressOptions::LZ4
-                       ? (size_t)LZ4_compressBound((int)size) : ZSTD_compressBound(size);
-    if (bound == 0 || bound > INT_MAX)
-        return 0;
-    dst.resize(bound);
-    size_t written;
-    if (algo == CompressOptions::LZ4) {
-        int ret = LZ4_compress_default((const char *)src, (char *)dst.data(),
-                                       (int)size, (int)bound);
-        if (ret <= 0) {
-            errno = EIO;
-            return -1;
-        }
-        written = ret;
-    } else {
-        // Match Compressor_zstd's current data compression level.
-        written = ZSTD_compress(dst.data(), bound, src, size, 3);
-        if (ZSTD_isError(written)) {
-            errno = EIO;
-            return -1;
-        }
-    }
-    if (written >= size) {
-        dst.clear();
-        return 0;
-    }
-    dst.resize(written);
-    return 1;
-}
-
-// A successful decode must restore exactly the expected index byte count.
-static int decompress_index_buffer(const void *src, size_t size, void *dst,
-                                   size_t expected, uint8_t algo) {
-    if (size == 0 || expected == 0 || size > INT_MAX || expected > INT_MAX) {
-        errno = EINVAL;
-        return -1;
-    }
-    size_t written;
-    if (algo == CompressOptions::LZ4) {
-        if (expected > LZ4_MAX_INPUT_SIZE) {
-            errno = EINVAL;
-            return -1;
-        }
-        int ret = LZ4_decompress_safe((const char *)src, (char *)dst,
-                                     (int)size, (int)expected);
-        if (ret < 0) {
-            errno = EIO;
-            return -1;
-        }
-        written = ret;
-    } else if (algo == CompressOptions::ZSTD) {
-        written = ZSTD_decompress(dst, expected, src, size);
-        if (ZSTD_isError(written)) {
-            errno = EIO;
-            return -1;
-        }
-    } else {
-        errno = EINVAL;
-        return -1;
-    }
-    if (written != expected) {
-        errno = EIO;
-        return -1;
-    }
-    return 0;
-}
-
 // Check before buffering or queueing data, not after the index has already grown.
 static int check_input_size(uint64_t current_size, size_t count, uint32_t block_size) {
     const uint64_t max_size = MAX_ZFILE_INDEX_SIZE * (uint64_t)block_size;
@@ -770,6 +690,86 @@ static int check_input_size(uint64_t current_size, size_t count, uint32_t block_
 
 class ZFileBuilderBase : public VirtualReadOnlyFile {
 public:
+    // Whole-index codecs use CPU routines: data-block/QAT buffer limits do not apply.
+    // Return 1 for compressed output, 0 to keep the original, or -1 on codec error.
+    static int compress_index_buffer(const void *src, size_t size, uint8_t algo,
+                                     std::vector<unsigned char> &dst) {
+        dst.clear();
+        if (algo != CompressOptions::LZ4 && algo != CompressOptions::ZSTD) {
+            errno = EINVAL;
+            return -1;
+        }
+        // A raw index remains valid even when a single codec call cannot represent it.
+        if (size == 0 || size > INT_MAX ||
+            (algo == CompressOptions::LZ4 && size > LZ4_MAX_INPUT_SIZE))
+            return 0;
+        size_t bound = algo == CompressOptions::LZ4
+                           ? (size_t)LZ4_compressBound((int)size) : ZSTD_compressBound(size);
+        if (bound == 0 || bound > INT_MAX)
+            return 0;
+        dst.resize(bound);
+        size_t written;
+        if (algo == CompressOptions::LZ4) {
+            int ret = LZ4_compress_default((const char *)src, (char *)dst.data(),
+                                           (int)size, (int)bound);
+            if (ret <= 0) {
+                errno = EIO;
+                return -1;
+            }
+            written = ret;
+        } else {
+            // Match Compressor_zstd's current data compression level.
+            written = ZSTD_compress(dst.data(), bound, src, size, 3);
+            if (ZSTD_isError(written)) {
+                errno = EIO;
+                return -1;
+            }
+        }
+        if (written >= size) {
+            dst.clear();
+            return 0;
+        }
+        dst.resize(written);
+        return 1;
+    }
+
+    // A successful decode must restore exactly the expected index byte count.
+    static int decompress_index_buffer(const void *src, size_t size, void *dst,
+                                       size_t expected, uint8_t algo) {
+        if (size == 0 || expected == 0 || size > INT_MAX || expected > INT_MAX) {
+            errno = EINVAL;
+            return -1;
+        }
+        size_t written;
+        if (algo == CompressOptions::LZ4) {
+            if (expected > LZ4_MAX_INPUT_SIZE) {
+                errno = EINVAL;
+                return -1;
+            }
+            int ret = LZ4_decompress_safe((const char *)src, (char *)dst,
+                                         (int)size, (int)expected);
+            if (ret < 0) {
+                errno = EIO;
+                return -1;
+            }
+            written = ret;
+        } else if (algo == CompressOptions::ZSTD) {
+            written = ZSTD_decompress(dst, expected, src, size);
+            if (ZSTD_isError(written)) {
+                errno = EIO;
+                return -1;
+            }
+        } else {
+            errno = EINVAL;
+            return -1;
+        }
+        if (written != expected) {
+            errno = EIO;
+            return -1;
+        }
+        return 0;
+    }
+
     ZFileBuilderBase(IFile *file, const CompressArgs *args, bool ownership)
         : m_dest(file), m_args(args), m_opt(args->opt), m_ownership(ownership) {}
 
@@ -1244,8 +1244,9 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
             );
         }
     }
-    if (compressed && decompress_index_buffer(read_buf, index_bytes, ibuf.get(),
-                                               raw_bytes, pht->opt.algo) != 0)
+    if (compressed &&
+        ZFileBuilderBase::decompress_index_buffer(read_buf, index_bytes, ibuf.get(),
+                                                raw_bytes, pht->opt.algo) != 0)
         LOG_ERRNO_RETURN(0, false, "failed to decompress index");
     ret = jump_table.build(ibuf.get(), entry_count, data_offset, block_size, pht->opt.verify);
     if (ret != 0) {
