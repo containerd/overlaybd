@@ -309,8 +309,10 @@ public:
     }
 
     virtual int setAccelerateAddress(const char* addr = "") override {
-        m_accelerate = estring(addr);
-        m_accelerator_probe_failures.clear();
+        if (m_accelerate.compare(addr) != 0) {
+            m_accelerate = estring(addr);
+            m_accelerator_probe_failures.clear();
+        }
         return 0;
     }
 
