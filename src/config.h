@@ -154,6 +154,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(download, DownloadConfig);
     APPCFG_PARA(enableAudit, bool, true);
     APPCFG_PARA(workpoolSize, uint32_t, 8);
+    APPCFG_PARA(ublkThreadPoolSize, uint32_t, 32);
     APPCFG_PARA(p2pConfig, P2PConfig);
     APPCFG_PARA(exporterConfig, ExporterConfig);
     APPCFG_PARA(auditPath, std::string, "/var/log/overlaybd-audit.log");
