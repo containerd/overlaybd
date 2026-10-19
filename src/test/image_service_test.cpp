@@ -30,6 +30,11 @@
 
 #include <unistd.h>
 #include <fcntl.h>
+#include <dirent.h>
+#include <fstream>
+#include <memory>
+#include <thread>
+#include <photon/thread/thread11.h>
 
 #include "../image_service.cpp"
 #include "../image_service.h"
@@ -539,6 +544,154 @@ TEST_F(CreateSnapshotTest, create_snapshot_failed) {
 
     delete imgfile;
 }
+
+namespace {
+std::string upper_test_directory() {
+    const char *base = getenv("OBD_TEST_TMPDIR");
+    std::string path = std::string(base ? base : "/tmp") + "/upper-engine-XXXXXX";
+    std::vector<char> name(path.begin(), path.end());
+    name.push_back(0);
+    auto result = mkdtemp(name.data());
+    return result ? result : "";
+}
+
+int upper_fd_flags(const std::string &path) {
+    auto directory = opendir("/proc/self/fd");
+    if (!directory) return -1;
+    DEFER(closedir(directory));
+    while (auto entry = readdir(directory)) {
+        char *end;
+        int fd = strtol(entry->d_name, &end, 10);
+        if (*end || end == entry->d_name) continue;
+        char name[PATH_MAX];
+        auto link = std::string("/proc/self/fd/") + entry->d_name;
+        auto length = readlink(link.c_str(), name, sizeof(name) - 1);
+        if (length < 0) continue;
+        name[length] = 0;
+        if (path == name) return fcntl(fd, F_GETFL);
+    }
+    return -1;
+}
+
+void check_upper_engine(uint32_t engine, bool sparse) {
+    std::thread worker([=] {
+        auto directory = upper_test_directory();
+        ASSERT_FALSE(directory.empty());
+        auto data = directory + "/data";
+        auto index = directory + "/index";
+        auto service_path = directory + "/service.json";
+        auto image_path = directory + "/image.json";
+        {
+            std::ofstream service(service_path);
+            service << "{\"ioEngine\":" << engine
+                    << ",\"enableAudit\":false,\"logPath\":\"\",\"logLevel\":2,"
+                    << "\"cacheConfig\":{\"cacheType\":\"file\",\"cacheDir\":\""
+                    << directory << "/cache\"},\"gzipCacheConfig\":{\"enable\":false}}";
+            std::ofstream image(image_path);
+            image << "{\"lowers\":[],\"upper\":{\"data\":\"" << data
+                  << "\",\"index\":\"" << index << "\"}}";
+        }
+        ASSERT_EQ(photon::init(photon::INIT_EVENT_EPOLL,
+                               photon::INIT_IO_LIBCURL | photon::INIT_IO_LIBAIO), 0);
+        DEFER(photon::fini());
+        {
+            std::unique_ptr<IFile> fdata(open_localfile_adaptor(data.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600));
+            std::unique_ptr<IFile> findex(open_localfile_adaptor(index.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600));
+            ASSERT_NE(fdata, nullptr);
+            ASSERT_NE(findex, nullptr);
+            LSMT::LayerInfo info(fdata.get(), findex.get());
+            info.virtual_size = 1 << 20;
+            info.rw_type = sparse ? LSMT::RWType::Sparse : LSMT::RWType::Hybrid;
+            std::unique_ptr<LSMT::IFileRW> layer(LSMT::create_file_rw(info, false));
+            ASSERT_NE(layer, nullptr);
+        }
+        std::unique_ptr<ImageService> service(create_image_service(service_path.c_str()));
+        ASSERT_NE(service, nullptr);
+        std::unique_ptr<ImageFile> image(service->create_image_file(image_path.c_str(), ""));
+        ASSERT_NE(image, nullptr);
+        auto data_flags = upper_fd_flags(data);
+        auto index_flags = upper_fd_flags(index);
+        ASSERT_GE(data_flags, 0);
+        ASSERT_GE(index_flags, 0);
+        EXPECT_EQ(bool(data_flags & O_DIRECT), engine == ioengine_libaio);
+        EXPECT_EQ(index_flags & O_DIRECT, 0);
+        std::vector<char> input(4097, 'A'), output(4097, 0);
+        iovec iov{input.data() + 1, 512};
+        iovec read_iov{output.data() + 1, 512};
+        ASSERT_EQ(image->pwritev(&iov, 1, 0), 512);
+        ASSERT_EQ(image->preadv(&read_iov, 1, 0), 512);
+        EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 512), 0);
+        iov.iov_len = read_iov.iov_len = 4096;
+        ASSERT_EQ(image->pwritev(&iov, 1, 0), 4096);
+        ASSERT_EQ(image->preadv(&read_iov, 1, 0), 4096);
+        EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 4096), 0);
+        iovec split[2]{{input.data() + 1, 512}, {input.data() + 513, 3584}};
+        ASSERT_EQ(image->pwritev(split, 2, 4096), 4096);
+        iovec read_split[2]{{output.data() + 1, 1536}, {output.data() + 1537, 2560}};
+        ASSERT_EQ(image->preadv(read_split, 2, 4096), 4096);
+        EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 4096), 0);
+        iov.iov_len = 512;
+        ASSERT_EQ(image->pwritev(&iov, 1, (1 << 20) - 512), 512);
+        read_iov.iov_len = 512;
+        ASSERT_EQ(image->preadv(&read_iov, 1, (1 << 20) - 512), 512);
+        EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 512), 0);
+        std::vector<photon::join_handle *> writers;
+        std::atomic<int> failures{0};
+        for (int slot = 0; slot < 8; ++slot) {
+            auto thread = photon::thread_create11([&, slot] {
+                std::vector<char> buffer(513, 'a' + slot);
+                iovec part{buffer.data() + 1, 512};
+                for (int n = 0; n < 32; ++n)
+                    if (image->pwritev(&part, 1, 8192 + slot * 512) != 512) ++failures;
+            });
+            writers.push_back(photon::thread_enable_join(thread));
+        }
+        for (auto thread : writers) photon::thread_join(thread);
+        ASSERT_EQ(failures.load(), 0);
+        read_iov.iov_len = 4096;
+        ASSERT_EQ(image->preadv(&read_iov, 1, 8192), 4096);
+        for (int slot = 0; slot < 8; ++slot)
+            for (int byte = 0; byte < 512; ++byte)
+                ASSERT_EQ(output[1 + slot * 512 + byte], 'a' + slot);
+        int last_writer = -1;
+        writers.clear();
+        for (int writer = 0; writer < 2; ++writer) {
+            auto thread = photon::thread_create11([&, writer] {
+                std::vector<char> buffer(4097, writer ? 'D' : 'C');
+                iovec part{buffer.data() + 1, writer ? size_t(512) : size_t(4096)};
+                for (int n = 0; n < 32; ++n) {
+                    if (image->pwritev(&part, 1, 16384 + (writer ? 512 : 0)) != (ssize_t)part.iov_len)
+                        ++failures;
+                    last_writer = writer;
+                }
+            });
+            writers.push_back(photon::thread_enable_join(thread));
+        }
+        for (auto thread : writers) photon::thread_join(thread);
+        ASSERT_EQ(failures.load(), 0);
+        ASSERT_EQ(image->preadv(&read_iov, 1, 16384), 4096);
+        for (int byte = 0; byte < 4096; ++byte)
+            ASSERT_EQ(output[byte + 1], last_writer == 1 && byte >= 512 && byte < 1024 ? 'D' : 'C');
+        ASSERT_EQ(image->fdatasync(), 0);
+        image.reset();
+        image.reset(service->create_image_file(image_path.c_str(), ""));
+        ASSERT_NE(image, nullptr);
+        ASSERT_EQ(image->preadv(&read_iov, 1, 8192), 4096);
+        for (int slot = 0; slot < 8; ++slot)
+            for (int byte = 0; byte < 512; ++byte)
+                ASSERT_EQ(output[1 + slot * 512 + byte], 'a' + slot);
+        read_iov.iov_len = 512;
+        ASSERT_EQ(image->preadv(&read_iov, 1, (1 << 20) - 512), 512);
+        EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 512), 0);
+    });
+    worker.join();
+}
+}
+
+TEST(UpperIOEngine, HybridPsync) { check_upper_engine(ioengine_psync, false); }
+TEST(UpperIOEngine, SparsePsync) { check_upper_engine(ioengine_psync, true); }
+TEST(UpperIOEngine, HybridLibaio) { check_upper_engine(ioengine_libaio, false); }
+TEST(UpperIOEngine, SparseLibaio) { check_upper_engine(ioengine_libaio, true); }
 
 int main(int argc, char** argv) {
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);

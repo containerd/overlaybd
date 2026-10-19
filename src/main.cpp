@@ -486,7 +486,7 @@ int main(int argc, char **argv) {
         pool_size = 1;
     }
     io_work_pool = new TCMUWorkPool(pool_size, photon::INIT_EVENT_EPOLL,
-                                    photon::INIT_IO_LIBCURL);
+                                    photon::INIT_IO_LIBCURL | photon::INIT_IO_LIBAIO);
     DEFER(safe_delete(io_work_pool));
     LOG_INFO("I/O work pool initialized with ` workers", pool_size);
 

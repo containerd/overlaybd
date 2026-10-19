@@ -231,7 +231,8 @@ static const char *rw_type_name(RWType type) {
 }
 
 static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, bool is_data_file,
-                                uint64_t index_offset, uint64_t index_size, const LayerInfo &args) {
+                                uint64_t index_offset, uint64_t index_size, const LayerInfo &args,
+                                off_t write_offset = -1) {
     ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
     memset(buf, 0, HeaderTrailer::SPACE);
     auto pht = new (buf) HeaderTrailer;
@@ -270,6 +271,8 @@ static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, boo
     if (args.parent_uuid.is_null()) {
         LOG_WARN("parent_uuid is null.");
     }
+    if (write_offset >= 0)
+        return (int)file->pwrite(buf, HeaderTrailer::SPACE, write_offset);
     return (int)file->write(buf, HeaderTrailer::SPACE);
 }
 
@@ -869,7 +872,10 @@ public:
     // returns appended offset when success, 0 therwise
     static off_t append(IFile *file, const void *buf, size_t count) {
         off_t pos = file->lseek(0, SEEK_END);
-        ssize_t ret = file->write(buf, count);
+        if (pos < 0)
+            LOG_ERRNO_RETURN(0, 0, "seek to end failed, file:`", file);
+        // Positioned writes keep alignment adaptors in the I/O path.
+        ssize_t ret = file->pwrite(buf, count, pos);
         if (ret < (ssize_t)count) {
             LOG_ERRNO_RETURN(0, 0, "write failed, file:`, ret:`, pos:`, count:`", file, ret, pos,
                              count);
@@ -1095,7 +1101,7 @@ public:
         uint64_t index_offset = m_files[m_rw_tag]->lseek(0, SEEK_END);
         ssize_t index_bytes = index_size * sizeof(SegmentMapping);
         index_bytes = (index_bytes + ALIGNMENT - 1) / ALIGNMENT * ALIGNMENT;
-        auto ret = m_files[m_rw_tag]->write(mapping.get(), index_bytes);
+        auto ret = m_files[m_rw_tag]->pwrite(mapping.get(), index_bytes, index_offset);
         if (ret < index_bytes)
             LOG_ERRNO_RETURN(0, -1, "failed to write index.");
 
@@ -1103,7 +1109,7 @@ public:
         if (load_layer_info(&m_files[m_rw_tag], 1, layer, true) != 0)
             return -1;
         ret = write_header_trailer(m_files[m_rw_tag], false, true, true, index_offset, index_size,
-                                   layer);
+                                   layer, index_offset + index_bytes);
         if (ret < 0)
             LOG_ERRNO_RETURN(0, -1, "failed to write trailer.");
         if (reopen_as) {

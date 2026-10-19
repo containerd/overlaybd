@@ -244,7 +244,7 @@ struct UblkDevice::SwapRequest {
 
 void UblkDevice::queue_loop(const struct ublksrv_dev *dev, photon::semaphore *started,
                             int *init_ret) {
-    photon::init(photon::INIT_EVENT_EPOLL, photon::INIT_IO_LIBCURL);
+    photon::init(photon::INIT_EVENT_EPOLL, photon::INIT_IO_LIBCURL | photon::INIT_IO_LIBAIO);
     DEFER(photon::fini());
 
     photon::ThreadPool<32> pool;
