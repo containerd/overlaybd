@@ -30,6 +30,12 @@
 
 #include <unistd.h>
 #include <fcntl.h>
+#include <array>
+#include <cstdlib>
+#include <fstream>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <sys/uio.h>
 
 #include "../image_service.cpp"
 #include "../image_service.h"
@@ -182,6 +188,225 @@ TEST_F(DevIDGetTest, get_dev_id) {
     EXPECT_EQ(dev_id, "");
 }
 
+class LazyUpperTest : public ::testing::Test {
+protected:
+    std::string dir;
+    std::string data;
+    std::string index;
+    ImageConfigNS::ImageConfig config;
+    ImageService service;
+
+    bool configure_upper(bool create, const std::string &data_path,
+                         const std::string &index_path) {
+        return config.ParseJSONStream(
+            "{\"upper\":{\"create\":" + std::string(create ? "true" : "false") +
+            ",\"data\":\"" + data_path + "\",\"index\":\"" + index_path +
+            "\",\"vsize\":1}}");
+    }
+
+    void SetUp() override {
+        char name[] = "/tmp/overlaybd-lazy-upper-XXXXXX";
+        auto created = ::mkdtemp(name);
+        ASSERT_NE(created, nullptr);
+        dir = created;
+        data = dir + "/layer-content.bin";
+        index = dir + "/layer-map.idx";
+        ASSERT_TRUE(service.global_conf.ParseJSONStream("{}"));
+        ASSERT_TRUE(configure_upper(true, data, index));
+    }
+
+    void TearDown() override {
+        if (dir.empty())
+            return;
+        ::unlink(data.c_str());
+        ::unlink(index.c_str());
+        ::rmdir(dir.c_str());
+    }
+};
+
+TEST_F(LazyUpperTest, create_opens_existing_pair_without_truncating) {
+    std::array<char, 4096> written;
+    written.fill('x');
+    struct iovec write_io = {written.data(), written.size()};
+
+    {
+        ImageFile image(config, service, "", "");
+        ASSERT_EQ(image.m_status, 1);
+        ASSERT_EQ(image.pwritev(&write_io, 1, 0), (ssize_t)written.size());
+    }
+
+    {
+        ImageFile image(config, service, "", "");
+        ASSERT_EQ(image.m_status, 1);
+        std::array<char, 4096> read{};
+        struct iovec read_io = {read.data(), read.size()};
+        ASSERT_EQ(image.preadv(&read_io, 1, 0), (ssize_t)read.size());
+        EXPECT_EQ(read, written);
+    }
+
+    std::array<char, 4096> read{};
+    struct iovec read_io = {read.data(), read.size()};
+    ASSERT_TRUE(configure_upper(false, data, index));
+    {
+        ImageFile image(config, service, "", "");
+        ASSERT_EQ(image.m_status, 1);
+        ASSERT_EQ(image.preadv(&read_io, 1, 0), (ssize_t)read.size());
+    }
+    EXPECT_EQ(read, written);
+}
+
+TEST_F(LazyUpperTest, waits_for_upper_initialization) {
+    int dir_fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    ASSERT_GE(dir_fd, 0);
+    DEFER(::close(dir_fd));
+    ASSERT_EQ(::flock(dir_fd, LOCK_EX | LOCK_NB), 0);
+    std::ofstream(data).close();
+    std::ofstream(index).close();
+    ASSERT_EQ(::access(data.c_str(), F_OK), 0);
+    ASSERT_EQ(::access(index.c_str(), F_OK), 0);
+
+    bool started = false;
+    int status = 0;
+    auto worker = photon::thread_enable_join(photon::thread_create11([&] {
+        started = true;
+        ImageFile image(config, service, "", "");
+        status = image.m_status;
+    }));
+    while (!started)
+        photon::thread_yield();
+    photon::thread_usleep(10000);
+    EXPECT_EQ(status, 0);
+
+    auto fdata = photon::fs::open_localfile_adaptor(data.c_str(), O_RDWR, 0644);
+    auto findex = photon::fs::open_localfile_adaptor(index.c_str(), O_RDWR, 0644);
+    EXPECT_NE(fdata, nullptr);
+    EXPECT_NE(findex, nullptr);
+    if (fdata && findex) {
+        LSMT::LayerInfo args(fdata, findex);
+        args.virtual_size = 1ULL << 30;
+        args.rw_type = LSMT::RWType::Append;
+        auto file = LSMT::create_file_rw(args, false);
+        EXPECT_NE(file, nullptr);
+        delete file;
+    }
+    delete fdata;
+    delete findex;
+
+    ::flock(dir_fd, LOCK_UN);
+    photon::thread_join(worker);
+    EXPECT_EQ(status, 1);
+}
+
+TEST_F(LazyUpperTest, create_rejects_partial_pair) {
+    for (int mask = 1; mask <= 2; ++mask) {
+        if (mask & 1) {
+            std::ofstream(data) << "data marker";
+        }
+        if (mask & 2) {
+            std::ofstream(index) << "index marker";
+        }
+
+        ImageFile image(config, service, "", "");
+        EXPECT_EQ(image.m_status, -1) << "existing paths: " << mask;
+
+        struct stat st;
+        if (mask & 1) {
+            ASSERT_EQ(::stat(data.c_str(), &st), 0);
+            EXPECT_EQ(st.st_size, 11);
+        } else {
+            EXPECT_EQ(::access(data.c_str(), F_OK), -1);
+        }
+        if (mask & 2) {
+            ASSERT_EQ(::stat(index.c_str(), &st), 0);
+            EXPECT_EQ(st.st_size, 12);
+        } else {
+            EXPECT_EQ(::access(index.c_str(), F_OK), -1);
+        }
+        ::unlink(data.c_str());
+        ::unlink(index.c_str());
+    }
+}
+
+TEST_F(LazyUpperTest, open_requires_both_existing_paths) {
+    ASSERT_TRUE(configure_upper(false, data, index));
+    for (int mask = 0; mask <= 2; ++mask) {
+        if (mask & 1) {
+            std::ofstream(data) << "data marker";
+        }
+        if (mask & 2) {
+            std::ofstream(index) << "index marker";
+        }
+        ImageFile image(config, service, "", "");
+        EXPECT_EQ(image.m_status, -1) << "existing paths: " << mask;
+        if (!(mask & 1))
+            EXPECT_EQ(::access(data.c_str(), F_OK), -1);
+        if (!(mask & 2))
+            EXPECT_EQ(::access(index.c_str(), F_OK), -1);
+        ::unlink(data.c_str());
+        ::unlink(index.c_str());
+    }
+}
+
+TEST_F(LazyUpperTest, requires_both_paths_in_config) {
+    for (bool create : {false, true}) {
+        ASSERT_TRUE(configure_upper(create, data, ""));
+        ImageFile missing_index(config, service, "", "");
+        EXPECT_EQ(missing_index.m_status, -1);
+
+        ASSERT_TRUE(configure_upper(create, "", index));
+        ImageFile missing_data(config, service, "", "");
+        EXPECT_EQ(missing_data.m_status, -1);
+    }
+    EXPECT_EQ(::access(data.c_str(), F_OK), -1);
+    EXPECT_EQ(::access(index.c_str(), F_OK), -1);
+}
+
+TEST_F(LazyUpperTest, rejects_same_path_for_data_and_index) {
+    ASSERT_TRUE(configure_upper(true, data, data));
+    ImageFile image(config, service, "", "");
+    EXPECT_EQ(image.m_status, -1);
+    EXPECT_EQ(::access(data.c_str(), F_OK), -1);
+}
+
+TEST_F(LazyUpperTest, rejects_lazy_creation_for_target_backed_upper) {
+    ASSERT_TRUE(config.ParseJSONStream(
+        "{\"upper\":{\"create\":true,\"data\":\"" + data +
+        "\",\"index\":\"" + index + "\",\"target\":\"" + dir +
+        "/target\",\"vsize\":1}}"));
+    ImageFile image(config, service, "", "");
+    EXPECT_EQ(image.m_status, -1);
+    EXPECT_EQ(::access(data.c_str(), F_OK), -1);
+    EXPECT_EQ(::access(index.c_str(), F_OK), -1);
+}
+
+TEST_F(LazyUpperTest, requires_vsize_for_upper_only_creation) {
+    ASSERT_TRUE(config.ParseJSONStream(
+        "{\"upper\":{\"create\":true,\"data\":\"" + data +
+        "\",\"index\":\"" + index + "\"}}"));
+    ImageFile image(config, service, "", "");
+    EXPECT_EQ(image.m_status, -1);
+    EXPECT_EQ(::access(data.c_str(), F_OK), -1);
+    EXPECT_EQ(::access(index.c_str(), F_OK), -1);
+}
+
+TEST_F(LazyUpperTest, rejects_image_without_layers) {
+    for (const char* json : {"{}", "{\"upper\":{}}"}) {
+        ASSERT_TRUE(config.ParseJSONStream(json));
+        ImageFile image(config, service, "", "");
+        EXPECT_EQ(image.m_status, -1) << json;
+    }
+}
+
+TEST_F(LazyUpperTest, rejects_overflowing_upper_vsize) {
+    ASSERT_TRUE(config.ParseJSONStream(
+        "{\"upper\":{\"create\":true,\"data\":\"" + data +
+        "\",\"index\":\"" + index + "\",\"vsize\":17179869184}}"));
+    ImageFile image(config, service, "", "");
+    EXPECT_EQ(image.m_status, -1);
+    EXPECT_EQ(::access(data.c_str(), F_OK), -1);
+    EXPECT_EQ(::access(index.c_str(), F_OK), -1);
+}
+
 class DevIDRegisterTest : public DevIDGetTest {
 public:
     ImageService *imgservice;
@@ -226,6 +451,22 @@ public:
         system(("rm -rf " + test_dir).c_str());
     }
 };
+
+TEST_F(DevIDRegisterTest, empty_upper_remains_read_only) {
+    for (const char* upper : {"{}", R"({"index":"","data":"","create":false})"}) {
+        {
+            std::ofstream out(image_config_path);
+            out << R"({"lowers":[{"file":"/opt/overlaybd/baselayers/ext4_64"}],"upper":)"
+                << upper << '}';
+            ASSERT_TRUE(out.good());
+        }
+
+        ImageFile *image = imgservice->create_image_file(image_config_path.c_str(), "");
+        ASSERT_NE(image, nullptr);
+        EXPECT_TRUE(image->read_only);
+        delete image;
+    }
+}
 
 TEST_F(DevIDRegisterTest, register_dev_id) {
     ImageFile* imagefile0 = imgservice->create_image_file(image_config_path.c_str(), "");
@@ -376,6 +617,18 @@ public:
         auto file = LSMT::create_file_rw(args, true);
         delete file;
     }
+
+    bool enable_lazy_upper() {
+        ImageConfigNS::ImageConfig snapshot;
+        if (!snapshot.ParseJSONStream(new_image_config_content))
+            return false;
+        auto &allocator = snapshot.GetAllocator();
+        snapshot["upper"].AddMember(rapidjson::Value("create", allocator),
+                                     rapidjson::Value(true), allocator);
+        std::ofstream out(new_image_config_path);
+        out << snapshot.DumpString();
+        return out.good();
+    }
 };
 
 TEST_F(CreateSnapshotTest, create_snapshot) {
@@ -438,6 +691,45 @@ TEST_F(CreateSnapshotTest, create_snapshot) {
 
     delete imgfile0;
     delete imgfile1;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_creates_upper) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    ASSERT_TRUE(enable_lazy_upper());
+
+    ImageFile* image = imgservice->create_image_file(image_config_path.c_str(), "");
+    ASSERT_NE(image, nullptr);
+    EXPECT_EQ(image->create_snapshot(new_image_config_path.c_str()), 0);
+    EXPECT_EQ(::access("/tmp/overlaybd/data1.lsmt", F_OK), 0);
+    EXPECT_EQ(::access("/tmp/overlaybd/index1.lsmt", F_OK), 0);
+
+    ImageConfigNS::ImageConfig saved;
+    ASSERT_TRUE(saved.ParseJSON(image_config_path));
+    EXPECT_TRUE(saved.upper().create());
+    struct stat image_stat;
+    ASSERT_EQ(image->fstat(&image_stat), 0);
+    EXPECT_EQ(image_stat.st_size, 64 << 20);
+    ImageFile* reopened = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(reopened, nullptr);
+    delete reopened;
+    delete image;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_keeps_existing_pair_on_open_failure) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    std::ofstream("/tmp/overlaybd/data1.lsmt") << "data marker";
+    std::ofstream("/tmp/overlaybd/index1.lsmt") << "index marker";
+    ASSERT_TRUE(enable_lazy_upper());
+
+    ImageFile* image = imgservice->create_image_file(image_config_path.c_str(), "");
+    ASSERT_NE(image, nullptr);
+    EXPECT_EQ(image->create_snapshot(new_image_config_path.c_str()), -1);
+    struct stat st;
+    ASSERT_EQ(::stat("/tmp/overlaybd/data1.lsmt", &st), 0);
+    EXPECT_EQ(st.st_size, 11);
+    ASSERT_EQ(::stat("/tmp/overlaybd/index1.lsmt", &st), 0);
+    EXPECT_EQ(st.st_size, 12);
+    delete image;
 }
 
 TEST_F(CreateSnapshotTest, create_snapshot_sparse) {
