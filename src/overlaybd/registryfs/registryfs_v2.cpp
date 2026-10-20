@@ -59,6 +59,8 @@ static const estring kBasicAuthPrefix = "Basic ";
 static const uint64_t kMinimalTokenLife = 30L * 1000 * 1000; // token lives atleast 30s
 static const uint64_t kMinimalAUrlLife = 300L * 1000 * 1000; // actual_url lives atleast 300s
 static const uint64_t kMinimalMetaLife = 300L * 1000 * 1000; // actual_url lives atleast 300s
+static const uint64_t kAcceleratorProbeTimeout = 1L * 1000 * 1000;
+static const uint64_t kAcceleratorProbeFailureLife = 30L * 1000 * 1000;
 
 using HTTP_OP = photon::net::http::Client::OperationOnStack<64 * 1024 - 1>;
 
@@ -131,7 +133,8 @@ public:
                       photon::net::TLSContext *ctx, const char *ua)
         : m_callback(callback), m_caFile(caFile), m_timeout(timeout), m_tls_ctx(ctx),
           m_meta_size(kMinimalMetaLife), m_scope_token(kMinimalTokenLife),
-          m_url_info(kMinimalAUrlLife) {
+          m_url_info(kMinimalAUrlLife),
+          m_accelerator_probe_failures(kAcceleratorProbeFailureLife) {
 
         m_client = nullptr;
         if (ua == nullptr) {
@@ -149,6 +152,28 @@ public:
 
     long get_data(const estring &url, off_t offset, size_t count, uint64_t timeout, HTTP_OP &op) {
         Timeout tmo(timeout);
+
+        bool accelerator_probe_failed = false;
+        auto failed_probe = m_accelerator_probe_failures.find(url);
+        if (m_accelerate.size() > 0 &&
+            failed_probe == m_accelerator_probe_failures.end()) {
+            estring canonical_url = estring().appends(m_accelerate, "/", url);
+            op.req.reset(Verb::GET, canonical_url);
+            op.req.headers.range(offset, offset + count - 1);
+            op.set_enable_proxy(m_client->has_proxy());
+            op.retry = 0;
+            auto probe_timeout = tmo.timeout() / 4;
+            if (probe_timeout > kAcceleratorProbeTimeout)
+                probe_timeout = kAcceleratorProbeTimeout;
+            if (probe_timeout > 0) {
+                op.timeout = probe_timeout;
+                m_client->call(&op);
+                if (op.status_code == 200 || op.status_code == 206)
+                    return op.status_code;
+                accelerator_probe_failed = true;
+            }
+        }
+
         long ret = 0;
         UrlInfo *actual_info = m_url_info.acquire(url, [&]() -> UrlInfo * {
             return get_actual_url(url, tmo.timeout(), ret);
@@ -180,6 +205,8 @@ public:
         m_client->call(&op);
         ret = op.status_code;
         if (ret == 200 || ret == 206) {
+            if (accelerator_probe_failed)
+                m_accelerator_probe_failures.insert(url);
             m_url_info.release(url);
             return ret;
         }
@@ -282,7 +309,10 @@ public:
     }
 
     virtual int setAccelerateAddress(const char* addr = "") override {
-        m_accelerate = estring(addr);
+        if (m_accelerate.compare(addr) != 0) {
+            m_accelerate = estring(addr);
+            m_accelerator_probe_failures.clear();
+        }
         return 0;
     }
 
@@ -327,6 +357,7 @@ protected:
     ObjectCache<estring, size_t *> m_meta_size;
     ObjectCache<estring, estring *> m_scope_token;
     ObjectCache<estring, UrlInfo *> m_url_info;
+    ExpireList<estring> m_accelerator_probe_failures;
 
     AuthType get_scope_auth(const estring &url, estring *authurl, estring *scope, uint64_t timeout,
                        bool push = false) {
