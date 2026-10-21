@@ -591,7 +591,10 @@ void check_upper_engine(uint32_t engine, bool sparse) {
             image << "{\"lowers\":[],\"upper\":{\"data\":\"" << data
                   << "\",\"index\":\"" << index << "\"}}";
         }
-        ASSERT_EQ(photon::init(photon::INIT_EVENT_EPOLL,
+        bool use_iouring = engine == ImageConfigNS::IOENGINE_IOURING ||
+                           engine == ImageConfigNS::IOENGINE_IOURING_DIRECT;
+        ASSERT_EQ(photon::init(use_iouring ? photon::INIT_EVENT_IOURING
+                                           : photon::INIT_EVENT_EPOLL,
                                photon::INIT_IO_LIBCURL | photon::INIT_IO_LIBAIO), 0);
         DEFER(photon::fini());
         {
@@ -613,7 +616,9 @@ void check_upper_engine(uint32_t engine, bool sparse) {
         auto index_flags = upper_fd_flags(index);
         ASSERT_GE(data_flags, 0);
         ASSERT_GE(index_flags, 0);
-        EXPECT_EQ(bool(data_flags & O_DIRECT), engine == ioengine_libaio);
+        bool direct = engine == ioengine_libaio ||
+                      engine == ImageConfigNS::IOENGINE_IOURING_DIRECT;
+        EXPECT_EQ(bool(data_flags & O_DIRECT), direct);
         EXPECT_EQ(index_flags & O_DIRECT, 0);
         std::vector<char> input(4097, 'A'), output(4097, 0);
         iovec iov{input.data() + 1, 512};
@@ -644,7 +649,12 @@ void check_upper_engine(uint32_t engine, bool sparse) {
                 for (int n = 0; n < 32; ++n)
                     if (image->pwritev(&part, 1, 8192 + slot * 512) != 512) ++failures;
             });
-            writers.push_back(photon::thread_enable_join(thread));
+            auto join_handle = photon::thread_enable_join(thread);
+            if (sparse && direct) {
+                photon::thread_join(join_handle);
+            } else {
+                writers.push_back(join_handle);
+            }
         }
         for (auto thread : writers) photon::thread_join(thread);
         ASSERT_EQ(failures.load(), 0);
@@ -665,7 +675,12 @@ void check_upper_engine(uint32_t engine, bool sparse) {
                     last_writer = writer;
                 }
             });
-            writers.push_back(photon::thread_enable_join(thread));
+            auto join_handle = photon::thread_enable_join(thread);
+            if (sparse && direct) {
+                photon::thread_join(join_handle);
+            } else {
+                writers.push_back(join_handle);
+            }
         }
         for (auto thread : writers) photon::thread_join(thread);
         ASSERT_EQ(failures.load(), 0);
@@ -692,6 +707,18 @@ TEST(UpperIOEngine, HybridPsync) { check_upper_engine(ioengine_psync, false); }
 TEST(UpperIOEngine, SparsePsync) { check_upper_engine(ioengine_psync, true); }
 TEST(UpperIOEngine, HybridLibaio) { check_upper_engine(ioengine_libaio, false); }
 TEST(UpperIOEngine, SparseLibaio) { check_upper_engine(ioengine_libaio, true); }
+TEST(UpperIOEngine, HybridIouring) {
+    check_upper_engine(ImageConfigNS::IOENGINE_IOURING, false);
+}
+TEST(UpperIOEngine, SparseIouring) {
+    check_upper_engine(ImageConfigNS::IOENGINE_IOURING, true);
+}
+TEST(UpperIOEngine, HybridIouringDirect) {
+    check_upper_engine(ImageConfigNS::IOENGINE_IOURING_DIRECT, false);
+}
+TEST(UpperIOEngine, SparseIouringDirect) {
+    check_upper_engine(ImageConfigNS::IOENGINE_IOURING_DIRECT, true);
+}
 
 int main(int argc, char** argv) {
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);

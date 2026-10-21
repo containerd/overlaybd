@@ -1,0 +1,5 @@
+find_package(liburing REQUIRED)
+set(URING_INCLUDE_DIRS ${LIBURING_INCLUDE_DIRS})
+set(URING_LIBRARIES liburing_static)
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(uring DEFAULT_MSG URING_LIBRARIES URING_INCLUDE_DIRS)

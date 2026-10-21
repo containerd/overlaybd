@@ -2,6 +2,7 @@ include(FetchContent)
 set(FETCHCONTENT_QUIET false)
 set(PHOTON_ENABLE_EXTFS ON CACHE BOOL "Build Photon extfs support" FORCE)
 set(PHOTON_BUILD_OCF_CACHE ON CACHE BOOL "Build Photon OCF cache support" FORCE)
+set(PHOTON_ENABLE_URING ON CACHE BOOL "Build Photon io_uring support" FORCE)
 
 if(NOT ORIGIN_EXT2FS)
   set(PHOTON_ENABLE_RESIZE ON CACHE BOOL "Build Photon extfs resize support" FORCE)

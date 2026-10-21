@@ -21,6 +21,9 @@
 #include "overlaybd/config_util.h"
 
 namespace ImageConfigNS {
+const uint32_t IOENGINE_IOURING = 3;
+const uint32_t IOENGINE_IOURING_DIRECT = 4;
+
 const int MAX_LAYER_CNT = 256;
 
 struct LayerConfig : public ConfigUtils::Config {
