@@ -50,12 +50,16 @@ IFile *ImageFile::__open_ro_file(const std::string &path) {
     int flags = O_RDONLY;
 
     LOG_INFO("open ro file: `", path);
-    int ioengine = image_service.global_conf.ioEngine();
-    if (ioengine > 2) {
+    auto ioengine = image_service.global_conf.ioEngine();
+    if (ioengine > ImageConfigNS::IOENGINE_IOURING_DIRECT) {
         LOG_WARN("invalid ioengine: `, set to psync", ioengine);
         ioengine = 0;
     }
-    if (ioengine == ioengine_libaio) {
+    bool direct = ioengine == ioengine_libaio ||
+                  ioengine == ImageConfigNS::IOENGINE_IOURING_DIRECT;
+    if (ImageConfigNS::is_iouring_ioengine(ioengine))
+        ioengine = ioengine_iouring;
+    if (direct) {
         flags |= O_DIRECT;
         LOG_DEBUG("`: flag add O_DIRECT", path);
     }
@@ -386,10 +390,24 @@ LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
     IFile *idx_file = NULL;
     IFile *target_file = NULL;
     LSMT::IFileRW *ret = NULL;
-    data_file = open_localfile_adaptor(upper.data().c_str(), O_RDWR, 0644);
+    auto engine = image_service.global_conf.ioEngine();
+    if (!upper.target().empty() || engine == ioengine_posixaio)
+        engine = ioengine_psync;
+    bool direct = engine == ioengine_libaio ||
+                  engine == ImageConfigNS::IOENGINE_IOURING_DIRECT;
+    if (ImageConfigNS::is_iouring_ioengine(engine))
+        engine = ioengine_iouring;
+    data_file = open_localfile_adaptor(upper.data().c_str(),
+                                       O_RDWR | (direct ? O_DIRECT : 0), 0644, engine);
     if (!data_file) {
         LOG_ERROR("open(`,flags), `:`", upper.data(), errno, strerror(errno));
         goto ERROR_EXIT;
+    }
+    if (direct) {
+        auto aligned = new_aligned_file_adaptor(data_file, ALIGNMENT_4K, true, true);
+        if (!aligned)
+            goto ERROR_EXIT;
+        data_file = aligned;
     }
 
     idx_file = open_localfile_adaptor(upper.index().c_str(), O_RDWR, 0644);

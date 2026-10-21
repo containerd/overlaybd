@@ -21,6 +21,13 @@
 #include "overlaybd/config_util.h"
 
 namespace ImageConfigNS {
+const uint32_t IOENGINE_IOURING = 3;
+const uint32_t IOENGINE_IOURING_DIRECT = 4;
+
+inline bool is_iouring_ioengine(uint32_t ioengine) {
+    return ioengine == IOENGINE_IOURING || ioengine == IOENGINE_IOURING_DIRECT;
+}
+
 const int MAX_LAYER_CNT = 256;
 
 struct LayerConfig : public ConfigUtils::Config {
@@ -154,6 +161,7 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(download, DownloadConfig);
     APPCFG_PARA(enableAudit, bool, true);
     APPCFG_PARA(workpoolSize, uint32_t, 8);
+    APPCFG_PARA(ublkThreadPoolSize, uint32_t, 32);
     APPCFG_PARA(p2pConfig, P2PConfig);
     APPCFG_PARA(exporterConfig, ExporterConfig);
     APPCFG_PARA(auditPath, std::string, "/var/log/overlaybd-audit.log");

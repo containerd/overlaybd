@@ -147,7 +147,7 @@ UblkDevice::~UblkDevice() {
 
 struct QueueCtx {
     const struct ublksrv_queue *q = nullptr;
-    photon::ThreadPool<32> *pool = nullptr;
+    photon::ThreadPoolBase *pool = nullptr;
     UblkIOTarget *target = nullptr;
     uint32_t inflight = 0;
 };
@@ -244,12 +244,23 @@ struct UblkDevice::SwapRequest {
 
 void UblkDevice::queue_loop(const struct ublksrv_dev *dev, photon::semaphore *started,
                             int *init_ret) {
-    photon::init(photon::INIT_EVENT_EPOLL, photon::INIT_IO_LIBCURL);
+    auto ioengine = imgservice_->global_conf.ioEngine();
+    auto event_engine = ImageConfigNS::is_iouring_ioengine(ioengine)
+                            ? photon::INIT_EVENT_IOURING
+                            : photon::INIT_EVENT_EPOLL;
+    photon::init(event_engine, photon::INIT_IO_LIBCURL | photon::INIT_IO_LIBAIO);
     DEFER(photon::fini());
 
-    photon::ThreadPool<32> pool;
+    uint32_t pool_size = imgservice_->global_conf.ublkThreadPoolSize();
+    if (pool_size == 0) {
+        LOG_WARN("ublkThreadPoolSize 0 is invalid, use 32");
+        pool_size = 32;
+    }
+    LOG_INFO("ublk queue thread pool size: `", pool_size);
+    auto *pool = photon::new_thread_pool(pool_size);
+    DEFER(photon::delete_thread_pool(pool));
     QueueCtx ctx;
-    ctx.pool = &pool;
+    ctx.pool = pool;
     ctx.target = target_;
 
     const struct ublksrv_queue *q =
@@ -1141,7 +1152,15 @@ static void stop_device_handler(int signal) {
 }
 
 int run_ublk_device(const UblkDeviceOpts &opts, int ready_fd) {
-    photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+    ImageConfigNS::GlobalConfig conf;
+    conf.ParseJSON(opts.service_config_path.empty() ? "/etc/overlaybd/overlaybd.json"
+                                                    : opts.service_config_path.c_str());
+    auto ioengine = conf.ioEngine();
+    if (ImageConfigNS::is_iouring_ioengine(ioengine))
+        photon::init(photon::INIT_EVENT_IOURING | photon::INIT_EVENT_SIGNAL,
+                     photon::INIT_IO_DEFAULT);
+    else
+        photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     photon::block_all_signal();
     photon::sync_signal(SIGTERM, &stop_device_handler);
     photon::sync_signal(SIGINT, &stop_device_handler);

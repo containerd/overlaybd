@@ -80,7 +80,8 @@ int main(int argc, char **argv) {
     }
 
     set_log_output_level(verbose ? 0 : 1);
-    if (photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT) != 0) {
+    if (photon::init(photon_event_engine_from_config(service_config_path),
+                     photon::INIT_IO_DEFAULT) != 0) {
         fprintf(stderr, "failed to initialize photon\n");
         return 1;
     }

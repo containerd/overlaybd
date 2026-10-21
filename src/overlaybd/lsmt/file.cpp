@@ -231,7 +231,8 @@ static const char *rw_type_name(RWType type) {
 }
 
 static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, bool is_data_file,
-                                uint64_t index_offset, uint64_t index_size, const LayerInfo &args) {
+                                uint64_t index_offset, uint64_t index_size, const LayerInfo &args,
+                                off_t write_offset = -1) {
     ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
     memset(buf, 0, HeaderTrailer::SPACE);
     auto pht = new (buf) HeaderTrailer;
@@ -270,6 +271,8 @@ static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, boo
     if (args.parent_uuid.is_null()) {
         LOG_WARN("parent_uuid is null.");
     }
+    if (write_offset >= 0)
+        return (int)file->pwrite(buf, HeaderTrailer::SPACE, write_offset);
     return (int)file->write(buf, HeaderTrailer::SPACE);
 }
 
@@ -509,7 +512,6 @@ public:
     // false for a read-only file, whose immutable index needs no lock
     bool m_index_mutable = false;
     bool m_file_ownership = false;
-    uint64_t m_data_offset = HeaderTrailer::SPACE / ALIGNMENT;
     // read-path statistics, updated by every vCPU serving this file
     atomic<uint32_t> lsmt_io_cnt{0};
     atomic<uint64_t> lsmt_io_size{0};
@@ -782,13 +784,18 @@ public:
     atomic_uint64_t m_compacted_idx_size; // count of compacted raw-index
 
     bool m_init_concurrency = false;
-    uint64_t m_data_offset = HeaderTrailer::SPACE / ALIGNMENT;
+    // append positions (in bytes) of the data and index files of a hybrid layer, whose
+    // writers reserve space by fetch_add instead of seeking to the end of the file
+    atomic<uint64_t> m_data_offset{HeaderTrailer::SPACE};
+    atomic<uint64_t> m_index_offset{HeaderTrailer::SPACE};
 
     uint8_t m_rw_tag = 0;
     RWType m_rw_type = RWType::Append;
 
-    Mutex m_rw_mtx;
+    // serializes append-mode writes and restack; hybrid writers take only
+    // m_index_rwlock around the in-memory index updates.
     // lock order: m_rw_mtx, then m_index_rwlock; readers take only the latter
+    Mutex m_rw_mtx;
     IFile *m_findex = nullptr;
 
     vector<SegmentMapping> m_stacked_mappings;
@@ -830,6 +837,21 @@ public:
         return rw_index()->lookup_writable_layer(s, pm, n);
     }
 
+    bool hybrid() const {
+        return m_rw_type == RWType::Hybrid;
+    }
+
+    // the group-commit buffer is guarded by m_rw_mtx in append mode, and by
+    // m_index_rwlock in hybrid mode
+    int flush_index_log() {
+        if (hybrid()) {
+            photon::scoped_rwlock ilock(m_index_rwlock, photon::WLOCK);
+            return do_group_commit_mappings();
+        }
+        Lock lock(m_rw_mtx);
+        return do_group_commit_mappings();
+    }
+
     virtual int vioctl(int request, va_list args) override {
         if (request == GetType) {
             return LSMTReadOnlyFile::vioctl(request, args);
@@ -840,8 +862,7 @@ public:
         auto buffer_size = va_arg(args, size_t);
         buffer_size /= sizeof(SegmentMapping);
         if (buffer_size < nmapping) {
-            Lock lock(m_rw_mtx);
-            do_group_commit_mappings();
+            flush_index_log();
         }
 
         m_stacked_mappings.resize(buffer_size);
@@ -858,10 +879,7 @@ public:
 
     virtual int close() override {
         LOG_DEBUG("ownership:`, m_findex:`", m_file_ownership, m_findex);
-        {
-            Lock lock(m_rw_mtx);
-            do_group_commit_mappings();
-        }
+        flush_index_log();
         if (m_file_ownership)
             safe_delete(m_findex);
         return LSMTReadOnlyFile::close();
@@ -869,12 +887,29 @@ public:
     // returns appended offset when success, 0 therwise
     static off_t append(IFile *file, const void *buf, size_t count) {
         off_t pos = file->lseek(0, SEEK_END);
-        ssize_t ret = file->write(buf, count);
+        if (pos < 0)
+            LOG_ERRNO_RETURN(0, 0, "seek to end failed, file:`", file);
+        // Positioned writes keep alignment adaptors in the I/O path.
+        ssize_t ret = file->pwrite(buf, count, pos);
         if (ret < (ssize_t)count) {
             LOG_ERRNO_RETURN(0, 0, "write failed, file:`, ret:`, pos:`, count:`", file, ret, pos,
                              count);
         }
         return pos;
+    }
+
+    // appends index records to m_findex: at the end of the file in append mode, or at
+    // a slot reserved from m_index_offset in hybrid mode
+    int log_index(const void *buf, size_t count) {
+        if (!hybrid())
+            return append(m_findex, buf, count) == 0 ? -1 : 0;
+        auto pos = m_index_offset.fetch_add(count);
+        auto ret = m_findex->pwrite(buf, count, pos);
+        if (ret != (ssize_t)count) {
+            LOG_ERRNO_RETURN(0, -1, "write index failed, file:`, ret:`, pos:`, count:`",
+                             m_findex, ret, pos, count);
+        }
+        return 0;
     }
 
     int do_group_commit_mappings() {
@@ -885,8 +920,7 @@ public:
             auto index_size = nmapping * sizeof(m_stacked_mappings[0]);
             ALIGNED_MEM4K(raw, index_size);
             memcpy(raw, &m_stacked_mappings[0], index_size);
-            auto ret = append(m_findex, raw, index_size);
-            if (ret == 0)
+            if (log_index(raw, index_size) != 0)
                 return -1;
             nmapping = 0;
         }
@@ -900,7 +934,7 @@ public:
     virtual void append_index(const SegmentMapping &m) {
         if (m_findex) {
             if (m_stacked_mappings.empty()) {
-                append(m_findex, &m, sizeof(m));
+                log_index(&m, sizeof(m));
             } else {
                 m_stacked_mappings[nmapping++] = m;
                 if (nmapping == m_stacked_mappings.size() /* || TODO: timeout  */) {
@@ -908,6 +942,21 @@ public:
                 }
             }
         }
+    }
+
+    // a hybrid writer holds no m_rw_mtx: the index, m_vsize and the group-commit
+    // buffer are updated under m_index_rwlock, a single record is logged outside of it
+    int hybrid_insert(const SegmentMapping &m) {
+        {
+            photon::scoped_rwlock ilock(m_index_rwlock, photon::WLOCK);
+            rw_index()->insert(m);
+            m_vsize = max(m_vsize, (uint64_t)m.end() * ALIGNMENT);
+            if (!m_stacked_mappings.empty()) {
+                append_index(m);
+                return 0;
+            }
+        }
+        return m_findex ? log_index(&m, sizeof(m)) : 0;
     }
 
     virtual ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override {
@@ -926,76 +975,91 @@ public:
             count -= MAX_IO_SIZE;
             offset += MAX_IO_SIZE;
         }
-        // wait unlock
-        {
-            Lock lock(m_rw_mtx);
-            m_vsize = max(m_vsize, count + offset);
-            if (m_vsize < count + offset) {
-                LOG_INFO("resize m_visze: `->`", m_vsize, count + offset);
+        if (hybrid())
+            return hybrid_pwrite(buf, count, offset) == 0 ? (ssize_t)bytes : -1;
+
+        Lock lock(m_rw_mtx);
+        m_vsize = max(m_vsize, count + offset);
+        SegmentMapping m((uint64_t)offset / ALIGNMENT, (uint32_t)count / ALIGNMENT, 0);
+        auto moffset = append(m_files[m_rw_tag], buf, count);
+        if (moffset == 0)
+            return -1;
+        m.moffset = (uint64_t)moffset / ALIGNMENT;
+        m.tag = m_rw_tag;
+        index_insert(m);
+        append_index(m);
+        return bytes;
+    }
+
+    // The ranges already mapped by this writable layer are rewritten in place, everything
+    // else (holes, zeroed ranges and the ranges of the lower layers) is appended. As in
+    // LSMTSparseFile, concurrent writers are not serialized, since the block layer above
+    // never issues overlapping writes concurrently.
+    int hybrid_pwrite(const void *buf, size_t count, off_t offset) {
+        auto tag = m_rw_tag;
+        auto file = m_files[tag];
+        auto offset_in_blocks = (uint64_t)offset / ALIGNMENT;
+        auto end_in_blocks = offset_in_blocks + count / ALIGNMENT;
+        auto data = [&](uint64_t block) {
+            return (const char *)buf + (block - offset_in_blocks) * ALIGNMENT;
+        };
+        auto append_data = [&](uint64_t begin, uint64_t end) -> int {
+            SegmentMapping m(begin, (uint32_t)(end - begin), 0);
+            auto len = (size_t)m.length * ALIGNMENT;
+            // every extent is reserved and written as whole 4K blocks, so that no two
+            // extents share a block, and an O_DIRECT data file never goes through the
+            // read-modify-write of its alignment adaptor, which may truncate the file
+            // back to a stale size behind a concurrent append
+            auto padded = (len + ALIGNMENT4K - 1) / ALIGNMENT4K * ALIGNMENT4K;
+            auto src = data(begin);
+            unique_ptr<char, decltype(&free)> tail(nullptr, &free);
+            if (padded != len) {
+                tail.reset((char *)aligned_alloc(ALIGNMENT4K, padded));
+                if (!tail)
+                    LOG_ERRNO_RETURN(ENOMEM, -1, "failed to allocate ` bytes", padded);
+                memcpy(tail.get(), src, len);
+                memset(tail.get() + len, 0, padded - len);
+                src = tail.get();
             }
-            auto offset_in_blocks = (uint64_t)offset / ALIGNMENT;
-            auto count_in_blocks = (uint32_t)count / ALIGNMENT;
-            auto end_in_blocks = offset_in_blocks + count_in_blocks;
-            auto update_mapping = [&](SegmentMapping m, bool append_data) -> int {
-                auto data_offset = (m.offset - offset_in_blocks) * ALIGNMENT;
-                auto data_length = (size_t)m.length * ALIGNMENT;
-                if (!append_data) {
-                    if (m_files[m_rw_tag]->pwrite((const char *)buf + data_offset, data_length,
-                                                   m.moffset * ALIGNMENT) != (ssize_t)data_length) {
-                        LOG_ERRNO_RETURN(0, -1, "rewrite data failed");
-                    }
-                    return 0;
-                }
+            auto pos = m_data_offset.fetch_add(padded);
+            auto ret = file->pwrite(src, padded, pos);
+            if (ret != (ssize_t)padded) {
+                LOG_ERRNO_RETURN(0, -1, "append data failed, file:`, ret:`, pos:`, count:`",
+                                 file, ret, pos, padded);
+            }
+            m.moffset = pos / ALIGNMENT;
+            m.tag = tag;
+            return hybrid_insert(m);
+        };
 
-                auto moffset = append(m_files[m_rw_tag], (const char *)buf + data_offset,
-                                      data_length);
-                if (moffset == 0)
+        uint64_t cursor = offset_in_blocks;
+        while (cursor < end_in_blocks) {
+            SegmentMapping upper[128];
+            auto length = min(end_in_blocks - cursor, (uint64_t)Segment::MAX_LENGTH);
+            auto n = index_lookup_writable({cursor, (uint32_t)length}, upper, LEN(upper));
+            if (n == 0)
+                break;
+            for (size_t i = 0; i < n; i++) {
+                auto &m = upper[i];
+                if (cursor < m.offset && append_data(cursor, m.offset) != 0)
                     return -1;
-                m.moffset = (uint64_t)moffset / ALIGNMENT;
-                m_data_offset = max(m_data_offset, m.mend());
-                m.tag = m_rw_tag;
-                index_insert(m);
-                append_index(m);
-                return 0;
-            };
-
-            // in hybrid mode, the ranges already mapped by this writable layer are
-            // rewritten in place, everything else (holes, zeroed ranges and the ranges
-            // of the lower layers) is appended.
-            uint64_t cursor = offset_in_blocks;
-            while (m_rw_type == RWType::Hybrid && cursor < end_in_blocks) {
-                SegmentMapping upper[128];
-                auto length = min(end_in_blocks - cursor, (uint64_t)Segment::MAX_LENGTH);
-                auto n = index_lookup_writable({cursor, (uint32_t)length}, upper, LEN(upper));
-                if (n == 0)
-                    break;
-                for (size_t i = 0; i < n; i++) {
-                    auto &m = upper[i];
-                    if (cursor < m.offset) {
-                        SegmentMapping appended(cursor, (uint32_t)(m.offset - cursor), 0);
-                        if (update_mapping(appended, true) != 0)
-                            return -1;
-                    }
-                    // a zeroed mapping owns no data payload, and the mappings of a sealed
-                    // layer (of a different tag) must never be overwritten.
-                    if (m.zeroed || m.tag != m_rw_tag) {
-                        SegmentMapping appended(m.offset, m.length, 0);
-                        if (update_mapping(appended, true) != 0)
-                            return -1;
-                    } else if (update_mapping(m, false) != 0) {
+                // a zeroed mapping owns no data payload, and the mappings of a sealed
+                // layer (of a different tag) must never be overwritten.
+                if (m.zeroed || m.tag != tag) {
+                    if (append_data(m.offset, m.end()) != 0)
                         return -1;
-                    }
-                    cursor = m.end();
+                } else {
+                    auto len = (size_t)m.length * ALIGNMENT;
+                    auto ret = file->pwrite(data(m.offset), len, m.moffset * ALIGNMENT);
+                    if (ret != (ssize_t)len)
+                        LOG_ERRNO_RETURN(0, -1, "rewrite data failed, ret:`, mapping:`", ret, m);
                 }
-            }
-            if (cursor < end_in_blocks) {
-                SegmentMapping appended(cursor, (uint32_t)(end_in_blocks - cursor), 0);
-                if (update_mapping(appended, true) != 0)
-                    return -1;
+                cursor = m.end();
             }
         }
-
-        return bytes;
+        if (cursor < end_in_blocks)
+            return append_data(cursor, end_in_blocks);
+        return 0;
     }
 
 #ifndef FALLOC_FL_KEEP_SIZE
@@ -1028,12 +1092,17 @@ public:
     }
 
     virtual int discard(SegmentMapping &m) {
-        off_t pos = m_files[m_rw_tag]->lseek(0, SEEK_END);
-        m.moffset = (uint64_t)(pos / ALIGNMENT);
         m.tag = m_rw_tag;
-        LOG_DEBUG(m);
+        if (hybrid()) {
+            m.moffset = m_data_offset.load() / ALIGNMENT;
+            LOG_DEBUG(m);
+            return hybrid_insert(m);
+        }
         // the insert and its index log record are one critical section
         Lock lock(m_rw_mtx);
+        off_t pos = m_files[m_rw_tag]->lseek(0, SEEK_END);
+        m.moffset = (uint64_t)(pos / ALIGNMENT);
+        LOG_DEBUG(m);
         index_insert(m);
         append_index(m);
         return 0;
@@ -1095,7 +1164,7 @@ public:
         uint64_t index_offset = m_files[m_rw_tag]->lseek(0, SEEK_END);
         ssize_t index_bytes = index_size * sizeof(SegmentMapping);
         index_bytes = (index_bytes + ALIGNMENT - 1) / ALIGNMENT * ALIGNMENT;
-        auto ret = m_files[m_rw_tag]->write(mapping.get(), index_bytes);
+        auto ret = m_files[m_rw_tag]->pwrite(mapping.get(), index_bytes, index_offset);
         if (ret < index_bytes)
             LOG_ERRNO_RETURN(0, -1, "failed to write index.");
 
@@ -1103,7 +1172,7 @@ public:
         if (load_layer_info(&m_files[m_rw_tag], 1, layer, true) != 0)
             return -1;
         ret = write_header_trailer(m_files[m_rw_tag], false, true, true, index_offset, index_size,
-                                   layer);
+                                   layer, index_offset + index_bytes);
         if (ret < 0)
             LOG_ERRNO_RETURN(0, -1, "failed to write trailer.");
         if (reopen_as) {
@@ -1126,12 +1195,9 @@ public:
     }
 
     virtual int fsync() override {
-        {
-            Lock lock(m_rw_mtx);
-            auto commit_ret = do_group_commit_mappings();
-            if (commit_ret != 0) {
-                return commit_ret;
-            }
+        auto commit_ret = flush_index_log();
+        if (commit_ret != 0) {
+            return commit_ret;
         }
         m_files[m_rw_tag]->fsync();
         if (m_findex)
@@ -1215,6 +1281,8 @@ public:
         m_findex = u->m_findex;
         m_rw_type = u->m_rw_type;
         m_vsize = u->m_vsize;
+        m_data_offset = u->m_data_offset.load();
+        m_index_offset = u->m_index_offset.load();
         ((IComboIndex *)m_index)->commit_index0();
 
         safe_delete(fseal);
@@ -1647,6 +1715,11 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
     if (ret < 0) {
         LOG_ERRNO_RETURN(0, nullptr, "failed to stat data file.");
     }
+    struct stat index_stat {};
+    index_stat.st_size = HeaderTrailer::SPACE;
+    if (rw_type == RWType::Hybrid && findex->fstat(&index_stat) < 0) {
+        LOG_ERRNO_RETURN(0, nullptr, "failed to stat index file.");
+    }
     IMemoryIndex0 *pi = nullptr;
     if (rw_type != RWType::Sparse) {
         HeaderTrailer ht;
@@ -1686,6 +1759,8 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
     rst->m_findex = findex;
     rst->m_files.push_back(fdata);
     rst->m_vsize = pht->virtual_size;
+    rst->m_data_offset = (stat.st_size + ALIGNMENT4K - 1) / ALIGNMENT4K * ALIGNMENT4K;
+    rst->m_index_offset = index_stat.st_size;
     rst->m_file_ownership = ownership;
     UUID raw;
     raw.parse(pht->uuid);
@@ -2083,6 +2158,8 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
     rst->m_index = idx;
     rst->m_findex = u->m_findex;
     rst->m_vsize = u->m_vsize;
+    rst->m_data_offset = u->m_data_offset.load();
+    rst->m_index_offset = u->m_index_offset.load();
     rst->m_file_ownership = ownership;
     rst->m_files.reserve(delta + l->m_files.size());
     rst->m_uuid.reserve(1 + l->m_uuid.size());

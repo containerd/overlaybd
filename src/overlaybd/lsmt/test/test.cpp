@@ -24,6 +24,7 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 */
 #include "lsmt-filetest.h"
 #include "photon/fs/localfs.h"
+#include <photon/fs/forwardfs.h>
 #include <fcntl.h>
 #include <thread>
 #include <sys/time.h>
@@ -628,6 +629,183 @@ TEST_F(HybridFileTest, hybrid_rw_stacked_layers) {
     EXPECT_EQ(data_size + (ssize_t)(64 * ALIGNMENT), file_size(lfs, data_name.back().c_str()));
     EXPECT_EQ(lower_data_size, file_size(lfs, data_name.front().c_str()));
     verify(file);
+}
+
+// yields inside every pwrite and records how many of them overlap, so that the photon
+// threads writing a layer really interleave
+class YieldingFile : public photon::fs::ForwardFile_Ownership {
+public:
+    int inflight = 0, max_inflight = 0;
+    explicit YieldingFile(IFile *file) : ForwardFile_Ownership(file, true) {
+    }
+    virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+        max_inflight = max(max_inflight, ++inflight);
+        photon::thread_yield();
+        auto ret = m_file->pwrite(buf, count, offset);
+        inflight--;
+        return ret;
+    }
+};
+
+// Hybrid writers hold no m_rw_mtx, so their data writes overlap, while an append-only
+// layer still serializes them. Every thread writes its own disjoint 4K blocks.
+TEST_F(HybridFileTest, concurrent_writes) {
+    const int NTHREADS = 16;
+    const uint32_t BLOCK = 4096 / ALIGNMENT;
+    const int NWRITES = MAX_IMAGE_SIZE / ALIGNMENT / BLOCK / NTHREADS; // per thread
+    const ssize_t INDEX_SIZE = HeaderTrailer::SPACE + NTHREADS * NWRITES * sizeof(SegmentMapping);
+
+    auto concurrent_round = [&](IFileRW *file, unsigned char pattern) {
+        vector<photon::join_handle *> threads;
+        for (int t = 0; t < NTHREADS; t++) {
+            auto th = photon::thread_create11([&, t] {
+                for (int j = 0; j < NWRITES; j++)
+                    do_io(file, {(uint64_t)(j * NTHREADS + t) * BLOCK, BLOCK,
+                                 (unsigned char)(pattern + t)});
+            });
+            threads.push_back(photon::thread_enable_join(th));
+        }
+        for (auto th : threads)
+            photon::thread_join(th);
+    };
+
+    for (auto type : {RWType::Append, RWType::Hybrid}) {
+        LOG_INFO("concurrent writes, rw_type: `", rw_type_name(type));
+        expected.assign(MAX_IMAGE_SIZE, 0);
+        name_next_layer();
+        auto fdata = new YieldingFile(
+            lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU));
+        auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+        LayerInfo args(fdata, findex);
+        args.rw_type = type;
+        args.virtual_size = MAX_IMAGE_SIZE;
+        auto file = ::create_file_rw(args, true);
+        ASSERT_NE(nullptr, file);
+        concurrent_round(file, 0x10);
+        auto data_size = file_size(lfs, data_name.back().c_str());
+        concurrent_round(file, 0x40);
+        verify(file);
+        auto max_inflight = fdata->max_inflight;
+        delete file;
+        if (type == RWType::Append) {
+            EXPECT_EQ(1, max_inflight);
+            continue;
+        }
+        EXPECT_GT(max_inflight, 1);
+        // the first round appended every block exactly once, the second rewrote them
+        EXPECT_EQ((ssize_t)(HeaderTrailer::SPACE + MAX_IMAGE_SIZE), data_size);
+        EXPECT_EQ(data_size, file_size(lfs, data_name.back().c_str()));
+        EXPECT_EQ(INDEX_SIZE, file_size(lfs, idx_name.back().c_str()));
+
+        // the reopened layer resumes both append positions at the end of the files
+        auto reopened = open_file_rw();
+        ASSERT_NE(nullptr, reopened);
+        verify(reopened);
+        concurrent_round(reopened, 0x70);
+        do_io(reopened, {0, BLOCK, /* discard = */ 0});
+        do_io(reopened, {0, BLOCK, 0x7f});
+        EXPECT_EQ(data_size + (ssize_t)(BLOCK * ALIGNMENT),
+                  file_size(lfs, data_name.back().c_str()));
+        EXPECT_EQ(INDEX_SIZE + (ssize_t)(2 * sizeof(SegmentMapping)),
+                  file_size(lfs, idx_name.back().c_str()));
+        verify(reopened);
+        delete reopened;
+
+        reopened = open_file_rw();
+        ASSERT_NE(nullptr, reopened);
+        verify(reopened);
+        delete reopened;
+    }
+}
+
+// The append positions and the group-commit buffer are shared by the writers of all
+// the vCPUs serving a hybrid layer.
+TEST_F(HybridFileTest, multi_vcpu_writes) {
+    const uint64_t VSIZE = 4 << 20;
+    const size_t BLOCK = 4096;
+    const size_t NBLOCK = VSIZE / BLOCK;
+    const int NVCPU = 4, NTHREADS = 4; // photon threads per vCPU
+    const int NWRITERS = NVCPU * NTHREADS;
+
+    // every block mixes its own number into its bytes, so neither a hole nor
+    // another block passes for it
+    auto byte_at = [](size_t b, size_t i, uint8_t v) {
+        return (uint8_t)(b * 31 + ((i ^ (b * 13)) * 7) + v + 1);
+    };
+
+    name_next_layer();
+    auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    ASSERT_NE(nullptr, fdata);
+    ASSERT_NE(nullptr, findex);
+    LayerInfo args(fdata, findex);
+    args.rw_type = RWType::Hybrid;
+    args.virtual_size = VSIZE;
+    auto file = LSMT::create_file_rw(args, true);
+    ASSERT_NE(nullptr, file);
+    file->set_index_group_commit(4096);
+
+    // writer w owns the blocks b with b % NWRITERS == w, the first round appends them,
+    // the second rewrites them in place
+    atomic<int> bad{0};
+    auto vcpu_round = [&](uint8_t version) {
+        vector<std::thread> vcpus;
+        for (int v = 0; v < NVCPU; v++) {
+            vcpus.emplace_back([&, v] {
+                photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+                DEFER(photon::fini());
+                vector<photon::join_handle *> threads;
+                for (int t = 0; t < NTHREADS; t++) {
+                    auto w = v * NTHREADS + t;
+                    auto th = photon::thread_create11([&, w] {
+                        ALIGNED_MEM4K(wbuf, BLOCK);
+                        for (size_t b = w; b < NBLOCK; b += NWRITERS) {
+                            for (size_t i = 0; i < BLOCK; i++)
+                                wbuf[i] = byte_at(b, i, version);
+                            if (file->pwrite(wbuf, BLOCK, (off_t)(b * BLOCK)) != (ssize_t)BLOCK)
+                                bad.fetch_add(1);
+                        }
+                    });
+                    threads.push_back(photon::thread_enable_join(th));
+                }
+                for (auto th : threads)
+                    photon::thread_join(th);
+            });
+        }
+        for (auto &t : vcpus)
+            t.join();
+    };
+    auto verify_blocks = [&](IFileRO *f, uint8_t version) {
+        size_t mismatch = 0;
+        ALIGNED_MEM4K(rbuf, BLOCK);
+        for (size_t b = 0; b < NBLOCK; b++) {
+            if (f->pread(rbuf, BLOCK, (off_t)(b * BLOCK)) != (ssize_t)BLOCK) {
+                mismatch++;
+                continue;
+            }
+            for (size_t i = 0; i < BLOCK; i++) {
+                if ((uint8_t)rbuf[i] != byte_at(b, i, version)) {
+                    mismatch++;
+                    break;
+                }
+            }
+        }
+        return mismatch;
+    };
+
+    vcpu_round(1);
+    auto data_size = file_size(lfs, data_name.back().c_str());
+    EXPECT_EQ((ssize_t)(HeaderTrailer::SPACE + VSIZE), data_size);
+    vcpu_round(2);
+    EXPECT_EQ(0, bad.load());
+    EXPECT_EQ(0u, verify_blocks(file, 2));
+    delete file;
+    EXPECT_EQ(data_size, file_size(lfs, data_name.back().c_str()));
+
+    auto reopened = open_file_rw();
+    ASSERT_NE(nullptr, reopened);
+    DEFER(delete reopened);
+    EXPECT_EQ(0u, verify_blocks(reopened, 2));
 }
 
 class FileTest1 : public FileTest {
