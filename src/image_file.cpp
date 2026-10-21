@@ -57,7 +57,7 @@ IFile *ImageFile::__open_ro_file(const std::string &path) {
     }
     bool direct = ioengine == ioengine_libaio ||
                   ioengine == ImageConfigNS::IOENGINE_IOURING_DIRECT;
-    if (ioengine == ImageConfigNS::IOENGINE_IOURING_DIRECT)
+    if (ImageConfigNS::is_iouring_ioengine(ioengine))
         ioengine = ioengine_iouring;
     if (direct) {
         flags |= O_DIRECT;
@@ -395,7 +395,7 @@ LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
         engine = ioengine_psync;
     bool direct = engine == ioengine_libaio ||
                   engine == ImageConfigNS::IOENGINE_IOURING_DIRECT;
-    if (engine == ImageConfigNS::IOENGINE_IOURING_DIRECT)
+    if (ImageConfigNS::is_iouring_ioengine(engine))
         engine = ioengine_iouring;
     data_file = open_localfile_adaptor(upper.data().c_str(),
                                        O_RDWR | (direct ? O_DIRECT : 0), 0644, engine);

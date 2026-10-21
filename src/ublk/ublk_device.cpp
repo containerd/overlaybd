@@ -245,10 +245,10 @@ struct UblkDevice::SwapRequest {
 void UblkDevice::queue_loop(const struct ublksrv_dev *dev, photon::semaphore *started,
                             int *init_ret) {
     auto ioengine = imgservice_->global_conf.ioEngine();
-    bool use_iouring = ioengine == ImageConfigNS::IOENGINE_IOURING ||
-                       ioengine == ImageConfigNS::IOENGINE_IOURING_DIRECT;
-    photon::init(use_iouring ? photon::INIT_EVENT_IOURING : photon::INIT_EVENT_EPOLL,
-                 photon::INIT_IO_LIBCURL | photon::INIT_IO_LIBAIO);
+    auto event_engine = ImageConfigNS::is_iouring_ioengine(ioengine)
+                            ? photon::INIT_EVENT_IOURING
+                            : photon::INIT_EVENT_EPOLL;
+    photon::init(event_engine, photon::INIT_IO_LIBCURL | photon::INIT_IO_LIBAIO);
     DEFER(photon::fini());
 
     uint32_t pool_size = imgservice_->global_conf.ublkThreadPoolSize();
@@ -1156,9 +1156,7 @@ int run_ublk_device(const UblkDeviceOpts &opts, int ready_fd) {
     conf.ParseJSON(opts.service_config_path.empty() ? "/etc/overlaybd/overlaybd.json"
                                                     : opts.service_config_path.c_str());
     auto ioengine = conf.ioEngine();
-    bool use_iouring = ioengine == ImageConfigNS::IOENGINE_IOURING ||
-                       ioengine == ImageConfigNS::IOENGINE_IOURING_DIRECT;
-    if (use_iouring)
+    if (ImageConfigNS::is_iouring_ioengine(ioengine))
         photon::init(photon::INIT_EVENT_IOURING | photon::INIT_EVENT_SIGNAL,
                      photon::INIT_IO_DEFAULT);
     else

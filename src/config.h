@@ -24,6 +24,10 @@ namespace ImageConfigNS {
 const uint32_t IOENGINE_IOURING = 3;
 const uint32_t IOENGINE_IOURING_DIRECT = 4;
 
+inline bool is_iouring_ioengine(uint32_t ioengine) {
+    return ioengine == IOENGINE_IOURING || ioengine == IOENGINE_IOURING_DIRECT;
+}
+
 const int MAX_LAYER_CNT = 256;
 
 struct LayerConfig : public ConfigUtils::Config {

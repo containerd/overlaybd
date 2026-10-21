@@ -463,17 +463,22 @@ int main(int argc, char **argv) {
     mallopt(M_TRIM_THRESHOLD, 128 * 1024);
     prctl(PR_SET_THP_DISABLE, 1);
 
+    const char *config_path = argc > 1 ? argv[1] : "/etc/overlaybd/overlaybd.json";
+    ImageConfigNS::GlobalConfig conf;
+    conf.ParseJSON(config_path);
+    bool use_iouring = ImageConfigNS::is_iouring_ioengine(conf.ioEngine());
+
     photon::PhotonOptions photon_options;
     photon_options.use_pooled_stack_allocator = true;
-    photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT, photon_options);
+    auto event_engine = use_iouring
+                            ? photon::INIT_EVENT_IOURING | photon::INIT_EVENT_SIGNAL
+                            : photon::INIT_EVENT_DEFAULT;
+    photon::init(event_engine, photon::INIT_IO_DEFAULT, photon_options);
     DEFER(photon::fini());
     photon::block_all_signal();
     photon::sync_signal(SIGTERM, &sigint_handler);
     photon::sync_signal(SIGINT, &sigint_handler);
-    if (argc > 1)
-        imgservice = create_image_service(argv[1]);
-    else
-        imgservice = create_image_service();
+    imgservice = create_image_service(config_path);
     if (imgservice == nullptr) {
         LOG_ERROR("failed to create image service");
         return -1;
@@ -485,7 +490,9 @@ int main(int argc, char **argv) {
         LOG_WARN("workpoolSize is zero, using one worker");
         pool_size = 1;
     }
-    io_work_pool = new TCMUWorkPool(pool_size, photon::INIT_EVENT_EPOLL,
+    auto worker_event_engine = use_iouring ? photon::INIT_EVENT_IOURING
+                                           : photon::INIT_EVENT_EPOLL;
+    io_work_pool = new TCMUWorkPool(pool_size, worker_event_engine,
                                     photon::INIT_IO_LIBCURL | photon::INIT_IO_LIBAIO);
     DEFER(safe_delete(io_work_pool));
     LOG_INFO("I/O work pool initialized with ` workers", pool_size);

@@ -41,6 +41,8 @@ photon::fs::IFile *open_file(const char *fn, int flags, mode_t mode = 0, photon:
 int create_overlaybd(const std::string &srv_config, const std::string &dev_config,
     ImageService *&, photon::fs::IFile *&);
 
+uint64_t photon_event_engine_from_config(const std::string &srv_config);
+
 photon::fs::IFile *create_uploader(ZFile::CompressArgs *zfile_args,  IFile *src,
     const std::string &upload_url, const std::string &cred_file_path, uint64_t timeout_minute, uint64_t upload_bs_KB,
     const std::string &tls_key_path,  const std::string &tls_cert_path);

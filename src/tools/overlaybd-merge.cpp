@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
     if (tar && (upload_url.empty() == false)) {
         rst = new_tar_file_adaptor(rst);
     }
-    photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+    photon::init(photon_event_engine_from_config(config_path), photon::INIT_IO_DEFAULT);
     DEFER({photon::fini();});
 
 
