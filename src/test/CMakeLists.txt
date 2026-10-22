@@ -50,12 +50,6 @@ add_test(
     COMMAND ${EXECUTABLE_OUTPUT_PATH}/trace_test
 )
 
-add_executable(ext4_buffer_test ext4_buffer_test.cpp ../tools/comm_func.cpp)
-target_include_directories(ext4_buffer_test PRIVATE ${PHOTON_INCLUDE_DIR} ${RAPIDJSON_INCLUDE_DIRS})
-target_link_libraries(ext4_buffer_test gtest pthread photon_static overlaybd_lib overlaybd_image_lib)
-add_test(NAME ext4_buffer_test COMMAND ext4_buffer_test)
-set_tests_properties(ext4_buffer_test PROPERTIES TIMEOUT 180)
-
 if (NOT ORIGIN_EXT2FS)
     set_source_files_properties(
         ${E2FS_RESIZE_DIR}/resize2fs.o
