@@ -92,12 +92,11 @@ public:
         LOG_DEBUG("Accepted");
         auto streamfile = open_gzstream_file(sock, 0, true, t.task_id.c_str(), workdir.c_str());
         DEFER(delete streamfile);
-        auto turboOCI_stream = new UnTar(streamfile, nullptr, 0, 4096, nullptr, true);
-        DEFER(delete turboOCI_stream);
+        TarCore turboOCI_stream(streamfile, 0, 4096);
         auto fn_tar_idx = t.task_id + ".tar.meta";
         auto tar_idx = m_fs->open(fn_tar_idx.c_str(), O_TRUNC | O_CREAT | O_RDWR, 0644);
         DEFER(delete tar_idx);
-        auto nitems = turboOCI_stream->dump_tar_headers(tar_idx);
+        auto nitems = turboOCI_stream.dump_tar_headers(tar_idx);
         if (nitems < 0) {
             LOG_ERROR_RETURN(0, -1, "invalid buffer received.");
         }

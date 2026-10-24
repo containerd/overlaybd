@@ -91,8 +91,11 @@ class IFileRW : public IFileRO {
 public:
     virtual IMemoryIndex0 *index() const override = 0;
     static const int Index_Group_Commit = 10;
+    // Map data from the external target of a warp layer.
     static const int RemoteData = 11;
     static const int Set_Data_File_Direct_IO = 13;
+    // Map data already appended to this layer's own data file.
+    static const int StagedData = 14;
 
     int set_index_group_commit(size_t buffer_size) {
         return this->ioctl(Index_Group_Commit, buffer_size);
@@ -128,6 +131,8 @@ public:
         errno = ENOSYS;
         return -1;
     }
+    // returns 0 if StagedData can map the data appended to the top data file, -1 otherwise
+    virtual int can_map_staged_data() const = 0;
 };
 
 enum class RWType : uint8_t {

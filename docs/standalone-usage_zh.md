@@ -105,6 +105,9 @@ Overlaybd 提供了一种日志结构（log-structured）可写层和一种稀�
   /opt/overlaybd/bin/overlaybd-create ${data_file} ${index_file} ${virtual size}
 ```
 使用 `-s` 创建稀疏文件可写层。
+对于 Append 层，`--mkfs --compact-layout` 会格式化 ext4 并压紧元数据。
+紧凑布局默认关闭，后续 `overlaybd-apply` 需要时也应单独传入开关；示例和限制见
+[数据布局说明](apply-data-layout_zh.md)。
 要使用可写层，必须在 overlaybd 配置文件中设置 upper 选项。只有一个可写层可用，且它始终作为最顶层工作。示例：
 ```json
 {

@@ -70,6 +70,19 @@ Overlaybd achieves fast container startup through the following key designs:
   without copy-up. Actually writes to overlaybd are pure writes - no lower-layer data
   is ever copied on write. ~~CoW~~
 
+- **Userspace conversion**: overlaybd integrates
+  [erofs-utils](https://github.com/erofs/erofs-utils) and
+  [e2fsprogs](https://github.com/tytso/e2fsprogs) to build **erofs** and **ext4** layers entirely in
+  userspace — an OCI tar layer is turned into a block layer directly, with no kernel mount and
+  no loop device in the conversion path. 
+
+  **For ext4, `overlaybd-apply --compact-layout` enables an optional layout optimization**
+  for Append layers. On a fresh layer, file data is placed ahead of the ext4 metadata,
+  concentrating metadata reads near the end of the layer. The original layout remains
+  the default. On a 182-layer benchmark this cuts the unique 1 MiB coverage of a metadata-heavy
+  workload by over 95%, which directly reduces how much data on-demand fetching has to pull.
+  See [data-layout](apply-data-layout.md) for details.
+
 - **Seekable compression (ZFile)**: Random reads decompress only the requested data range,
   not the entire compressed block. Because compressed data is smaller, the actual I/O
   transfer is reduced enough that compressed random reads are often *faster* than

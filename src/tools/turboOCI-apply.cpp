@@ -52,8 +52,8 @@ int dump_tar_headers(IFile *src_file, const string &out) {
         LOG_ERRNO_RETURN(0, -1, "create dst file failed.");
     }
     DEFER({ delete dst_file; });
-    auto tar = new UnTar(src_file, nullptr, 0, 4096, nullptr, false);
-    auto obj_count = tar->dump_tar_headers(dst_file);
+    TarCore tar(src_file, 0, 4096);
+    auto obj_count = tar.dump_tar_headers(dst_file);
     if (obj_count < 0) {
         return -1;
     }

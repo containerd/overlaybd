@@ -17,13 +17,13 @@
 #include <stdio.h>
 #include <errno.h>
 #include <inttypes.h>
-#include <memory>
 #include <string>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include "../overlaybd/lsmt/file.h"
+#include "../overlaybd/tar/compact_conversion.h"
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
 #include <photon/fs/aligned-file.h>
@@ -57,6 +57,7 @@ int main(int argc, char **argv) {
     bool mkfs = false;
     bool raw = false;
     bool verbose = false;
+    bool compact_layout = false;
 
     CLI::App app{"this is overlaybd-create"};
     app.add_option("-u", parent_uuid, "parent uuid");
@@ -66,6 +67,9 @@ int main(int argc, char **argv) {
     app.add_flag("--fastoci", build_fastoci, "commit using turboOCI format(depracated)")->default_val(false);
     app.add_flag("--raw", raw, "create raw image")->default_val(false);
     app.add_flag("--mkfs", mkfs, "mkfs after create")->default_val(false);
+    app.add_flag("--compact-layout", compact_layout,
+                 "compact mkfs metadata (requires --mkfs and an Append layer)")
+        ->default_val(false);
     app.add_option("data_file", data_file_path, "data file path")->type_name("FILEPATH")->required();
     app.add_option("index_file", index_file_path, "index file path")->type_name("FILEPATH")->required();
     app.add_option("vsize", vsize, "virtual size(GB)")->type_name("INT")->check(CLI::NonNegativeNumber)->required();
@@ -78,6 +82,11 @@ int main(int argc, char **argv) {
     }
 
     build_turboOCI = build_turboOCI || build_fastoci;
+
+    if (compact_layout && (!mkfs || sparse || hybrid || raw || build_turboOCI)) {
+        fprintf(stderr, "--compact-layout requires --mkfs and a plain Append layer\n");
+        return -1;
+    }
 
     set_log_output_level(verbose ? 0 : 1);
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
@@ -111,7 +120,12 @@ int main(int argc, char **argv) {
         exit(-1);
     }
 
-    if (mkfs) {
+    if (compact_layout) {
+        if (CompactConversion::mkfs(file) < 0) {
+            fprintf(stderr, "compact mkfs failed, %s\n", strerror(errno));
+            return -1;
+        }
+    } else if (mkfs) {
         auto aligned = new_aligned_file_adaptor(file, 4096, true, false);
         if (!aligned) {
             fprintf(stderr, "create aligned adaptor failed\n");
