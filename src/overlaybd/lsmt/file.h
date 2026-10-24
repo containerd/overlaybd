@@ -115,6 +115,9 @@ public:
 
     // close_seal current RW layer (change it to RO layer) and re-stack with upper layer
     virtual int restack(IFileRW *upper) = 0;
+
+    // returns 0 if RemoteData can map the data appended to the top data file, -1 otherwise
+    virtual int can_map_staged_data() const = 0;
 };
 
 enum class RWType : uint8_t {
