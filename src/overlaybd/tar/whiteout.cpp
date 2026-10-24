@@ -54,7 +54,7 @@ int UnTar::remove_all(const std::string &path, bool rmdir) {
     if (fs->lstat(path.c_str(), &statBuf) == 0) { // get stat
         if (S_ISDIR(statBuf.st_mode) == 0) {      // not dir
             if (unpackedPaths.find(path) == unpackedPaths.end()) {
-                fs->unlink(path.c_str());
+                unlink_file(path.c_str(), statBuf);
             }
             return 0;
         }

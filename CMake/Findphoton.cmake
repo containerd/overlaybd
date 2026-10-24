@@ -3,6 +3,8 @@ set(FETCHCONTENT_QUIET false)
 set(PHOTON_ENABLE_EXTFS ON CACHE BOOL "Build Photon extfs support" FORCE)
 set(PHOTON_BUILD_OCF_CACHE ON CACHE BOOL "Build Photon OCF cache support" FORCE)
 set(PHOTON_ENABLE_URING ON CACHE BOOL "Build Photon io_uring support" FORCE)
+# Photon must link the liburing ublksrv uses (Finduring.cmake), never a private copy.
+set(PHOTON_URING_SOURCE "" CACHE STRING "Photon's own liburing source, unused" FORCE)
 
 if(NOT ORIGIN_EXT2FS)
   set(PHOTON_ENABLE_RESIZE ON CACHE BOOL "Build Photon extfs resize support" FORCE)
@@ -69,5 +71,8 @@ endif()
 if(NOT ORIGIN_EXT2FS)
   add_dependencies(photon_obj libext2fs)
 endif()
+
+# The io_uring wrapper includes headers that liburing's configure generates.
+add_dependencies(photon_obj liburing_build)
 
 set(PHOTON_INCLUDE_DIR ${photon_SOURCE_DIR}/include/)

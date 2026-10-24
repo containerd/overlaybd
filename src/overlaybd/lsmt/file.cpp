@@ -774,6 +774,7 @@ public:
     }
 
     UNIMPLEMENTED(int restack(IFileRW *upper) override);
+    UNIMPLEMENTED(int can_map_staged_data() const override);
 };
 
 // The append-only mapping log in the index file of a writable layer. A mapping is
@@ -977,11 +978,60 @@ public:
             }
             return 0;
         }
+        if (request == RemoteData) {
+            return map_staged_data(va_arg(args, RemoteMapping));
+        }
         if (request != Index_Group_Commit)
             LOG_ERROR_RETURN(EINVAL, -1, "invaid request code");
 
         auto buffer_size = va_arg(args, size_t);
         return m_log ? m_log->set_group_commit(buffer_size) : 0;
+    }
+
+    virtual int can_map_staged_data() const override {
+        if (m_rw_type == RWType::Append)
+            return 0;
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    // maps [offset, +count) of the virtual file to moffset of the data file of tag
+    int insert_mappings(off_t offset, uint32_t count, off_t moffset, uint8_t tag) {
+        if (offset < 0 || moffset < 0 || !is_aligned((uint64_t)offset | count | (uint64_t)moffset))
+            LOG_ERROR_RETURN(EINVAL, -1, "unaligned mapping {offset: `, count: `, moffset: `}",
+                             offset, count, moffset);
+        size_t nwrite = 0;
+        while (count > 0) {
+            auto length = min(count / ALIGNMENT, (uint32_t)Segment::MAX_LENGTH);
+            SegmentMapping m((uint64_t)offset / ALIGNMENT, length,
+                             (uint64_t)moffset / ALIGNMENT, tag);
+            LOG_DEBUG("insert segment: `", m);
+            if (commit_mapping(m, [&] { index_insert(m); }) != 0)
+                return -1;
+            auto bytes = length * ALIGNMENT;
+            nwrite += bytes;
+            offset += bytes;
+            count -= bytes;
+            moffset += bytes;
+        }
+        return nwrite;
+    }
+
+    // maps [lba.offset, +lba.count) of the virtual file to the data staged at lba.roffset
+    int map_staged_data(RemoteMapping lba) {
+        if (can_map_staged_data() != 0)
+            LOG_ERRNO_RETURN(0, -1, "the layer cannot map staged data");
+        Lock lock(m_rw_mtx);
+        struct stat st;
+        if (m_files[m_rw_tag]->fstat(&st) != 0)
+            LOG_ERRNO_RETURN(0, -1, "failed to stat the upper data file");
+        if (lba.roffset < (off_t)HeaderTrailer::SPACE || lba.roffset > st.st_size ||
+            lba.count > (uint64_t)(st.st_size - lba.roffset))
+            LOG_ERROR_RETURN(EINVAL, -1,
+                             "mapping {offset: `, count: `, roffset: `} out of data [`, `)",
+                             lba.offset, lba.count, lba.roffset, (uint64_t)HeaderTrailer::SPACE,
+                             st.st_size);
+        return insert_mappings(lba.offset, lba.count, lba.roffset, m_rw_tag);
     }
 
     virtual int init_concurrency() {
@@ -1241,9 +1291,12 @@ public:
             mapping.reset(m_index0->dump(ALIGNMENT));
             index_size = m_index0->size();
         }
+        index_size = compress_raw_index(mapping.get(), index_size);
         uint64_t index_offset = m_files[m_rw_tag]->lseek(0, SEEK_END);
         ssize_t index_bytes = index_size * sizeof(SegmentMapping);
         index_bytes = (index_bytes + ALIGNMENT - 1) / ALIGNMENT * ALIGNMENT;
+        std::fill(mapping.get() + index_size, mapping.get() + index_bytes / sizeof(SegmentMapping),
+                  SegmentMapping::invalid_mapping());
         auto ret = m_files[m_rw_tag]->pwrite(mapping.get(), index_bytes, index_offset);
         if (ret < index_bytes)
             LOG_ERRNO_RETURN(0, -1, "failed to write index.");
@@ -1484,6 +1537,7 @@ public:
         return 0;
     }
 
+    UNIMPLEMENTED(int can_map_staged_data() const override);
 };
 
 class LSMTWarpFile : public LSMTFile {
@@ -1530,24 +1584,11 @@ public:
         va_end(tmp);
         LOG_DEBUG("RemoteMapping: {offset: `, count: `, roffset: `}", lba.offset, lba.count,
                   lba.roffset);
-        size_t nwrite = 0;
-        while (lba.count > 0) {
-            SegmentMapping m;
-            m.offset = lba.offset / ALIGNMENT;
-            m.length = (Segment::MAX_LENGTH < lba.count / ALIGNMENT ? Segment::MAX_LENGTH
-                                                                    : lba.count / ALIGNMENT);
-            m.moffset = lba.roffset / ALIGNMENT;
-            m.tag = m_rw_tag + (uint8_t)SegmentType::remoteData;
-            LOG_DEBUG("insert segment: `", m);
-            if (commit_mapping(m, [&] { index_insert(m); }) != 0)
-                return -1;
-            nwrite += m.length * ALIGNMENT;
-            lba.offset += m.length * ALIGNMENT;
-            lba.count -= m.length * ALIGNMENT;
-            lba.roffset += m.length * ALIGNMENT;
-        }
-        return nwrite;
+        return insert_mappings(lba.offset, lba.count, lba.roffset,
+                               m_rw_tag + (uint8_t)SegmentType::remoteData);
     }
+
+    UNIMPLEMENTED(int can_map_staged_data() const override);
 
     size_t compact(CompactOptions &opts, size_t moffset, size_t &nindex) const {
 
