@@ -45,7 +45,8 @@ photon::fs::IFile *create_uploader(ZFile::CompressArgs *zfile_args,  IFile *src,
     const std::string &upload_url, const std::string &cred_file_path, uint64_t timeout_minute, uint64_t upload_bs_KB,
     const std::string &tls_key_path,  const std::string &tls_cert_path);
 
-photon::fs::IFileSystem *create_ext4fs(photon::fs::IFile *imgfile, bool mkfs);
+photon::fs::IFileSystem *create_ext4fs(photon::fs::IFile *imgfile, bool mkfs,
+    bool enable_buffer);
 
 bool is_erofs_fs(const photon::fs::IFile *imgfile);
 photon::fs::IFileSystem *create_erofs_fs(photon::fs::IFile *imgfile, uint64_t blksz);
