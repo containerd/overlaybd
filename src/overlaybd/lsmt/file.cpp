@@ -331,11 +331,29 @@ static int is_zero_block(char *buf, size_t n) {
     return 0;
 }
 
+// Offsets and the return value are in 512-byte sectors.
+static ssize_t pad_compact_data(IFile *dest, uint64_t moffset) {
+    const uint64_t sectors_per_page = ALIGNMENT4K / ALIGNMENT;
+    auto padding = (sectors_per_page - moffset % sectors_per_page) % sectors_per_page;
+    if (padding) {
+        ALIGNED_MEM4K(zeros, ALIGNMENT4K);
+        memset(zeros, 0, ALIGNMENT4K);
+        auto bytes = padding * ALIGNMENT;
+        if (dest->write(zeros, bytes) != (ssize_t)bytes)
+            LOG_ERRNO_RETURN(0, -1, "failed to write compact padding");
+    }
+    return padding;
+}
+
 static ssize_t pcopy(const CompactOptions &opt, const SegmentMapping &m, uint64_t moffset,
                      vector<SegmentMapping> &index) {
+    auto padding = pad_compact_data(opt.commit_args->as, moffset);
+    if (padding < 0)
+        return -1;
+    moffset += padding;
     auto offset = m.moffset * ALIGNMENT;
     auto count = m.length * ALIGNMENT;
-    auto bytes = 0;
+    auto bytes = padding * ALIGNMENT;
     const size_t BUFFER_SIZE = 32 * 1024;
     ALIGNED_MEM4K(buf, BUFFER_SIZE);
     ALIGNED_MEM4K(data, BUFFER_SIZE);
@@ -462,7 +480,10 @@ static int compact(const CompactOptions &opt, atomic_uint64_t &compacted_idx_siz
             return (int)ret;
         moffset += ret;
     }
-    uint64_t index_offset = moffset * ALIGNMENT;
+    auto padding_sectors = pad_compact_data(dest_file, moffset);
+    if (padding_sectors < 0)
+        return -1;
+    uint64_t index_offset = (moffset + padding_sectors) * ALIGNMENT;
     auto index_size = compress_raw_index(&compact_index[0], compact_index.size());
     LOG_DEBUG("write index to dest_file `, size: `*`", dest_file, index_size,
               sizeof(SegmentMapping));
@@ -1549,7 +1570,7 @@ public:
         return nwrite;
     }
 
-    size_t compact(CompactOptions &opts, size_t moffset, size_t &nindex) const {
+    ssize_t compact(CompactOptions &opts, size_t moffset, size_t &nindex) const {
 
         auto dest_file = opts.commit_args->as;
         auto marray = ptr_array(&opts.raw_index[0], opts.index_size);
@@ -1574,7 +1595,10 @@ public:
                 return (int)ret;
             moffset += ret;
         }
-        uint64_t index_offset = moffset * ALIGNMENT;
+        auto padding_sectors = pad_compact_data(dest_file, moffset);
+        if (padding_sectors < 0)
+            return -1;
+        uint64_t index_offset = (moffset + padding_sectors) * ALIGNMENT;
         auto index_size = compress_raw_index(&compact_index[0], compact_index.size());
         LOG_DEBUG("write index to dest_file `, offset: `, size: `*`", dest_file, index_offset,
                   index_size, sizeof(SegmentMapping));

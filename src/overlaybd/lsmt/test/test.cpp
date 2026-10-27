@@ -113,6 +113,77 @@ TEST_F(FileTest, reject_oversized_rw_index) {
 
 void lookup_test(IMemoryIndex &idx);
 
+static void check_compact_layout(IFileRW *rw, IFile *dest, bool warp) {
+    SegmentMapping extents[] = {{1, 1, 0}, {8, 1, 0}, {12, 3, 0}, {17, 80, 0}};
+    extents[2].discard();
+    vector<char> expected(104 * ALIGNMENT, 0);
+    for (size_t i = 0; i < LEN(extents); ++i) {
+        auto &m = extents[i];
+        auto size = m.length * ALIGNMENT;
+        auto offset = m.offset * ALIGNMENT;
+        if (m.zeroed) {
+            ASSERT_EQ(0, rw->fallocate(3, offset, size));
+        } else {
+            memset(expected.data() + offset, 0x31 + i, size);
+            ASSERT_EQ((ssize_t)size, rw->pwrite(expected.data() + offset, size, offset));
+        }
+    }
+    CommitArgs args(dest);
+    ASSERT_EQ(0, rw->commit(args));
+    ALIGNED_MEM4K(trailer, HeaderTrailer::SPACE);
+    auto end = dest->lseek(0, SEEK_END);
+    ASSERT_EQ((ssize_t)HeaderTrailer::SPACE,
+              dest->pread(trailer, HeaderTrailer::SPACE, end - HeaderTrailer::SPACE));
+    auto ht = (HeaderTrailer *)trailer;
+    vector<SegmentMapping> index(ht->index_size);
+    auto bytes = index.size() * sizeof(SegmentMapping);
+    ASSERT_EQ((ssize_t)bytes, dest->pread(index.data(), bytes, ht->index_offset));
+    uint64_t cursor = HeaderTrailer::SPACE;
+    vector<char> payload;
+    size_t n = 0;
+    for (auto &m : index) {
+        if (m.offset == Segment::INVALID_OFFSET)
+            continue;
+        ASSERT_LT(n, LEN(extents));
+        EXPECT_EQ(extents[n].offset + 0, m.offset + 0);
+        EXPECT_EQ(extents[n].length + 0, m.length + 0);
+        EXPECT_EQ(extents[n].zeroed + 0, m.zeroed + 0);
+        if (!m.zeroed)
+            cursor = (cursor + ALIGNMENT4K - 1) / ALIGNMENT4K * ALIGNMENT4K;
+        EXPECT_EQ(cursor, m.moffset * ALIGNMENT);
+        if (!m.zeroed) {
+            payload.resize(cursor - HeaderTrailer::SPACE + m.length * ALIGNMENT, 0);
+            memcpy(payload.data() + cursor - HeaderTrailer::SPACE,
+                   expected.data() + m.offset * ALIGNMENT, m.length * ALIGNMENT);
+            cursor += m.length * ALIGNMENT;
+        }
+        ++n;
+    }
+    EXPECT_EQ(LEN(extents), n);
+    cursor = (cursor + ALIGNMENT4K - 1) / ALIGNMENT4K * ALIGNMENT4K;
+    EXPECT_EQ(cursor, ht->index_offset + 0);
+    payload.resize(cursor - HeaderTrailer::SPACE, 0);
+    vector<char> actual(payload.size());
+    ASSERT_EQ((ssize_t)actual.size(), dest->pread(actual.data(), actual.size(), HeaderTrailer::SPACE));
+    EXPECT_EQ(payload, actual);
+    // There are no remote extents; the warp reader still requires a target.
+    unique_ptr<IFileRO> ro(warp ? open_warpfile_ro(dest, dest, false)
+                              : LSMT::open_file_ro(dest, false));
+    ASSERT_NE(nullptr, ro);
+    actual.resize(expected.size());
+    ASSERT_EQ((ssize_t)actual.size(), ro->pread(actual.data(), actual.size(), 0));
+    EXPECT_EQ(expected, actual);
+}
+
+TEST_F(FileTest, compact_layout_4k) {
+    unique_ptr<IFileRW> rw(create_file_rw());
+    unique_ptr<IFile> dest(lfs->open(layer_name.back().c_str(),
+                                   O_RDWR | O_CREAT | O_TRUNC, S_IRWXU));
+    ASSERT_NE(nullptr, rw);
+    ASSERT_NE(nullptr, dest);
+    check_compact_layout(rw.get(), dest.get(), false);
+}
+
 TEST(Index, lookup) {
     const static SegmentMapping mapping[] = {{0, 10, 0}, {10, 10, 50}, {100, 10, 20}};
     Index idx(mapping, LEN(mapping), false);
@@ -1919,6 +1990,15 @@ TEST_F(WarpFileTest, commit) {
     verify_file(file);
     fcheck = nullptr; // delete by warpfile.
     delete file;
+}
+
+TEST_F(WarpFileTest, compact_layout_4k) {
+    unique_ptr<IFileRW> rw(create_warpfile_rw(ut_io_engine));
+    unique_ptr<IFile> dest(lfs->open(layer_name.back().c_str(),
+                                   O_RDWR | O_CREAT | O_TRUNC, S_IRWXU));
+    ASSERT_NE(nullptr, rw);
+    ASSERT_NE(nullptr, dest);
+    check_compact_layout(rw.get(), dest.get(), true);
 }
 
 TEST_F(WarpFileTest, large_lba) {

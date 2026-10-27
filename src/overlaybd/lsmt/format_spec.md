@@ -50,6 +50,13 @@ supposed to be referenced by the index entries. And it's possible for this secti
 to contain garbage data blocks that are not referenced by the any entry of the
 index.
 
+Compaction aligns the file offset of each non-zero local data extent to 4096
+bytes, and aligns the index start to 4096 bytes after the data. Padding is
+zero-filled and adds at most 3584 bytes before each extent. Explicit zero
+extents remain index-only, and remote mappings keep their original offsets.
+The sector units and wire format are unchanged; mapping offsets and lengths
+are still expressed in 512-byte sectors.
+
 
 ## index
 The index section is a table that associates logical block addressing (LBA) with
