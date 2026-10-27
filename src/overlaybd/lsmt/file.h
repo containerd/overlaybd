@@ -83,12 +83,16 @@ struct CommitArgs {
 class IFileRW : public IFileRO {
 public:
     virtual IMemoryIndex0 *index() const override = 0;
-    const int Index_Group_Commit = 10;
-
+    static const int Index_Group_Commit = 10;
     static const int RemoteData = 11;
+    static const int Set_Data_File_Direct_IO = 13;
 
     int set_index_group_commit(size_t buffer_size) {
         return this->ioctl(Index_Group_Commit, buffer_size);
+    }
+
+    int set_data_file_direct_io(bool direct) {
+        return this->ioctl(Set_Data_File_Direct_IO, (int)direct);
     }
 
     // update vsize for current rw layer

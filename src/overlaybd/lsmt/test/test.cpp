@@ -631,6 +631,362 @@ TEST_F(HybridFileTest, hybrid_rw_stacked_layers) {
     verify(file);
 }
 
+class FailOncePwriteFile : public photon::fs::ForwardFile_Ownership {
+public:
+    bool fail_next = false;
+    explicit FailOncePwriteFile(IFile *file) : ForwardFile_Ownership(file, true) {
+    }
+    virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+        if (fail_next) {
+            fail_next = false;
+            errno = EIO;
+            return -1;
+        }
+        return m_file->pwrite(buf, count, offset);
+    }
+};
+
+class ShortThenFailPwriteFile : public photon::fs::ForwardFile_Ownership {
+public:
+    int failures_left = 0;
+    explicit ShortThenFailPwriteFile(IFile *file) : ForwardFile_Ownership(file, true) {
+    }
+    virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+        if (failures_left == 2) {
+            failures_left--;
+            return m_file->pwrite(buf, count / 2, offset);
+        }
+        if (failures_left == 1) {
+            failures_left--;
+            errno = EIO;
+            return -1;
+        }
+        return m_file->pwrite(buf, count, offset);
+    }
+};
+
+TEST_F(HybridFileTest, index_log_error_retry) {
+    name_next_layer();
+    auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto findex = new ShortThenFailPwriteFile(
+        lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU));
+    LayerInfo args(fdata, findex);
+    args.rw_type = RWType::Hybrid;
+    args.virtual_size = MAX_IMAGE_SIZE;
+    auto file = ::create_file_rw(args, true);
+    ASSERT_NE(nullptr, file);
+
+    ALIGNED_MEM4K(wbuf, ALIGNMENT4K);
+    memset(wbuf, 0x5a, ALIGNMENT4K);
+    findex->failures_left = 2;
+    EXPECT_EQ(-1, file->pwrite(wbuf, ALIGNMENT4K, 0));
+    EXPECT_EQ((ssize_t)HeaderTrailer::SPACE, file_size(lfs, idx_name.back().c_str()));
+    EXPECT_EQ((ssize_t)ALIGNMENT4K, file->pwrite(wbuf, ALIGNMENT4K, 0));
+    delete file;
+
+    auto reopened = open_file_rw();
+    ASSERT_NE(nullptr, reopened);
+    ALIGNED_MEM4K(rbuf, ALIGNMENT4K);
+    EXPECT_EQ((ssize_t)ALIGNMENT4K, reopened->pread(rbuf, ALIGNMENT4K, 0));
+    EXPECT_EQ(0, memcmp(wbuf, rbuf, ALIGNMENT4K));
+    delete reopened;
+}
+
+class FaultyIndexFile : public photon::fs::ForwardFile_Ownership {
+public:
+    int short_writes = 0, failed_writes = 0;
+    bool fail_truncate = false;
+    explicit FaultyIndexFile(IFile *file) : ForwardFile_Ownership(file, true) {
+    }
+    virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+        if (short_writes > 0) {
+            short_writes--;
+            return m_file->pwrite(buf, count / 2, offset);
+        }
+        if (failed_writes > 0) {
+            failed_writes--;
+            errno = EIO;
+            return -1;
+        }
+        return m_file->pwrite(buf, count, offset);
+    }
+    virtual int ftruncate(off_t length) override {
+        if (fail_truncate) {
+            errno = EIO;
+            return -1;
+        }
+        return m_file->ftruncate(length);
+    }
+};
+
+class IndexLogTest : public FileTest {
+public:
+    FaultyIndexFile *file = nullptr;
+    unique_ptr<IndexLog> log;
+    int published = 0;
+
+    virtual void SetUp() override {
+        FileTest::SetUp();
+        name_next_layer();
+        file = new FaultyIndexFile(
+            lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU));
+        log.reset(IndexLog::open(file, true));
+        ASSERT_NE(nullptr, log);
+    }
+    virtual void TearDown() override {
+        log.reset();
+        FileTest::TearDown();
+    }
+
+    static SegmentMapping mapping(uint64_t offset) {
+        return SegmentMapping{offset, 8, offset};
+    }
+    int append(uint64_t offset) {
+        return log->append(mapping(offset), [&] { published++; });
+    }
+    ssize_t log_size() {
+        return file_size(lfs, idx_name.back().c_str());
+    }
+    void expect_log(const vector<SegmentMapping> &expected) {
+        ASSERT_EQ((ssize_t)(expected.size() * sizeof(SegmentMapping)), log_size());
+        vector<SegmentMapping> actual(expected.size());
+        auto size = expected.size() * sizeof(SegmentMapping);
+        ASSERT_EQ((ssize_t)size, log->file()->pread(actual.data(), size, 0));
+        EXPECT_EQ(0, memcmp(expected.data(), actual.data(), size));
+    }
+};
+
+TEST_F(IndexLogTest, short_write_completes) {
+    file->short_writes = 1;
+    ASSERT_EQ(0, append(0));
+    EXPECT_EQ(1, published);
+    expect_log({mapping(0)});
+}
+
+TEST_F(IndexLogTest, failed_append_truncates_and_retries) {
+    ASSERT_EQ(0, append(0));
+    file->short_writes = 1;
+    file->failed_writes = 1;
+    EXPECT_EQ(-1, append(8));
+    EXPECT_EQ(1, published);
+    expect_log({mapping(0)});
+    ASSERT_EQ(0, append(8));
+    EXPECT_EQ(2, published);
+    expect_log({mapping(0), mapping(8)});
+}
+
+TEST_F(IndexLogTest, truncate_failure_latches_error) {
+    ASSERT_EQ(0, append(0));
+    file->short_writes = 1;
+    file->failed_writes = 1;
+    file->fail_truncate = true;
+    EXPECT_EQ(-1, append(8));
+    file->fail_truncate = false;
+    EXPECT_EQ(-1, append(8));
+    EXPECT_EQ(-1, log->flush());
+    EXPECT_EQ(1, published);
+}
+
+TEST_F(IndexLogTest, group_commit_full_buffer_failure_retries) {
+    ASSERT_EQ(0, log->set_group_commit(2 * sizeof(SegmentMapping)));
+    ASSERT_EQ(0, append(0));
+    EXPECT_EQ(1, published);
+    EXPECT_EQ(0, log_size());
+    file->failed_writes = 1;
+    EXPECT_EQ(-1, append(8));
+    EXPECT_EQ(1, published);
+    EXPECT_EQ(0, log_size());
+    ASSERT_EQ(0, append(8));
+    EXPECT_EQ(2, published);
+    expect_log({mapping(0), mapping(8)});
+}
+
+TEST_F(IndexLogTest, group_commit_flush_pads_and_reports_error) {
+    ASSERT_EQ(0, log->set_group_commit(4 * sizeof(SegmentMapping)));
+    ASSERT_EQ(0, append(0));
+    file->failed_writes = 1;
+    EXPECT_EQ(-1, log->flush());
+    EXPECT_EQ(0, log_size());
+    ASSERT_EQ(0, log->flush());
+    auto invalid = SegmentMapping::invalid_mapping();
+    expect_log({mapping(0), invalid, invalid, invalid});
+    ASSERT_EQ(0, log->flush());
+    expect_log({mapping(0), invalid, invalid, invalid});
+}
+
+TEST_F(IndexLogTest, shrinking_group_commit_flushes_pending) {
+    ASSERT_EQ(0, log->set_group_commit(4 * sizeof(SegmentMapping)));
+    ASSERT_EQ(0, append(0));
+    ASSERT_EQ(0, append(8));
+    EXPECT_EQ(0, log_size());
+    ASSERT_EQ(0, log->set_group_commit(sizeof(SegmentMapping)));
+    auto invalid = SegmentMapping::invalid_mapping();
+    expect_log({mapping(0), mapping(8), invalid, invalid});
+}
+
+class CountingDeleteFile : public photon::fs::ForwardFile_Ownership {
+public:
+    int *deleted;
+    CountingDeleteFile(IFile *file, int *deleted)
+        : ForwardFile_Ownership(file, true), deleted(deleted) {
+    }
+    ~CountingDeleteFile() {
+        (*deleted)++;
+    }
+};
+
+// stack_files() hands the index log, together with its group-commit buffer and the
+// ownership of the index file, from the upper layer to the stacked file
+TEST_F(HybridFileTest, stacking_moves_index_log) {
+    auto lower_rw = create_file_rw();
+    ASSERT_NE(nullptr, lower_rw);
+    do_io(lower_rw, {64, 8, 0x11});
+    IFileRO *lower = nullptr;
+    ASSERT_EQ(0, lower_rw->close_seal(&lower));
+    delete lower_rw;
+
+    name_next_layer();
+    int deleted = 0;
+    auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto findex = new CountingDeleteFile(
+        lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU), &deleted);
+    LayerInfo args(fdata, findex);
+    args.rw_type = RWType::Hybrid;
+    args.virtual_size = MAX_IMAGE_SIZE;
+    auto upper = ::create_file_rw(args, true);
+    ASSERT_NE(nullptr, upper);
+    ASSERT_EQ(0, upper->set_index_group_commit(2 * sizeof(SegmentMapping)));
+    auto file = stack_files(upper, lower, false, false);
+    ASSERT_NE(nullptr, file);
+
+    auto index_size = file_size(lfs, idx_name.back().c_str());
+    do_io(file, {0, 8, 0x22});
+    EXPECT_EQ(index_size, file_size(lfs, idx_name.back().c_str()));
+    do_io(file, {16, 8, 0x33});
+    EXPECT_EQ(index_size + (ssize_t)(2 * sizeof(SegmentMapping)),
+              file_size(lfs, idx_name.back().c_str()));
+    verify(file);
+
+    delete file;
+    EXPECT_EQ(1, deleted);
+    delete upper;
+    EXPECT_EQ(1, deleted);
+    delete lower;
+
+    auto reopened = open_file_rw();
+    ASSERT_NE(nullptr, reopened);
+    ALIGNED_MEM4K(rbuf, 8 * ALIGNMENT);
+    ASSERT_EQ((ssize_t)(8 * ALIGNMENT), reopened->pread(rbuf, 8 * ALIGNMENT, 16 * ALIGNMENT));
+    EXPECT_EQ(0, memcmp(&expected[16 * ALIGNMENT], rbuf, 8 * ALIGNMENT));
+    delete reopened;
+}
+
+TEST_F(HybridFileTest, close_seal_flush_error_retry) {
+    name_next_layer();
+    auto fdata = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto findex = new FailOncePwriteFile(
+        lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU));
+    LayerInfo args(fdata, findex);
+    args.rw_type = RWType::Hybrid;
+    args.virtual_size = MAX_IMAGE_SIZE;
+    auto file = ::create_file_rw(args, true);
+    ASSERT_NE(nullptr, file);
+    ASSERT_EQ(0, file->set_index_group_commit(2 * sizeof(SegmentMapping)));
+
+    ALIGNED_MEM4K(wbuf, ALIGNMENT4K);
+    memset(wbuf, 0x47, ALIGNMENT4K);
+    EXPECT_EQ((ssize_t)ALIGNMENT4K, file->pwrite(wbuf, ALIGNMENT4K, 0));
+    findex->fail_next = true;
+    IFileRO *sealed = nullptr;
+    EXPECT_EQ(-1, file->close_seal(&sealed));
+    EXPECT_EQ(nullptr, sealed);
+    EXPECT_EQ(0, file->close_seal(&sealed));
+    ASSERT_NE(nullptr, sealed);
+
+    delete file;
+    delete sealed;
+}
+
+TEST_F(HybridFileTest, direct_io_alignment_policy) {
+    ALIGNED_MEM4K(wbuf, ALIGNMENT4K);
+    memset(wbuf, 0x6b, ALIGNMENT4K);
+    for (bool direct : {false, true}) {
+        auto file = create_file_rw(RWType::Hybrid);
+        ASSERT_NE(nullptr, file);
+        ASSERT_EQ(0, file->set_data_file_direct_io(direct));
+        EXPECT_EQ((ssize_t)ALIGNMENT, file->pwrite(wbuf, ALIGNMENT, 0));
+        auto first_size = file_size(lfs, data_name.back().c_str());
+        EXPECT_EQ((ssize_t)(HeaderTrailer::SPACE + (direct ? ALIGNMENT4K : ALIGNMENT)),
+                  first_size);
+        EXPECT_EQ((ssize_t)ALIGNMENT, file->pwrite(wbuf, ALIGNMENT, 0));
+        EXPECT_EQ(first_size + (direct ? ALIGNMENT4K : 0),
+                  file_size(lfs, data_name.back().c_str()));
+        delete file;
+    }
+}
+
+TEST_F(HybridFileTest, legacy_unaligned_rewrite_preserves_neighbor) {
+    ALIGNED_MEM4K(wbuf, ALIGNMENT4K);
+    ALIGNED_MEM4K(rbuf, ALIGNMENT4K);
+    for (bool direct : {false, true}) {
+        auto file = create_file_rw(RWType::Hybrid);
+        ASSERT_NE(nullptr, file);
+        ASSERT_EQ(0, file->set_data_file_direct_io(false));
+        memset(wbuf, 0x12, ALIGNMENT4K);
+        ASSERT_EQ((ssize_t)ALIGNMENT, file->pwrite(wbuf, ALIGNMENT, 0));
+        memset(wbuf, 0x23, ALIGNMENT4K);
+        ASSERT_EQ((ssize_t)ALIGNMENT, file->pwrite(wbuf, ALIGNMENT, ALIGNMENT4K));
+        auto size = file_size(lfs, data_name.back().c_str());
+        ASSERT_EQ((ssize_t)(HeaderTrailer::SPACE + 2 * ALIGNMENT), size);
+
+        ASSERT_EQ(0, file->set_data_file_direct_io(direct));
+        memset(wbuf, 0x34, ALIGNMENT4K);
+        ASSERT_EQ((ssize_t)ALIGNMENT, file->pwrite(wbuf, ALIGNMENT, ALIGNMENT4K));
+        EXPECT_EQ(direct ? (ssize_t)(HeaderTrailer::SPACE + 2 * ALIGNMENT4K) : size,
+                  file_size(lfs, data_name.back().c_str()));
+        delete file;
+
+        auto reopened = open_file_rw();
+        ASSERT_NE(nullptr, reopened);
+        ASSERT_EQ((ssize_t)ALIGNMENT, reopened->pread(rbuf, ALIGNMENT, 0));
+        memset(wbuf, 0x12, ALIGNMENT);
+        EXPECT_EQ(0, memcmp(wbuf, rbuf, ALIGNMENT));
+        ASSERT_EQ((ssize_t)ALIGNMENT, reopened->pread(rbuf, ALIGNMENT, ALIGNMENT4K));
+        memset(wbuf, 0x34, ALIGNMENT);
+        EXPECT_EQ(0, memcmp(wbuf, rbuf, ALIGNMENT));
+        delete reopened;
+    }
+}
+
+TEST_F(HybridFileTest, discard_uses_data_eof) {
+    name_next_layer();
+    auto fdata = new FailOncePwriteFile(
+        lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU));
+    auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    LayerInfo args(fdata, findex);
+    args.rw_type = RWType::Hybrid;
+    args.virtual_size = MAX_IMAGE_SIZE;
+    auto file = ::create_file_rw(args, true);
+    ASSERT_NE(nullptr, file);
+    ASSERT_EQ(0, file->set_data_file_direct_io(true));
+
+    ALIGNED_MEM4K(wbuf, ALIGNMENT4K);
+    memset(wbuf, 0x7c, ALIGNMENT4K);
+    fdata->fail_next = true;
+    EXPECT_EQ(-1, file->pwrite(wbuf, ALIGNMENT, 0));
+    EXPECT_EQ(0, file->fallocate(FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, 0, ALIGNMENT));
+    delete file;
+
+    auto reopened = open_file_rw();
+    ASSERT_NE(nullptr, reopened);
+    ALIGNED_MEM4K(rbuf, ALIGNMENT4K);
+    memset(rbuf, 0xff, ALIGNMENT4K);
+    EXPECT_EQ((ssize_t)ALIGNMENT, reopened->pread(rbuf, ALIGNMENT, 0));
+    for (size_t i = 0; i < ALIGNMENT; i++)
+        EXPECT_EQ(0, rbuf[i]);
+    delete reopened;
+}
+
 // yields inside every pwrite and records how many of them overlap, so that the photon
 // threads writing a layer really interleave
 class YieldingFile : public photon::fs::ForwardFile_Ownership {
@@ -646,6 +1002,38 @@ public:
         return ret;
     }
 };
+
+TEST_F(HybridFileTest, restack_switches_data_file_mode) {
+    auto lower_rw = create_file_rw();
+    ASSERT_NE(nullptr, lower_rw);
+    ALIGNED_MEM4K(lower_buf, ALIGNMENT4K);
+    memset(lower_buf, 0x2a, ALIGNMENT4K);
+    ASSERT_EQ((ssize_t)ALIGNMENT4K, lower_rw->pwrite(lower_buf, ALIGNMENT4K, 0));
+    IFileRO *lower = nullptr;
+    ASSERT_EQ(0, lower_rw->close_seal(&lower));
+    delete lower_rw;
+
+    auto upper = create_file_rw(RWType::Hybrid);
+    ASSERT_NE(nullptr, upper);
+    auto file = stack_files(upper, lower, true, false);
+    ASSERT_NE(nullptr, file);
+    ALIGNED_MEM4K(wbuf, ALIGNMENT4K);
+    memset(wbuf, 0x4d, ALIGNMENT4K);
+    EXPECT_EQ((ssize_t)ALIGNMENT4K, file->pwrite(wbuf, ALIGNMENT4K, ALIGNMENT4K));
+
+    auto new_upper = create_file_rw(RWType::Hybrid);
+    ASSERT_NE(nullptr, new_upper);
+    ASSERT_EQ(0, new_upper->set_data_file_direct_io(true));
+    auto new_data_name = data_name.back();
+    EXPECT_EQ(0, file->restack(new_upper));
+    ALIGNED_MEM4K(rbuf, ALIGNMENT4K);
+    EXPECT_EQ((ssize_t)ALIGNMENT4K, file->pread(rbuf, ALIGNMENT4K, ALIGNMENT4K));
+    EXPECT_EQ(0, memcmp(wbuf, rbuf, ALIGNMENT4K));
+    auto new_data_size = file_size(lfs, new_data_name.c_str());
+    EXPECT_EQ((ssize_t)ALIGNMENT, file->pwrite(wbuf, ALIGNMENT, 2 * ALIGNMENT4K));
+    EXPECT_EQ(new_data_size + ALIGNMENT4K, file_size(lfs, new_data_name.c_str()));
+    delete file;
+}
 
 // Hybrid writers hold no m_rw_mtx, so their data writes overlap, while an append-only
 // layer still serializes them. Every thread writes its own disjoint 4K blocks.

@@ -19,7 +19,7 @@
     },
     "ioEngine": 0,
     "workpoolSize": 8,
-    "ublkThreadPoolSize": 32,
+    "ublkThreadPoolSize": 64,
     "download": {
         "enable": true,
         "delay": 600,

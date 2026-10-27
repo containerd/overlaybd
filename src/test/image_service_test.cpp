@@ -573,7 +573,7 @@ int upper_fd_flags(const std::string &path) {
     return -1;
 }
 
-void check_upper_engine(uint32_t engine, bool sparse) {
+void check_upper_engine(uint32_t engine, bool sparse, bool snapshot = false) {
     std::thread worker([=] {
         auto directory = upper_test_directory();
         ASSERT_FALSE(directory.empty());
@@ -610,6 +610,27 @@ void check_upper_engine(uint32_t engine, bool sparse) {
             info.rw_type = sparse ? LSMT::RWType::Sparse : LSMT::RWType::Hybrid;
             std::unique_ptr<LSMT::IFileRW> layer(LSMT::create_file_rw(info, false));
             ASSERT_NE(layer, nullptr);
+        }
+        auto snapshot_path = directory + "/snapshot.json";
+        if (snapshot) {
+            auto snapshot_data = directory + "/snapshot-data";
+            auto snapshot_index = directory + "/snapshot-index";
+            std::unique_ptr<IFile> fdata(open_localfile_adaptor(
+                snapshot_data.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600));
+            std::unique_ptr<IFile> findex(open_localfile_adaptor(
+                snapshot_index.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600));
+            ASSERT_NE(fdata, nullptr);
+            ASSERT_NE(findex, nullptr);
+            LSMT::LayerInfo info(fdata.get(), findex.get());
+            info.virtual_size = 1 << 20;
+            info.rw_type = sparse ? LSMT::RWType::Sparse : LSMT::RWType::Hybrid;
+            std::unique_ptr<LSMT::IFileRW> layer(LSMT::create_file_rw(info, false));
+            ASSERT_NE(layer, nullptr);
+            std::ofstream config(snapshot_path);
+            config << "{\"lowers\":[{\"file\":\"" << lower
+                   << "\"},{\"file\":\"" << data
+                   << "\"}],\"upper\":{\"data\":\"" << snapshot_data
+                   << "\",\"index\":\"" << snapshot_index << "\"}}";
         }
         std::vector<char> lower_input(4097, 'L');
         {
@@ -684,6 +705,8 @@ void check_upper_engine(uint32_t engine, bool sparse) {
         }
         for (auto thread : writers) photon::thread_join(thread);
         ASSERT_EQ(failures.load(), 0);
+        if (snapshot)
+            ASSERT_EQ(image->create_snapshot(snapshot_path.c_str()), 0);
         read_iov.iov_len = 4096;
         if (direct) {
             for (int slot = 0; slot < 8; ++slot) {
@@ -751,6 +774,12 @@ TEST(UpperIOEngine, HybridPsync) { check_upper_engine(ioengine_psync, false); }
 TEST(UpperIOEngine, SparsePsync) { check_upper_engine(ioengine_psync, true); }
 TEST(UpperIOEngine, HybridLibaio) { check_upper_engine(ioengine_libaio, false); }
 TEST(UpperIOEngine, SparseLibaio) { check_upper_engine(ioengine_libaio, true); }
+TEST(UpperIOEngine, HybridSnapshotLibaio) {
+    check_upper_engine(ioengine_libaio, false, true);
+}
+TEST(UpperIOEngine, SparseSnapshotLibaio) {
+    check_upper_engine(ioengine_libaio, true, true);
+}
 TEST(UpperIOEngine, HybridIouring) {
     check_upper_engine(ImageConfigNS::IOENGINE_IOURING, false);
 }

@@ -83,10 +83,19 @@ public:
         return ret;
     }
 
-    ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override {
-        if (read_only) {
+    ssize_t pread(void *buf, size_t count, off_t offset) override {
+        return m_file->pread(buf, count, offset);
+    }
+
+    ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+        if (read_only)
             LOG_ERROR_RETURN(EROFS, -1, "writing read only file");
-        }
+        return m_file->pwrite(buf, count, offset);
+    }
+
+    ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override {
+        if (read_only)
+            LOG_ERROR_RETURN(EROFS, -1, "writing read only file");
         return m_file->pwritev(iov, iovcnt, offset);
     }
 
@@ -94,8 +103,16 @@ public:
         return m_file->preadv(iov, iovcnt, offset);
     }
 
+    int fsync() override {
+        return m_file->fsync();
+    }
+
     int fdatasync() override {
         return m_file->fdatasync();
+    }
+
+    int sync_file_range(off_t offset, off_t nbytes, unsigned int flags) override {
+        return m_file->sync_file_range(offset, nbytes, flags);
     }
 
     int fallocate(int mode, off_t offset, off_t len) override {

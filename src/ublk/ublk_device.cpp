@@ -253,8 +253,8 @@ void UblkDevice::queue_loop(const struct ublksrv_dev *dev, photon::semaphore *st
 
     uint32_t pool_size = imgservice_->global_conf.ublkThreadPoolSize();
     if (pool_size == 0) {
-        LOG_WARN("ublkThreadPoolSize 0 is invalid, use 32");
-        pool_size = 32;
+        LOG_WARN("ublkThreadPoolSize 0 is invalid, use 64");
+        pool_size = 64;
     }
     LOG_INFO("ublk queue thread pool size: `", pool_size);
     auto *pool = photon::new_thread_pool(pool_size);

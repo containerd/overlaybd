@@ -145,6 +145,8 @@ public:
             args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
         args.virtual_size = vsize;
         auto file = ::create_file_rw(args, true);
+        if (file && ut_io_engine == ioengine_libaio)
+            file->set_data_file_direct_io(true);
         return file;
     }
     IFileRW *open_file_rw() {
@@ -155,6 +157,8 @@ public:
         EXPECT_EQ(LSMT::open_file_rw(nullptr, findex), nullptr);
         EXPECT_EQ(LSMT::open_file_rw(nullptr, nullptr), nullptr);
         auto file = LSMT::open_file_rw(fdata, findex, true);
+        if (file && ut_io_engine == ioengine_libaio)
+            file->set_data_file_direct_io(true);
         return file;
     }
     IFileRO *open_file_ro(const char *fn = fndata) {
@@ -440,6 +444,8 @@ public:
             args.parent_uuid.parse(parent_uuid.c_str(), parent_uuid.size());
         args.virtual_size = vsize;
         auto file = ::create_file_rw(args, true);
+        if (file && ut_io_engine == ioengine_libaio)
+            file->set_data_file_direct_io(true);
         char uu[37]{};
         args.uuid.to_string(uu, 37);
         cout << "create a layer. UUID: " << uu << endl;

@@ -776,6 +776,120 @@ public:
     UNIMPLEMENTED(int restack(IFileRW *upper) override);
 };
 
+// The append-only mapping log in the index file of a writable layer. A mapping is
+// accepted once it is on the file or in the group-commit buffer; accepted mappings are
+// published in log order, so replaying the log reproduces the in-memory index.
+class IndexLog {
+public:
+    static IndexLog *open(IFile *file, bool ownership) {
+        struct stat st;
+        if (file->fstat(&st) != 0)
+            LOG_ERRNO_RETURN(0, nullptr, "failed to stat index file");
+        return new IndexLog(file, ownership, st.st_size);
+    }
+
+    ~IndexLog() {
+        if (m_ownership)
+            delete m_file;
+    }
+
+    IFile *file() const {
+        return m_file;
+    }
+
+    template <typename Publish>
+    int append(const SegmentMapping &m, Publish &&publish) {
+        photon::scoped_lock lock(m_mtx);
+        if (accept(m) != 0)
+            return -1;
+        publish();
+        return 0;
+    }
+
+    int flush() {
+        photon::scoped_lock lock(m_mtx);
+        return commit_buffer();
+    }
+
+    int set_group_commit(size_t buffer_size) {
+        photon::scoped_lock lock(m_mtx);
+        buffer_size /= sizeof(SegmentMapping);
+        if (buffer_size < m_pending && commit_buffer() != 0)
+            return -1;
+        m_buffer.resize(buffer_size);
+        return 0;
+    }
+
+private:
+    photon::mutex m_mtx;
+    IFile *m_file;
+    bool m_ownership;
+    off_t m_end;
+    int m_error = 0;
+    vector<SegmentMapping> m_buffer;
+    uint32_t m_pending = 0;
+
+    IndexLog(IFile *file, bool ownership, off_t end)
+        : m_file(file), m_ownership(ownership), m_end(end) {
+    }
+
+    // the helpers below run under m_mtx
+    int accept(const SegmentMapping &m) {
+        if (m_buffer.empty())
+            return write(&m, sizeof(m));
+        if (m_pending == m_buffer.size() && commit_buffer() != 0)
+            return -1;
+        m_buffer[m_pending++] = m;
+        if (m_pending == m_buffer.size() && commit_buffer() != 0) {
+            m_pending--;
+            return -1;
+        }
+        return 0;
+    }
+
+    int commit_buffer() {
+        if (m_error != 0)
+            LOG_ERRNO_RETURN(m_error, -1, "index log is in an error state");
+        if (m_pending == 0)
+            return 0;
+        auto count = m_buffer.size();
+        auto size = count * sizeof(SegmentMapping);
+        ALIGNED_MEM4K(raw, size);
+        memcpy(raw, m_buffer.data(), m_pending * sizeof(SegmentMapping));
+        auto mappings = (SegmentMapping *)raw;
+        for (size_t i = m_pending; i < count; i++)
+            mappings[i] = SegmentMapping::invalid_mapping();
+        if (write(raw, size) != 0)
+            return -1;
+        m_pending = 0;
+        return 0;
+    }
+
+    // writes the whole record or nothing: a failed write is truncated away so that a
+    // retry never leaves a hole, and the log refuses further writes if that fails too
+    int write(const void *buf, size_t count) {
+        if (m_error != 0)
+            LOG_ERRNO_RETURN(m_error, -1, "index log is in an error state");
+        size_t written = 0;
+        while (written < count) {
+            auto ret = m_file->pwrite((const char *)buf + written, count - written,
+                                      m_end + written);
+            if (ret > 0) {
+                written += ret;
+                continue;
+            }
+            int error = ret < 0 && errno != 0 ? errno : EIO;
+            if (m_file->ftruncate(m_end) != 0)
+                m_error = errno != 0 ? errno : EIO;
+            errno = error;
+            LOG_ERRNO_RETURN(0, -1, "write index failed, file:`, pos:`, count:`, written:`",
+                             m_file, m_end, count, written);
+        }
+        m_end += count;
+        return 0;
+    }
+};
+
 class LSMTFile : public LSMTReadOnlyFile {
 public:
     typedef photon::mutex Mutex;
@@ -784,24 +898,17 @@ public:
     atomic_uint64_t m_compacted_idx_size; // count of compacted raw-index
 
     bool m_init_concurrency = false;
-    // append positions (in bytes) of the data and index files of a hybrid layer, whose
-    // writers reserve space by fetch_add instead of seeking to the end of the file
+    bool m_data_file_direct_io = false;
+    // append position (in bytes) of the data file of a hybrid layer
     atomic<uint64_t> m_data_offset{HeaderTrailer::SPACE};
-    atomic<uint64_t> m_index_offset{HeaderTrailer::SPACE};
 
     uint8_t m_rw_tag = 0;
     RWType m_rw_type = RWType::Append;
 
-    // serializes append-mode writes and restack; hybrid writers take only
-    // m_index_rwlock around the in-memory index updates.
-    // lock order: m_rw_mtx, then m_index_rwlock; readers take only the latter
+    // lock order: m_rw_mtx, the IndexLog mutex, m_index_rwlock. close_seal() and
+    // restack() expect the caller to have stopped all I/O on this file.
     Mutex m_rw_mtx;
-    IFile *m_findex = nullptr;
-
-    vector<SegmentMapping> m_stacked_mappings;
-    // used as a buffer for batch write (aka "group commit")
-    uint32_t nmapping = 0;
-    // # of elements in the mapping buffer
+    IndexLog *m_log = nullptr;
 
     LSMTFile() {
         m_compacted_idx_size.store(0);
@@ -811,7 +918,8 @@ public:
 
     ~LSMTFile() {
         LOG_DEBUG(" ~LSMTFile()");
-        close();
+        if (close() != 0)
+            safe_delete(m_log);
     }
 
     virtual IFile *front_file() override {
@@ -819,6 +927,10 @@ public:
             return m_files[m_rw_tag];
         }
         return nullptr;
+    }
+
+    virtual int fstat(struct stat *buf) override {
+        return LSMTReadOnlyFile::fstat(buf);
     }
 
     IComboIndex *rw_index() const {
@@ -841,32 +953,35 @@ public:
         return m_rw_type == RWType::Hybrid;
     }
 
-    // the group-commit buffer is guarded by m_rw_mtx in append mode, and by
-    // m_index_rwlock in hybrid mode
     int flush_index_log() {
-        if (hybrid()) {
-            photon::scoped_rwlock ilock(m_index_rwlock, photon::WLOCK);
-            return do_group_commit_mappings();
+        return m_log ? m_log->flush() : 0;
+    }
+
+    template <typename Publish>
+    int commit_mapping(const SegmentMapping &m, Publish &&publish) {
+        if (!m_log) {
+            publish();
+            return 0;
         }
-        Lock lock(m_rw_mtx);
-        return do_group_commit_mappings();
+        return m_log->append(m, publish);
     }
 
     virtual int vioctl(int request, va_list args) override {
-        if (request == GetType) {
+        if (request == GetType)
             return LSMTReadOnlyFile::vioctl(request, args);
+        if (request == Set_Data_File_Direct_IO) {
+            m_data_file_direct_io = va_arg(args, int) != 0;
+            if (m_data_file_direct_io) {
+                auto offset = m_data_offset.load();
+                m_data_offset.store((offset + ALIGNMENT4K - 1) / ALIGNMENT4K * ALIGNMENT4K);
+            }
+            return 0;
         }
         if (request != Index_Group_Commit)
             LOG_ERROR_RETURN(EINVAL, -1, "invaid request code");
 
         auto buffer_size = va_arg(args, size_t);
-        buffer_size /= sizeof(SegmentMapping);
-        if (buffer_size < nmapping) {
-            flush_index_log();
-        }
-
-        m_stacked_mappings.resize(buffer_size);
-        return 0;
+        return m_log ? m_log->set_group_commit(buffer_size) : 0;
     }
 
     virtual int init_concurrency() {
@@ -878,13 +993,13 @@ public:
     }
 
     virtual int close() override {
-        LOG_DEBUG("ownership:`, m_findex:`", m_file_ownership, m_findex);
-        flush_index_log();
-        if (m_file_ownership)
-            safe_delete(m_findex);
+        LOG_DEBUG("ownership:`, m_log:`", m_file_ownership, m_log);
+        if (flush_index_log() != 0)
+            return -1;
+        safe_delete(m_log);
         return LSMTReadOnlyFile::close();
     }
-    // returns appended offset when success, 0 therwise
+    // returns appended offset when success, 0 otherwise
     static off_t append(IFile *file, const void *buf, size_t count) {
         off_t pos = file->lseek(0, SEEK_END);
         if (pos < 0)
@@ -898,65 +1013,16 @@ public:
         return pos;
     }
 
-    // appends index records to m_findex: at the end of the file in append mode, or at
-    // a slot reserved from m_index_offset in hybrid mode
-    int log_index(const void *buf, size_t count) {
-        if (!hybrid())
-            return append(m_findex, buf, count) == 0 ? -1 : 0;
-        auto pos = m_index_offset.fetch_add(count);
-        auto ret = m_findex->pwrite(buf, count, pos);
-        if (ret != (ssize_t)count) {
-            LOG_ERRNO_RETURN(0, -1, "write index failed, file:`, ret:`, pos:`, count:`",
-                             m_findex, ret, pos, count);
-        }
-        return 0;
-    }
-
-    int do_group_commit_mappings() {
-        if (nmapping > 0) {
-            while (nmapping < m_stacked_mappings.size()) {
-                m_stacked_mappings[nmapping++] = SegmentMapping::invalid_mapping();
-            }
-            auto index_size = nmapping * sizeof(m_stacked_mappings[0]);
-            ALIGNED_MEM4K(raw, index_size);
-            memcpy(raw, &m_stacked_mappings[0], index_size);
-            if (log_index(raw, index_size) != 0)
-                return -1;
-            nmapping = 0;
-        }
-        return 0;
-    }
-
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
         return LSMTReadOnlyFile::pread(buf, count, offset);
     }
 
-    virtual void append_index(const SegmentMapping &m) {
-        if (m_findex) {
-            if (m_stacked_mappings.empty()) {
-                log_index(&m, sizeof(m));
-            } else {
-                m_stacked_mappings[nmapping++] = m;
-                if (nmapping == m_stacked_mappings.size() /* || TODO: timeout  */) {
-                    do_group_commit_mappings();
-                }
-            }
-        }
-    }
-
-    // a hybrid writer holds no m_rw_mtx: the index, m_vsize and the group-commit
-    // buffer are updated under m_index_rwlock, a single record is logged outside of it
     int hybrid_insert(const SegmentMapping &m) {
-        {
+        return commit_mapping(m, [&] {
             photon::scoped_rwlock ilock(m_index_rwlock, photon::WLOCK);
             rw_index()->insert(m);
             m_vsize = max(m_vsize, (uint64_t)m.end() * ALIGNMENT);
-            if (!m_stacked_mappings.empty()) {
-                append_index(m);
-                return 0;
-            }
-        }
-        return m_findex ? log_index(&m, sizeof(m)) : 0;
+        });
     }
 
     virtual ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override {
@@ -964,11 +1030,15 @@ public:
     }
 
     virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+        return do_pwrite(buf, count, offset);
+    }
+
+    ssize_t do_pwrite(const void *buf, size_t count, off_t offset) {
         LOG_DEBUG("{offset:`,length:`}", offset, count);
         CHECK_ALIGNMENT(count, offset);
         auto bytes = count;
         while (count > MAX_IO_SIZE) {
-            auto ret = pwrite(buf, MAX_IO_SIZE, offset);
+            auto ret = do_pwrite(buf, MAX_IO_SIZE, offset);
             if (ret < (ssize_t)MAX_IO_SIZE)
                 return -1;
             (char *&)buf += MAX_IO_SIZE;
@@ -986,8 +1056,8 @@ public:
             return -1;
         m.moffset = (uint64_t)moffset / ALIGNMENT;
         m.tag = m_rw_tag;
-        index_insert(m);
-        append_index(m);
+        if (commit_mapping(m, [&] { index_insert(m); }) != 0)
+            return -1;
         return bytes;
     }
 
@@ -1006,11 +1076,11 @@ public:
         auto append_data = [&](uint64_t begin, uint64_t end) -> int {
             SegmentMapping m(begin, (uint32_t)(end - begin), 0);
             auto len = (size_t)m.length * ALIGNMENT;
-            // every extent is reserved and written as whole 4K blocks, so that no two
-            // extents share a block, and an O_DIRECT data file never goes through the
-            // read-modify-write of its alignment adaptor, which may truncate the file
-            // back to a stale size behind a concurrent append
-            auto padded = (len + ALIGNMENT4K - 1) / ALIGNMENT4K * ALIGNMENT4K;
+            // Direct extents use whole 4K blocks so concurrent appends never enter the
+            // alignment adaptor's read-modify-write and stale-size truncate path.
+            auto padded = m_data_file_direct_io
+                              ? (len + ALIGNMENT4K - 1) / ALIGNMENT4K * ALIGNMENT4K
+                              : len;
             auto src = data(begin);
             unique_ptr<char, decltype(&free)> tail(nullptr, &free);
             if (padded != len) {
@@ -1050,9 +1120,17 @@ public:
                         return -1;
                 } else {
                     auto len = (size_t)m.length * ALIGNMENT;
-                    auto ret = file->pwrite(data(m.offset), len, m.moffset * ALIGNMENT);
-                    if (ret != (ssize_t)len)
-                        LOG_ERRNO_RETURN(0, -1, "rewrite data failed, ret:`, mapping:`", ret, m);
+                    auto physical_offset = m.moffset * ALIGNMENT;
+                    if (m_data_file_direct_io &&
+                        ((physical_offset | len) & (ALIGNMENT4K - 1))) {
+                        if (append_data(m.offset, m.end()) != 0)
+                            return -1;
+                    } else {
+                        auto ret = file->pwrite(data(m.offset), len, physical_offset);
+                        if (ret != (ssize_t)len)
+                            LOG_ERRNO_RETURN(0, -1, "rewrite data failed, ret:`, mapping:`", ret,
+                                             m);
+                    }
                 }
                 cursor = m.end();
             }
@@ -1094,18 +1172,18 @@ public:
     virtual int discard(SegmentMapping &m) {
         m.tag = m_rw_tag;
         if (hybrid()) {
-            m.moffset = m_data_offset.load() / ALIGNMENT;
+            struct stat st;
+            if (m_files[m_rw_tag]->fstat(&st) != 0)
+                LOG_ERRNO_RETURN(0, -1, "failed to stat hybrid data file");
+            m.moffset = st.st_size / ALIGNMENT;
             LOG_DEBUG(m);
             return hybrid_insert(m);
         }
-        // the insert and its index log record are one critical section
-        Lock lock(m_rw_mtx);
+        Lock rwlock(m_rw_mtx);
         off_t pos = m_files[m_rw_tag]->lseek(0, SEEK_END);
         m.moffset = (uint64_t)(pos / ALIGNMENT);
         LOG_DEBUG(m);
-        index_insert(m);
-        append_index(m);
-        return 0;
+        return commit_mapping(m, [&] { index_insert(m); });
     }
 
     int update_header_vsize(IFile *file, size_t vsize) {
@@ -1127,7 +1205,7 @@ public:
         if (update_header_vsize(m_files[m_rw_tag], vsize) < 0) {
             LOG_ERROR_RETURN(0, -1, "failed to update data vsize");
         }
-        if (update_header_vsize(m_findex, vsize) < 0) {
+        if (m_log && update_header_vsize(m_log->file(), vsize) < 0) {
             LOG_ERROR_RETURN(0, -1, "failed to update index vsize");
         }
         return 0;
@@ -1153,6 +1231,8 @@ public:
     }
 
     virtual int close_seal(IFileRO **reopen_as = nullptr) override {
+        if (flush_index_log() != 0)
+            return -1;
         auto m_index0 = (IMemoryIndex0 *)m_index;
         unique_ptr<SegmentMapping[]> mapping;
         size_t index_size;
@@ -1196,12 +1276,11 @@ public:
 
     virtual int fsync() override {
         auto commit_ret = flush_index_log();
-        if (commit_ret != 0) {
+        if (commit_ret != 0)
             return commit_ret;
-        }
         m_files[m_rw_tag]->fsync();
-        if (m_findex)
-            m_findex->fsync();
+        if (m_log)
+            m_log->file()->fsync();
         return 0;
     }
     virtual int fdatasync() override {
@@ -1232,7 +1311,6 @@ public:
     }
 
     virtual int flatten(IFile *as) override {
-
         unique_ptr<IComboIndex> pmi;
         {
             photon::scoped_rwlock ilock(m_index_rwlock, photon::RLOCK);
@@ -1254,7 +1332,7 @@ public:
         std::vector<SegmentMapping> pmappings; // temp index for reserved layer
         /* ==== close_seal the top RW layer and reopen it. ==== */
         IFileRO* gc_layer = nullptr;
-        auto fseal = (LSMTFile*)open_file_rw(m_files[m_rw_tag], m_findex, false);
+        auto fseal = (LSMTFile*)open_file_rw(m_files[m_rw_tag], m_log->file(), false);
         if (fseal==nullptr){
             return -1;
         }
@@ -1272,27 +1350,26 @@ public:
         m_files.insert(m_files.begin(), ((LSMTReadOnlyFile*)gc_layer)->m_files[0]);
         m_rw_tag++;
         m_files[m_rw_tag] = u->m_files[0]; // fnew_layer;
-        if (m_file_ownership){
-            LOG_INFO("delete original m_findex.");
-            m_findex->close();
-            safe_delete(m_findex);
-        }
         LOG_DEBUG("m_files.size(): `, rw_tag: `", m_files.size(), m_rw_tag);
-        m_findex = u->m_findex;
         m_rw_type = u->m_rw_type;
         m_vsize = u->m_vsize;
         m_data_offset = u->m_data_offset.load();
-        m_index_offset = u->m_index_offset.load();
+        m_data_file_direct_io = u->m_data_file_direct_io;
         ((IComboIndex *)m_index)->commit_index0();
 
         safe_delete(fseal);
         safe_delete(gc_layer);
+        safe_delete(m_log);
+        m_log = u->m_log;
+        u->m_log = nullptr;
         return 0;
     }
 
 
     int restack(IFileRW* upper_layer) override {
-        Lock _(m_rw_mtx);
+        if (flush_index_log() != 0)
+            LOG_ERRNO_RETURN(0, -1, "flush index log before restack failed");
+        Lock rwlock(m_rw_mtx);
         LOG_INFO("restack new rwlayer, seal old.");
         int ret = reserve_top_layer((LSMTFile*)upper_layer);
         if (ret != 0) {
@@ -1312,15 +1389,20 @@ public:
     }
 
     virtual int close() override {
+        safe_delete(m_log);
         return LSMTReadOnlyFile::close();
     }
 
     virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+        return do_sparse_pwrite(buf, count, offset);
+    }
+
+    ssize_t do_sparse_pwrite(const void *buf, size_t count, off_t offset) {
         LOG_DEBUG("{offset:`,length:`}", offset, count);
         CHECK_ALIGNMENT(count, offset);
 
         while (count > MAX_IO_SIZE) {
-            auto ret = pwrite(buf, MAX_IO_SIZE, offset);
+            auto ret = do_sparse_pwrite(buf, MAX_IO_SIZE, offset);
             if (ret < (ssize_t)MAX_IO_SIZE)
                 return -1;
             (char *&)buf += MAX_IO_SIZE;
@@ -1434,19 +1516,14 @@ public:
             LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`", file, ret,
                              offset, count);
         }
-        Lock lock(m_rw_mtx);
-        index_insert(m);
-        append_index(m);
+        if (commit_mapping(m, [&] { index_insert(m); }) != 0)
+            return -1;
         return count;
     }
 
     virtual int vioctl(int request, va_list args) override {
-        if (request == GetType) {
-            return LSMTReadOnlyFile::vioctl(request, args);
-        }
-        if (request != RemoteData) {
-            LOG_ERROR_RETURN(EINVAL, -1, "invaid request code");
-        }
+        if (request != RemoteData)
+            return LSMTFile::vioctl(request, args);
         va_list tmp;
         va_copy(tmp, args);
         auto lba = va_arg(tmp, RemoteMapping);
@@ -1454,7 +1531,6 @@ public:
         LOG_DEBUG("RemoteMapping: {offset: `, count: `, roffset: `}", lba.offset, lba.count,
                   lba.roffset);
         size_t nwrite = 0;
-        Lock lock(m_rw_mtx);
         while (lba.count > 0) {
             SegmentMapping m;
             m.offset = lba.offset / ALIGNMENT;
@@ -1462,9 +1538,9 @@ public:
                                                                     : lba.count / ALIGNMENT);
             m.moffset = lba.roffset / ALIGNMENT;
             m.tag = m_rw_tag + (uint8_t)SegmentType::remoteData;
-            LOG_DEBUG("insert segment: ` into findex: `", m, m_findex);
-            index_insert(m);
-            append_index(m);
+            LOG_DEBUG("insert segment: `", m);
+            if (commit_mapping(m, [&] { index_insert(m); }) != 0)
+                return -1;
             nwrite += m.length * ALIGNMENT;
             lba.offset += m.length * ALIGNMENT;
             lba.count -= m.length * ALIGNMENT;
@@ -1514,7 +1590,6 @@ public:
     }
 
     int commit(const CommitArgs &args) const override {
-
         auto m_index0 = (IMemoryIndex0 *)m_index;
         unique_ptr<SegmentMapping[]> mapping;
         size_t raw_index_size;
@@ -1715,14 +1790,9 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
     if (ret < 0) {
         LOG_ERRNO_RETURN(0, nullptr, "failed to stat data file.");
     }
-    struct stat index_stat {};
-    index_stat.st_size = HeaderTrailer::SPACE;
-    if (rw_type == RWType::Hybrid && findex->fstat(&index_stat) < 0) {
-        LOG_ERRNO_RETURN(0, nullptr, "failed to stat index file.");
-    }
     IMemoryIndex0 *pi = nullptr;
+    HeaderTrailer ht;
     if (rw_type != RWType::Sparse) {
-        HeaderTrailer ht;
         auto p = do_load_index(findex, &ht, false);
         if (!p) {
             LOG_ERROR_RETURN(EIO, nullptr, "failed to load index from file.");
@@ -1746,6 +1816,11 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
             LOG_ERROR_RETURN(0, nullptr, "failed to create memory index from sparse file!");
         }
     }
+    IndexLog *log = nullptr;
+    if (findex && !(log = IndexLog::open(findex, ownership))) {
+        delete pi;
+        return nullptr;
+    }
     LSMTFile *rst = nullptr;
     if (rw_type != RWType::Sparse) {
         LOG_INFO("create LSMTFile object (rw_type: `)", rw_type_name(rw_type));
@@ -1756,11 +1831,10 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
     }
     rst->m_index = pi;
     rst->m_rw_type = rw_type;
-    rst->m_findex = findex;
+    rst->m_log = log;
     rst->m_files.push_back(fdata);
     rst->m_vsize = pht->virtual_size;
-    rst->m_data_offset = (stat.st_size + ALIGNMENT4K - 1) / ALIGNMENT4K * ALIGNMENT4K;
-    rst->m_index_offset = index_stat.st_size;
+    rst->m_data_offset = stat.st_size;
     rst->m_file_ownership = ownership;
     UUID raw;
     raw.parse(pht->uuid);
@@ -1790,7 +1864,6 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
     }
     rst->m_index = create_memory_index0((const SegmentMapping *)nullptr, 0, 0, 0);
     rst->m_rw_type = args.rw_type;
-    rst->m_findex = findex;
     rst->m_files.push_back(fdata);
     LOG_DEBUG("unparse uuid");
     UUID raw;
@@ -1802,6 +1875,11 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
     write_header_trailer(fdata, true, false, true, 0, 0, args);
     if (args.rw_type != RWType::Sparse) {
         write_header_trailer(findex, true, false, false, HeaderTrailer::SPACE, 0, args);
+    }
+    if (findex && !(rst->m_log = IndexLog::open(findex, ownership))) {
+        rst->m_file_ownership = false;
+        delete rst;
+        return nullptr;
     }
     HeaderTrailer tmp;
     // args.parent_uuid.to_string(parent_uuid, UUID::String::LEN);
@@ -1816,13 +1894,17 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
 
 IFileRW *create_warpfile(WarpFileArgs &args, bool ownership) {
     auto rst = new LSMTWarpFile();
-    rst->m_findex = args.findex;
     LayerInfo info;
     info.rw_type = RWType::Append;
     info.virtual_size = args.virtual_size;
     info.parent_uuid.parse(args.parent_uuid);
     info.uuid.parse(args.uuid);
-    write_header_trailer(rst->m_findex, true, false, false, HeaderTrailer::SPACE, 0, info);
+    write_header_trailer(args.findex, true, false, false, HeaderTrailer::SPACE, 0, info);
+    rst->m_log = IndexLog::open(args.findex, ownership);
+    if (!rst->m_log) {
+        delete rst;
+        return nullptr;
+    }
     rst->m_index = create_memory_index0((const SegmentMapping *)nullptr, 0, 0, 0);
     rst->m_files.resize(2);
     rst->m_files[(uint8_t)SegmentType::fsMeta] = args.fsmeta;
@@ -1853,7 +1935,11 @@ IFileRW *open_warpfile_rw(IFile *findex, IFile *fsmeta_file, IFile *target_file,
         LOG_ERROR_RETURN(0, nullptr, "failed to create memory index!");
     }
     rst->m_index = pi;
-    rst->m_findex = findex;
+    rst->m_log = IndexLog::open(findex, ownership);
+    if (!rst->m_log) {
+        delete rst;
+        return nullptr;
+    }
     rst->m_files = {fsmeta_file, target_file};
     rst->m_uuid.resize(1);
     rst->m_uuid[0].parse(ht.uuid);
@@ -2156,10 +2242,9 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
     }
     idx = create_combo_index((IMemoryIndex0 *)u->m_index, l->m_index, l->m_files.size(), ownership);
     rst->m_index = idx;
-    rst->m_findex = u->m_findex;
     rst->m_vsize = u->m_vsize;
     rst->m_data_offset = u->m_data_offset.load();
-    rst->m_index_offset = u->m_index_offset.load();
+    rst->m_data_file_direct_io = u->m_data_file_direct_io;
     rst->m_file_ownership = ownership;
     rst->m_files.reserve(delta + l->m_files.size());
     rst->m_uuid.reserve(1 + l->m_uuid.size());
@@ -2173,6 +2258,8 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
             return nullptr;
         LOG_INFO("check layer's parent uuid success.");
     }
+    rst->m_log = u->m_log;
+    u->m_log = nullptr;
     rst->m_files.push_back(u->m_files[0]);
     if (type == (uint8_t)LSMTFileType::WarpFile) {
         rst->m_files.push_back(u->m_files[1]);

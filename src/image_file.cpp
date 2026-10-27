@@ -447,6 +447,10 @@ LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
             goto ERROR_EXIT;
         }
     }
+    if (ret->set_data_file_direct_io(direct) != 0) {
+        delete ret;
+        return nullptr;
+    }
     return ret;
 
 ERROR_EXIT:
@@ -544,7 +548,7 @@ SUCCESS_EXIT:
         start_bk_dl_thread();
     }
     if (m_prefetcher && lower_file) {
-        m_prefetcher->replay(lower_file);
+        m_prefetcher->replay(this);
     }
     return 1;
 
@@ -601,8 +605,10 @@ int ImageFile::create_snapshot(const char *new_config_path) {
     if (!upper_file)
         LOG_ERROR_RETURN(0, -1, "Open upper layer failed.");
 
-    if(((LSMT::IFileRW *)m_file)->restack(upper_file) != 0)
+    if(((LSMT::IFileRW *)m_file)->restack(upper_file) != 0) {
+        delete upper_file;
         LOG_ERRNO_RETURN(0, -1, "Restack new rwlayer failed.");
+    }
 
     if(m_upper_file) {
         // transfer the sealed layer from m_upper_file to m_lower_file before m_upper_file is destructed
