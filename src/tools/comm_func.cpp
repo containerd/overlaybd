@@ -44,6 +44,14 @@ IFile *open_file(const char *fn, int flags, mode_t mode, IFileSystem *fs) {
     return file;
 }
 
+uint64_t photon_event_engine_from_config(const std::string &srv_config) {
+    ImageConfigNS::GlobalConfig conf;
+    conf.ParseJSON(srv_config);
+    return ImageConfigNS::is_iouring_ioengine(conf.ioEngine())
+               ? photon::INIT_EVENT_IOURING
+               : photon::INIT_EVENT_DEFAULT;
+}
+
 int create_overlaybd(const std::string &srv_config, const std::string &dev_config,
     ImageService *&imgservice, photon::fs::IFile *&imgfile) {
 

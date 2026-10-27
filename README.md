@@ -174,6 +174,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
     },
     "ioEngine": 0,
     "workpoolSize": 8,
+    "ublkThreadPoolSize": 64,
     "download": {
         "enable": true,
         "delay": 600,
@@ -233,6 +234,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | exporterConfig.updateInterval | Time interval to update metrics in microseconds.                                            |
 | enableAudit         | Enable audit or not.                                                                                  |
 | workpoolSize        | Number of Photon vCPUs (OS threads) in the shared device work pool. `8` is default.                   |
+| ublkThreadPoolSize  | Number of cached Photon I/O threads per overlaybd-ublk queue. I/Os beyond it create and destroy a thread each, so set it to at least the ublk queue depth for deep queues. `64` is default. |
 | auditPath           | The path for audit file, `/var/log/overlaybd-audit.log` is the default value.                         |
 | registryFsVersion   | registry client version, 'v1' libcurl based, 'v2' is photon http based. 'v2' is the default value.    |
 | prefetchConfig.concurrency    | Prefetch concurrency for reloading trace, `16` is default                                   |
@@ -388,6 +390,9 @@ can optionally carry a writable layer.
 See [docs/standalone-usage.md](docs/standalone-usage.md) for the config file
 format, the TCMU and UBLK start-up/teardown workflows, and the writable-layer
 (create / commit / zfile) commands.
+
+For random read/write and sequential write performance of the writable layer
+across I/O engines, see [docs/overlaybd-rw-perf.en.md](docs/overlaybd-rw-perf.en.md).
 
 ### Live Snapshot
 

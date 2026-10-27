@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
 
     set_log_output_level(verbose ? 0 : 1);
-    photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+    photon::init(photon_event_engine_from_config(config_path), photon::INIT_IO_DEFAULT);
     DEFER({photon::fini();});
 
     ImageService *imgservice = nullptr;

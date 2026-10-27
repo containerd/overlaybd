@@ -706,7 +706,12 @@ int main(int argc, char **argv) {
                                 cache_lock_fd) != 0)
         return 1;
 
-    photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
+    ImageConfigNS::GlobalConfig conf;
+    conf.ParseJSON(patched_config);
+    auto event_engine = ImageConfigNS::is_iouring_ioengine(conf.ioEngine())
+                            ? photon::INIT_EVENT_IOURING | photon::INIT_EVENT_SIGNAL
+                            : photon::INIT_EVENT_DEFAULT;
+    photon::init(event_engine, photon::INIT_IO_DEFAULT);
     photon::block_all_signal();
     photon::sync_signal(SIGTERM, &sigterm_handler);
     photon::sync_signal(SIGINT, &sigterm_handler);

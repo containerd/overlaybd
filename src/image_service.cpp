@@ -256,7 +256,7 @@ int ImageService::read_global_config_and_set() {
         LOG_ERROR_RETURN(0, -1, "error parse global config json: `", m_config_path);
     }
     uint32_t ioengine = global_conf.ioEngine();
-    if (ioengine > 2) {
+    if (ioengine > ImageConfigNS::IOENGINE_IOURING_DIRECT) {
         LOG_ERROR_RETURN(0, -1, "unknown io_engine: `", ioengine);
     }
 
