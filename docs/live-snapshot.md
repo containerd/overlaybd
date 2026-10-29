@@ -62,3 +62,21 @@ The new config file should include the current upper layer as the last lower lay
 ```
 
 **Note**: The new upper layer must be different from the old upper layer.
+
+`lowers` is the old list plus one entry: the (N+1)-th lower is the old upper data file, sealed. Where that layer ends up is decided by its `file`: the current `upper.data` keeps it in place, while any other absolute path moves it there as part of the snapshot. A move requires the target to be absent and on the same file system as the data file; missing parent directories are created.
+
+The first N entries must match the old lowers exactly. The old upper's `upper.index` is not referenced after the snapshot and can be deleted by the caller.
+
+## Failure Semantics and Crash Recovery
+
+Updating the config is the commit point. A failure before it returns -1, removes the transaction files and leaves the layers untouched, so the request can be retried right away; after it, only in-memory operations remain. A request that describes the stack already committed returns success, and the caller's config file is left as is.
+
+Two transaction files live next to the config: `.snapshot` holds the new config bytes, so its presence means the snapshot is uncommitted; `.snapshot.undo` holds the move target and exists only for a move. If the snapshot is uncommitted, the sealed layer is moved back as `.undo` records and both files are cleaned up; if it is committed, only a stale `.undo` is removed. Recovery covers process crashes only; a host power loss is out of scope.
+
+A failed seal needs no rollback: it only appends, leaving an unreachable index and trailer at the end of the data file, and since the header is untouched the device still opens after a restart. Sparse writable layers are the exception: their mappings are rebuilt by scanning the data file, so the file is truncated to `virtual_size` when opened.
+
+## Limitations
+
+- Snapshots are not supported with a warpfile upper layer (`upper.target`).
+- With a hybrid or sparse upper, writes do not take the snapshot's write lock, so the caller must pause writes while a snapshot runs.
+- Snapshots on one device are serialized; a running snapshot holds the device's write path.

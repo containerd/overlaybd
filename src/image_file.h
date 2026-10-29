@@ -160,6 +160,11 @@ private:
     LSMT::IFileRO *open_lowers(std::vector<ImageConfigNS::LayerConfig> &, bool &);
     LSMT::IFileRW *open_upper(ImageConfigNS::UpperConfig &);
 
+    // discards an uncommitted snapshot, must run before any layer is opened
+    int recover_pending_snapshot();
+    // moves pointers only
+    void swap_snapshot_layers(LSMT::IFileRW *upper_file);
+
     IFile *open_localfile(ImageConfigNS::LayerConfig &layer, std::string &opened);
     IFile *__open_ro_file(const std::string &);
     IFile *__open_ro_target_file(const std::string &);
@@ -168,4 +173,7 @@ private:
 
     // size_t seek_data(off_t begin, off_t end);
     void start_bk_dl_thread();
+
+    // serializes the snapshots of the same device
+    photon::mutex m_snapshot_mtx;
 };
