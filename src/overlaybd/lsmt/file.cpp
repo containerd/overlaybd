@@ -595,6 +595,11 @@ public:
         return m_files[file_idx];
     }
 
+    virtual int reserve_files(size_t n) override {
+        m_files.reserve(m_files.size() + n);
+        return 0;
+    }
+
     virtual int insert_file(IFile * file) override {
         m_files.insert(m_files.begin(), file);
         return 0;
@@ -1325,58 +1330,93 @@ public:
         return compact(opts, _no_use_var);
     }
 
-    int reserve_top_layer(LSMTFile *top_layer)
-    {
-        // restack also reshuffles m_files, so no reader may be in flight
-        photon::scoped_rwlock ilock(m_index_rwlock, photon::WLOCK);
-        std::vector<SegmentMapping> pmappings; // temp index for reserved layer
+    // everything the swap needs is prepared up front, so that the swap itself can
+    // not fail
+    struct RestackPlan {
+        LSMTReadOnlyFile *gc_layer = nullptr; // view of the sealed layer
+        IFile *sealed = nullptr;              // the sealed data file, not owned
+        IMemoryIndex *new_backing = nullptr;  // new backing index of the combo index
+    };
+
+    // the caller holds m_rw_mtx and the WLOCK of m_index_rwlock
+    int prepare_restack(LSMTFile *upper, RestackPlan &plan) {
         /* ==== close_seal the top RW layer and reopen it. ==== */
-        IFileRO* gc_layer = nullptr;
         auto fseal = (LSMTFile*)open_file_rw(m_files[m_rw_tag], m_log->file(), false);
         if (fseal==nullptr){
             return -1;
         }
+        DEFER(safe_delete(fseal));
+        IFileRO *gc_layer = nullptr;
         if (fseal->close_seal(&gc_layer)!=0){
             LOG_ERROR_RETURN(0, -1, "close seal top RW layer failed.");
         }
         if (gc_layer == nullptr){
             LOG_ERROR_RETURN(0, -1, "reopen sealed RW layer failed.");
         }
-        /* ==== reserve m_files[0] for new layer. ==== */
-        auto u = top_layer;
+        plan.gc_layer = (LSMTReadOnlyFile *)gc_layer;
+        plan.sealed = plan.gc_layer->get_file(0);
 
-        LOG_INFO("m_files.insert new layer: file ptr: 0x`", u->m_files[0]);
-        // m_files[m_rw_tag] = ((LSMTReadOnlyFile*)gc_layer)->m_files[0];
-        m_files.insert(m_files.begin(), ((LSMTReadOnlyFile*)gc_layer)->m_files[0]);
-        m_rw_tag++;
-        m_files[m_rw_tag] = u->m_files[0]; // fnew_layer;
-        LOG_DEBUG("m_files.size(): `, rw_tag: `", m_files.size(), m_rw_tag);
-        m_rw_type = u->m_rw_type;
-        m_vsize = u->m_vsize;
-        m_data_offset = u->m_data_offset.load();
-        m_data_file_direct_io = u->m_data_file_direct_io;
-        ((IComboIndex *)m_index)->commit_index0();
+        plan.new_backing = ((IComboIndex *)m_index)->prepare_commit(1);
+        if (plan.new_backing == nullptr)
+            LOG_ERROR_RETURN(0, -1, "prepare backing index failed.");
 
-        safe_delete(fseal);
-        safe_delete(gc_layer);
-        safe_delete(m_log);
-        m_log = u->m_log;
-        u->m_log = nullptr;
+        /* ==== reserve m_files[0] for the sealed layer. ==== */
+        LOG_INFO("m_files.insert new layer: file ptr: 0x`", upper->m_files[0]);
+        m_files.reserve(m_files.size() + 1);
         return 0;
     }
 
+    static void discard_restack(RestackPlan &plan) {
+        safe_delete(plan.gc_layer);
+        plan.gc_layer = nullptr;
+        plan.sealed = nullptr;
+        safe_delete(plan.new_backing);
+        plan.new_backing = nullptr;
+    }
+
+    // moves pointers only
+    void commit_restack(LSMTFile *upper, RestackPlan &plan) {
+        m_files.insert(m_files.begin(), plan.sealed);
+        m_rw_tag++;
+        m_files[m_rw_tag] = upper->m_files[0]; // fnew_layer;
+        LOG_DEBUG("m_files.size(): `, rw_tag: `", m_files.size(), m_rw_tag);
+        m_rw_type = upper->m_rw_type;
+        m_vsize = upper->m_vsize;
+        m_data_offset = upper->m_data_offset.load();
+        m_data_file_direct_io = upper->m_data_file_direct_io;
+        ((IComboIndex *)m_index)->apply_commit(plan.new_backing);
+        plan.new_backing = nullptr;
+        // the new upper takes over writes here, under the same locks as the seal
+        ((IComboIndex *)m_index)->front_index((IMemoryIndex0 *)upper->m_index);
+        safe_delete(plan.gc_layer);
+        plan.gc_layer = nullptr;
+        safe_delete(m_log);
+        m_log = upper->m_log;
+        upper->m_log = nullptr;
+    }
 
     int restack(IFileRW* upper_layer) override {
+        return restack(upper_layer, nullptr);
+    }
+
+    int restack(IFileRW *upper_layer, const std::function<int()> &commit) override {
+        Lock _(m_rw_mtx);
         if (flush_index_log() != 0)
             LOG_ERRNO_RETURN(0, -1, "flush index log before restack failed");
-        Lock rwlock(m_rw_mtx);
+        photon::scoped_rwlock ilock(m_index_rwlock, photon::WLOCK);
         LOG_INFO("restack new rwlayer, seal old.");
-        int ret = reserve_top_layer((LSMTFile*)upper_layer);
-        if (ret != 0) {
-            LOG_ERRNO_RETURN(0, -1, "restack new rwlayer failed.");
+        RestackPlan plan;
+        // a failed seal only appends unreachable bytes to the data file, which
+        // neither the running device nor a reopen of the layer looks at
+        if (prepare_restack((LSMTFile *)upper_layer, plan) != 0 ||
+            (commit && commit() != 0)) {
+            discard_restack(plan);
+            LOG_ERROR("restack new rwlayer aborted.");
+            return -1;
         }
+        commit_restack((LSMTFile *)upper_layer, plan);
         LOG_INFO("current ro layers count: `", m_files.size() - 1);
-        return ret;
+        return 0;
     }
 
 };
@@ -1806,6 +1846,15 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
         pht = &ht;
     } else {
         LOG_DEBUG("create index from sparse file.");
+        // the size of a sparse layer is fixed by its vsize, anything beyond it is
+        // left by a seal that was never committed
+        auto expected = pht->virtual_size + HeaderTrailer::SPACE;
+        if ((uint64_t)stat.st_size > expected) {
+            LOG_INFO("truncate sparse layer from ` to ` bytes", stat.st_size, expected);
+            if (fdata->ftruncate(expected) != 0)
+                LOG_ERRNO_RETURN(0, nullptr, "failed to truncate the sparse layer file.");
+            stat.st_size = expected;
+        }
         vector<SegmentMapping> mappings;
         if (LSMTSparseFile::create_mappings(fdata, mappings) == -1) {
             LOG_ERROR_RETURN(0, nullptr, "failed to create segment mappings from sparse file!");

@@ -16,7 +16,12 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <memory>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string>
+#include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <vector>
@@ -27,6 +32,7 @@
 #include <photon/fs/filesystem.h>
 #include <photon/fs/aligned-file.h>
 #include <photon/fs/localfs.h>
+#include <photon/fs/path.h>
 #include "overlaybd/lsmt/file.h"
 #include "overlaybd/lsmt/index.h"
 #include "overlaybd/zfile/zfile.h"
@@ -45,6 +51,266 @@ using namespace photon::fs;
 
 #define SET_LOCAL_DIR 118
 #define SET_SIZE 119
+
+static const char *SNAPSHOT_SUFFIX = ".snapshot";
+static const char *SNAPSHOT_UNDO_SUFFIX = ".snapshot.undo";
+
+static int drop_snapshot_journals(const std::string &config_path) {
+    int ret = 0;
+    for (auto suffix : {SNAPSHOT_SUFFIX, SNAPSHOT_UNDO_SUFFIX}) {
+        auto path = config_path + suffix;
+        if (::unlink(path.c_str()) != 0 && errno != ENOENT) {
+            LOG_ERROR("unlink(`) failed: `", path, strerror(errno));
+            ret = -1;
+        }
+    }
+    return ret;
+}
+
+static int write_file(const std::string &path, const std::string &content) {
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0)
+        LOG_ERRNO_RETURN(0, -1, "open(`) failed", path);
+    DEFER(::close(fd));
+    auto p = content.data();
+    size_t left = content.size();
+    while (left > 0) {
+        auto ret = ::write(fd, p, left);
+        if (ret <= 0) {
+            if (ret < 0 && errno == EINTR)
+                continue;
+            LOG_ERRNO_RETURN(0, -1, "write(`) failed", path);
+        }
+        p += ret;
+        left -= ret;
+    }
+    return 0;
+}
+
+static int read_file_content(const std::string &path, std::string &content) {
+    int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        LOG_ERRNO_RETURN(0, -1, "open(`) failed", path);
+    DEFER(::close(fd));
+    char buf[4096];
+    while (true) {
+        auto ret = ::read(fd, buf, sizeof(buf));
+        if (ret < 0) {
+            if (errno == EINTR)
+                continue;
+            LOG_ERRNO_RETURN(0, -1, "read(`) failed", path);
+        }
+        if (ret == 0)
+            break;
+        content.append(buf, ret);
+    }
+    return 0;
+}
+
+static std::string absolute_path(const std::string &path) {
+    if (!path.empty() && path[0] == '/')
+        return path;
+    char buf[PATH_MAX];
+    if (getcwd(buf, sizeof(buf)) == nullptr)
+        return path;
+    return std::string(buf) + "/" + path;
+}
+
+static int mkdir_p(const std::string &path) {
+    auto lfs = new_localfs_adaptor();
+    if (lfs == nullptr)
+        LOG_ERRNO_RETURN(0, -1, "new localfs adaptor failed");
+    DEFER(delete lfs);
+    // the trailing slash makes photon create the last component as well
+    return photon::fs::mkdir_recursive(path + "/", lfs);
+}
+
+// the record of a move: where the layer is and where it was moved to
+static std::string snapshot_move_record(const std::string &data_path, const std::string &move_to) {
+    return absolute_path(data_path) + "\n" + move_to + "\n";
+}
+
+static int parse_snapshot_move_record(const std::string &record, std::string &data_path,
+                                      std::string &move_to) {
+    auto path_end = record.find('\n');
+    if (path_end == std::string::npos || path_end == 0)
+        return -1;
+    auto move_end = record.find('\n', path_end + 1);
+    if (move_end == std::string::npos)
+        return -1;
+    data_path = record.substr(0, path_end);
+    move_to = record.substr(path_end + 1, move_end - path_end - 1);
+    if (data_path[0] != '/' || move_to.empty() || move_to[0] != '/')
+        return -1;
+    return 0;
+}
+
+#ifndef RENAME_NOREPLACE
+#define RENAME_NOREPLACE (1 << 0)
+#endif
+
+static int rename_noreplace(const std::string &from, const std::string &to) {
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 28))
+    return ::renameat2(AT_FDCWD, from.c_str(), AT_FDCWD, to.c_str(), RENAME_NOREPLACE);
+#elif defined(SYS_renameat2)
+    return ::syscall(SYS_renameat2, AT_FDCWD, from.c_str(), AT_FDCWD, to.c_str(),
+                     RENAME_NOREPLACE);
+#else
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
+// moves the layer without ever replacing an entry which is already there
+static int move_layer(const std::string &from, const std::string &to) {
+    if (rename_noreplace(from, to) != 0)
+        LOG_ERRNO_RETURN(0, -1, "rename(`) to ` failed", from, to);
+    return 0;
+}
+
+// puts the layer back where it was; the original name is gone only after a move
+// that succeeded, so its presence means there is nothing to move back
+static int move_layer_back(const std::string &data_path, const std::string &move_to) {
+    if (::access(data_path.c_str(), F_OK) == 0)
+        return 0;
+    if (::access(move_to.c_str(), F_OK) != 0)
+        LOG_ERROR_RETURN(ENOENT, -1, "` is gone", data_path);
+    return move_layer(move_to, data_path);
+}
+
+static bool layer_config_equal(ImageConfigNS::LayerConfig &a, ImageConfigNS::LayerConfig &b) {
+    return a.file() == b.file() && a.gzipIndex() == b.gzipIndex() &&
+           a.targetFile() == b.targetFile() && a.dir() == b.dir() &&
+           a.digest() == b.digest() && a.targetDigest() == b.targetDigest() &&
+           a.size() == b.size();
+}
+
+// a retry after a lost response describes exactly the committed stack
+static bool snapshot_request_matches(ImageConfigNS::ImageConfig &committed,
+                                     ImageConfigNS::ImageConfig &request) {
+    auto committed_lowers = committed.lowers();
+    auto request_lowers = request.lowers();
+    if (committed_lowers.size() != request_lowers.size())
+        return false;
+    for (size_t i = 0; i < committed_lowers.size(); i++) {
+        if (!layer_config_equal(committed_lowers[i], request_lowers[i]))
+            return false;
+    }
+    auto committed_upper = committed.upper();
+    auto request_upper = request.upper();
+    return committed_upper.index() == request_upper.index() &&
+           committed_upper.data() == request_upper.data() &&
+           committed_upper.target() == request_upper.target() &&
+           committed_upper.gzipIndex() == request_upper.gzipIndex();
+}
+
+static bool same_dir_entry(const std::string &a, const std::string &b) {
+    auto a_parts = photon::fs::Path(absolute_path(a)).dir_base_name();
+    auto b_parts = photon::fs::Path(absolute_path(b)).dir_base_name();
+    if (a_parts.second != b_parts.second)
+        return false;
+    char a_real[PATH_MAX], b_real[PATH_MAX];
+    if (::realpath(std::string(a_parts.first).c_str(), a_real) == nullptr ||
+        ::realpath(std::string(b_parts.first).c_str(), b_real) == nullptr)
+        return false;
+    return std::string(a_real) == b_real;
+}
+
+// a layer which occupies a transaction file name would be deleted by the recovery,
+// so such a config is refused before anything is touched
+static int reject_journal_collision(ImageConfigNS::ImageConfig &cfg,
+                                    const std::string &config_path) {
+    const std::string records[] = {config_path + SNAPSHOT_SUFFIX,
+                                   config_path + SNAPSHOT_UNDO_SUFFIX};
+    auto upper = cfg.upper();
+    auto lowers = cfg.lowers();
+    std::vector<std::string> layers = {upper.data(), upper.index()};
+    for (size_t i = 0; i < lowers.size(); i++)
+        layers.push_back(lowers[i].file());
+    for (size_t i = 0; i < layers.size(); i++) {
+        if (layers[i].empty())
+            continue;
+        for (auto &record : records) {
+            if (same_dir_entry(layers[i], record))
+                LOG_ERROR_RETURN(EINVAL, -1,
+                                 "the layer ` collides with a snapshot record of `, rename it.",
+                                 layers[i], config_path);
+        }
+    }
+    return 0;
+}
+
+// the sealed layer is moved when the request names another path for it, so the
+// target must be free and reachable by rename
+static int snapshot_move_target(ImageConfigNS::ImageConfig &committed,
+                                ImageConfigNS::LayerConfig &appended, std::string &move_to) {
+    move_to.clear();
+    auto data_path = committed.upper().data();
+    if (appended.file() == data_path)
+        return 0;
+
+    struct stat target, data, parent;
+    if (::lstat(appended.file().c_str(), &target) == 0)
+        LOG_ERROR_RETURN(EEXIST, -1, "the snapshot target ` already exists.", appended.file());
+    if (errno != ENOENT)
+        LOG_ERRNO_RETURN(0, -1, "stat(`) failed", appended.file());
+    move_to = absolute_path(appended.file());
+    // the undo record is line based, so a path holding a newline can not be stored
+    if (data_path.find('\n') != std::string::npos || move_to.find('\n') != std::string::npos)
+        LOG_ERROR_RETURN(EINVAL, -1, "` or ` holds a newline, which the move record can not store.",
+                         data_path, move_to);
+    auto dir = move_to.substr(0, move_to.find_last_of('/'));
+    if (dir.empty())
+        dir = "/";
+    if (mkdir_p(dir) != 0)
+        LOG_ERRNO_RETURN(0, -1, "failed to create the directory of `", move_to);
+    if (::stat(dir.c_str(), &parent) != 0)
+        LOG_ERRNO_RETURN(0, -1, "stat(`) failed", dir);
+    if (!S_ISDIR(parent.st_mode))
+        LOG_ERROR_RETURN(ENOTDIR, -1, "` is not a directory.", dir);
+    if (::lstat(data_path.c_str(), &data) != 0)
+        LOG_ERRNO_RETURN(0, -1, "lstat(`) failed", data_path);
+    // a rename moves the link itself, which would leave the new lower dangling
+    if (S_ISLNK(data.st_mode))
+        LOG_ERROR_RETURN(EINVAL, -1, "the upper data ` is a symlink, refusing to move it.",
+                         data_path);
+    if (parent.st_dev != data.st_dev)
+        LOG_ERROR_RETURN(EXDEV, -1, "` is not on the same file system as `.", move_to, data_path);
+    return 0;
+}
+
+static int validate_snapshot_config(ImageConfigNS::ImageConfig &committed,
+                                    ImageConfigNS::ImageConfig &request, std::string &move_to) {
+    auto committed_upper = committed.upper();
+    auto request_upper = request.upper();
+    if (committed_upper.target() != "" || request_upper.target() != "")
+        LOG_ERROR_RETURN(ENOTSUP, -1, "snapshot is not supported with a warpfile upper layer");
+    if (request_upper.index() == committed_upper.index() ||
+        request_upper.data() == committed_upper.data())
+        LOG_ERROR_RETURN(0, -1,
+                         "The new upper layer(`, `) should be different from the old upper layer(`, `).",
+                         request_upper.data(), request_upper.index(), committed_upper.data(),
+                         committed_upper.index());
+
+    auto committed_lowers = committed.lowers();
+    auto request_lowers = request.lowers();
+    if (request_lowers.size() != committed_lowers.size() + 1)
+        LOG_ERROR_RETURN(0, -1, "new lowers count is `, expect ` (the old lowers plus the old upper).",
+                         request_lowers.size(), committed_lowers.size() + 1);
+    for (size_t i = 0; i < committed_lowers.size(); i++) {
+        if (!layer_config_equal(committed_lowers[i], request_lowers[i]))
+            LOG_ERROR_RETURN(0, -1, "the `-th lower of the new config differs from the current one.",
+                             i);
+    }
+    auto &appended = request_lowers.back();
+    if (appended.gzipIndex() != "" || appended.targetFile() != "" || appended.dir() != "" ||
+        appended.digest() != "" || appended.targetDigest() != "" || appended.size() != 0)
+        LOG_ERROR_RETURN(0, -1,
+                         "the last lower(`) should only reference the old upper data(`), got dir(`) digest(`) size(`).",
+                         appended.file(), committed_upper.data(), appended.dir(),
+                         appended.digest(), appended.size());
+    return snapshot_move_target(committed, appended, move_to);
+}
 
 IFile *ImageFile::__open_ro_file(const std::string &path) {
     int flags = O_RDONLY;
@@ -461,6 +727,12 @@ ERROR_EXIT:
 }
 
 int ImageFile::init_image_file() {
+    // a pending snapshot must be rolled back before any layer is opened
+    if (recover_pending_snapshot() != 0) {
+        set_failed("failed to recover the pending snapshot");
+        return -1;
+    }
+
     LSMT::IFileRO *lower_file = nullptr;
     LSMT::IFileRW *upper_file = nullptr;
     LSMT::IFileRW *stack_ret = nullptr;
@@ -579,37 +851,38 @@ void ImageFile::set_failed(const Ts &...xs) {
     }
 }
 
-int ImageFile::create_snapshot(const char *new_config_path) {
-    // load new config file to get the snapshot layer path
-    // open new upper layer
-    // restack() current RW layer as snapshot layer
-    if(!m_lower_file || !m_upper_file)
-        LOG_ERROR_RETURN(0, -1, "Lower or upper layer is NULL.");
+int ImageFile::recover_pending_snapshot() {
+    if (reject_journal_collision(conf, config_path) != 0)
+        return -1;
 
-    ImageConfigNS::ImageConfig new_cfg;
-    LSMT::IFileRW *upper_file = nullptr;
-
-    LOG_INFO("Load new config `.", new_config_path);
-    if (!new_cfg.ParseJSON(new_config_path)) {
-        LOG_ERROR_RETURN(0, -1, "Error parse new config json: `.", new_config_path);
+    auto pending_path = config_path + SNAPSHOT_SUFFIX;
+    auto undo_path = config_path + SNAPSHOT_UNDO_SUFFIX;
+    if (::access(pending_path.c_str(), F_OK) != 0) {
+        // the snapshot is either committed or never started, so nothing on disk
+        // needs to be undone
+        if (::access(undo_path.c_str(), F_OK) == 0 && drop_snapshot_journals(config_path) != 0)
+            LOG_ERROR_RETURN(0, -1, "failed to remove the snapshot records, refusing to start.");
+        return 0;
     }
 
-    auto upper = new_cfg.upper();
-    // auto lowers = new_cfg.lowers();
-    // if(lowers[lowers.size()-1].file() != conf.upper().data())
-    //     LOG_ERROR_RETURN(0, -1, "The last lower layer(`) should be the same as old upper layer(`) after restack.", lowers[lowers.size()-1].file(), conf.upper().data());
-    if(upper.index() == conf.upper().index() || upper.data() == conf.upper().data())
-        LOG_ERROR_RETURN(0, -1, "The new upper layer(`, `) should be different from the old upper layer(`, `).", upper.data(), upper.index(), conf.upper().data(), conf.upper().index());
-
-    upper_file = open_upper(upper);
-    if (!upper_file)
-        LOG_ERROR_RETURN(0, -1, "Open upper layer failed.");
-
-    if(((LSMT::IFileRW *)m_file)->restack(upper_file) != 0) {
-        delete upper_file;
-        LOG_ERRNO_RETURN(0, -1, "Restack new rwlayer failed.");
+    // the config is not updated: put a moved layer back
+    if (::access(undo_path.c_str(), F_OK) == 0) {
+        std::string record, data_path, move_to;
+        if (read_file_content(undo_path, record) != 0 ||
+            parse_snapshot_move_record(record, data_path, move_to) != 0 ||
+            data_path != absolute_path(conf.upper().data()))
+            LOG_ERROR_RETURN(EINVAL, -1, "` is invalid, refusing to start.", undo_path);
+        if (move_layer_back(data_path, move_to) != 0)
+            LOG_ERROR_RETURN(0, -1, "move ` back to ` failed, refusing to start.", move_to,
+                             data_path);
     }
+    if (drop_snapshot_journals(config_path) != 0)
+        LOG_ERROR_RETURN(0, -1, "failed to remove the snapshot records, refusing to start.");
+    LOG_INFO("the uncommitted snapshot of ` is discarded.", config_path);
+    return 0;
+}
 
+void ImageFile::swap_snapshot_layers(LSMT::IFileRW *upper_file) {
     if(m_upper_file) {
         // transfer the sealed layer from m_upper_file to m_lower_file before m_upper_file is destructed
         auto sealed = ((LSMT::IFileRW *)m_upper_file)->get_file(0);
@@ -617,27 +890,106 @@ int ImageFile::create_snapshot(const char *new_config_path) {
         ((LSMT::IFileRW *)m_upper_file)->clear_files();
         safe_delete(m_upper_file);
     }
-    // set m_lower_file->m_index = m_file->m_index->m_backing_index because m_file is not responsible for the destruction of m_backing_index
+    // m_file already writes into upper_file, only the ownership moves here
     auto combo_index = (LSMT::IComboIndex *)((LSMT::IFileRW *)m_file)->index(); // m_file->m_index
     ((LSMT::IFileRO *)m_lower_file)->index(combo_index->backing_index());
-    // set m_file->m_index->m_index0 = upper_file->m_index
-    auto upper_file_index = (LSMT::IMemoryIndex0 *)((LSMT::IFileRW *)upper_file)->index(); // upper_file->m_index
-    combo_index->front_index(upper_file_index);
 
     m_upper_file = upper_file;
+}
 
-    // overwrite the config file in use in case the old files are used again after the process restarts
-    auto lfs = photon::fs::new_localfs_adaptor();
-    if (lfs == nullptr) {
-        LOG_ERRNO_RETURN(0, -1, "new localfs_adaptor failed");
-    }
-    DEFER(delete lfs);
-    int ret = lfs->rename(new_config_path, this->config_path.c_str());
-    if (ret != 0) {
-        LOG_ERRNO_RETURN(0, -1, "rename(`,`) failed", new_config_path, this->config_path);
-    }
-    LOG_INFO("rename(`,`) success", new_config_path, this->config_path);
+int ImageFile::create_snapshot(const char *new_config_path) {
+    // load new config file to get the snapshot layer path
+    // open new upper layer
+    // restack() current RW layer as snapshot layer
+    if(!m_lower_file || !m_upper_file)
+        LOG_ERROR_RETURN(0, -1, "Lower or upper layer is NULL.");
 
+    typedef photon::scoped_lock Lock;
+    Lock lock(m_snapshot_mtx);
+
+    auto pending_path = config_path + SNAPSHOT_SUFFIX;
+    auto undo_path = config_path + SNAPSHOT_UNDO_SUFFIX;
+    bool pending = ::access(pending_path.c_str(), F_OK) == 0;
+    bool undo = ::access(undo_path.c_str(), F_OK) == 0;
+    // only both records together mean that a move may still be in flight
+    if (pending && undo)
+        LOG_ERROR_RETURN(EBUSY, -1,
+                         "a previous snapshot is not committed, restart the device to recover "
+                         "before taking another one.");
+    if ((pending || undo) && drop_snapshot_journals(config_path) != 0)
+        LOG_ERROR_RETURN(0, -1, "failed to remove the stale snapshot records of `", config_path);
+
+    std::string new_cfg_bytes;
+    ImageConfigNS::ImageConfig new_cfg;
+    LOG_INFO("Load new config `.", new_config_path);
+    if (read_file_content(new_config_path, new_cfg_bytes) != 0)
+        return -1;
+    if (!new_cfg.ParseJSONStream(new_cfg_bytes)) {
+        LOG_ERROR_RETURN(0, -1, "Error parse new config json: `.", new_config_path);
+    }
+    if (reject_journal_collision(new_cfg, config_path) != 0)
+        return -1;
+
+    if (snapshot_request_matches(conf, new_cfg)) {
+        LOG_INFO("snapshot of ` is already committed, nothing to do.", new_config_path);
+        return 0;
+    }
+    std::string move_to;
+    if (validate_snapshot_config(conf, new_cfg, move_to) != 0)
+        return -1;
+
+    auto upper = new_cfg.upper();
+    std::unique_ptr<LSMT::IFileRW> upper_guard(open_upper(upper));
+    auto upper_file = upper_guard.get();
+    if (!upper_file)
+        LOG_ERROR_RETURN(0, -1, "Open upper layer failed.");
+
+    if (((LSMT::IFileRO *)m_lower_file)->reserve_files(1) != 0)
+        LOG_ERROR_RETURN(0, -1, "failed to reserve a slot for the sealed layer.");
+
+    auto data_path = absolute_path(conf.upper().data());
+
+    // the move record comes first, so a pending `.snapshot` always has a complete one
+    if (!move_to.empty() && write_file(undo_path, snapshot_move_record(data_path, move_to)) != 0) {
+        drop_snapshot_journals(config_path);
+        return -1;
+    }
+    if (write_file(pending_path, new_cfg_bytes) != 0) {
+        drop_snapshot_journals(config_path);
+        return -1;
+    }
+
+    auto commit = [&]() -> int {
+        if (!move_to.empty() && move_layer(data_path, move_to) != 0)
+            return -1;
+        if (::rename(pending_path.c_str(), config_path.c_str()) != 0) {
+            int rename_errno = errno;
+            if (!move_to.empty() && move_layer_back(data_path, move_to) != 0)
+                LOG_ERROR_RETURN(0, -1, "the layer stays at `", move_to);
+            errno = rename_errno;
+            LOG_ERRNO_RETURN(0, -1, "rename(`) to ` failed", pending_path, config_path);
+        }
+        return 0;
+    };
+
+    if (((LSMT::IFileRW *)m_file)->restack(upper_file, commit) != 0) {
+        int saved_errno = errno;
+        // the records are kept only when the layer can not be put back, so that
+        // the next start can finish it
+        if (!move_to.empty() && move_layer_back(data_path, move_to) != 0)
+            LOG_ERROR_RETURN(0, -1, "move ` back to ` failed, keep the records.", move_to,
+                             data_path);
+        if (drop_snapshot_journals(config_path) != 0)
+            LOG_WARN("failed to remove the snapshot records of `", config_path);
+        errno = saved_errno;
+        LOG_ERRNO_RETURN(0, -1, "Restack new rwlayer failed.");
+    }
+
+    swap_snapshot_layers(upper_file);
+    upper_guard.release();
+    conf.CopyFrom(new_cfg, conf.GetAllocator());
+    ::unlink(undo_path.c_str());
+    LOG_INFO("snapshot committed, config ` is updated.", config_path);
     return 0;
 }
 

@@ -942,27 +942,54 @@ public:
         return new Index(std::move(mappings));
     }
 
-    virtual int commit_index0() override {
-        // Merge index0 (mapping) and backing_index
-        m_backing_index->increase_tag(1);
-        auto merged_index = create_memory_index0(m_backing_index->buffer(), m_backing_index->size(), 0, UINT64_MAX);
-        vector<SegmentMapping> dumped;
-        dumped.assign(mapping.begin(), mapping.end());
-        auto idx_size = compress_raw_index(&dumped[0], dumped.size());
-        // for (auto it : mapping) {
-        for (size_t i = 0; i < idx_size; i++) {
-            auto p = dumped[i];
-            p.tag = 0;
-            merged_index->insert(p);
+    virtual IMemoryIndex *prepare_commit(int tag_shift) const override {
+        if (m_backing_index == nullptr) {
+            LOG_ERROR_RETURN(EINVAL, nullptr, "combo index without backing index can NOT be committed");
         }
+        vector<SegmentMapping> shifted;
+        shifted.reserve(m_backing_index->size() + mapping.size());
+        for (auto m : ptr_array((SegmentMapping *)m_backing_index->buffer(),
+                                m_backing_index->size())) {
+            m.tag += tag_shift;
+            shifted.push_back(m);
+        }
+        unique_ptr<IMemoryIndex0> merged(
+            create_memory_index0(shifted.data(), shifted.size(), 0, UINT64_MAX));
+        if (!merged) {
+            LOG_ERROR_RETURN(0, nullptr, "create merged index failed.");
+        }
+        if (!mapping.empty()) { // the writable mappings belong to the layer being sealed
+            vector<SegmentMapping> dumped(mapping.begin(), mapping.end());
+            auto idx_size = compress_raw_index(dumped.data(), dumped.size());
+            for (size_t i = 0; i < idx_size; i++) {
+                auto p = dumped[i];
+                p.tag = 0;
+                merged->insert(p);
+            }
+        }
+        auto rst = merged->make_read_only_index();
+        if (!rst) {
+            LOG_ERROR_RETURN(0, nullptr, "make read only index failed.");
+        }
+        return rst;
+    }
+
+    virtual void apply_commit(IMemoryIndex *prepared) override {
+        if (prepared == nullptr)
+            return;
         if(m_ownership) { // !!!
             safe_delete(m_backing_index);
         }
-        m_backing_index = (Index*)(merged_index->make_read_only_index()); // set ownership=false
-        safe_delete(merged_index);
-        LOG_INFO("rebuild backing index done. {count: `}", m_backing_index->size());
-        // Clear original index0
+        m_backing_index = (Index *)prepared;
         mapping.clear();
+        LOG_INFO("rebuild backing index done. {count: `}", m_backing_index->size());
+    }
+
+    virtual int commit_index0() override {
+        auto prepared = prepare_commit(1);
+        if (prepared == nullptr)
+            LOG_ERROR_RETURN(0, -1, "prepare backing index failed.");
+        apply_commit(prepared);
         return 0;
     }
 

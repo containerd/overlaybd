@@ -25,6 +25,8 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 #pragma once
 #include <inttypes.h>
 #include <cstddef>
+#include <errno.h>
+#include <functional>
 #include <vector>
 #include <photon/fs/filesystem.h>
 #include <photon/fs/virtual-file.h>
@@ -54,6 +56,11 @@ public:
     virtual std::vector<IFile *> get_lower_files() const = 0;
 
     virtual IFile *get_file(size_t file_idx) const = 0;
+
+    // make room for `n` more files, so that insert_file() allocates nothing later
+    virtual int reserve_files(size_t n) {
+        return 0;
+    }
 
     virtual int insert_file(IFile * file) = 0;
 
@@ -115,6 +122,12 @@ public:
 
     // close_seal current RW layer (change it to RO layer) and re-stack with upper layer
     virtual int restack(IFileRW *upper) = 0;
+
+    // restack() with `commit` called under the write lock between the seal and the swap
+    virtual int restack(IFileRW *upper, const std::function<int()> &commit) {
+        errno = ENOSYS;
+        return -1;
+    }
 };
 
 enum class RWType : uint8_t {
