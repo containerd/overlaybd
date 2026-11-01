@@ -54,10 +54,12 @@
 
 class UblkdServer : public photon::net::http::HTTPHandler {
 public:
+    enum class DevState { running, resizing, stopping };
+
     struct DevEntry {
         std::unique_ptr<UblkDevice> dev;
         std::string config;
-        bool stopping = false;
+        DevState state = DevState::running;
         bool mode_shared = false; // acquired shared (refcounted) vs add/exclusive
         int refcount = 1;         // meaningful when mode_shared
         bool pooled = false;      // came from the warm pool, can be recycled
@@ -176,6 +178,29 @@ private:
         return body;
     }
 
+    static const char *state_name(DevState state) {
+        switch (state) {
+        case DevState::resizing:
+            return "resizing";
+        case DevState::stopping:
+            return "stopping";
+        default:
+            return "running";
+        }
+    }
+
+    static bool reject_if_busy(const DevEntry &entry, int id, int &code,
+                               std::string &msg) {
+        if (entry.state == DevState::running)
+            return false;
+        code = 409;
+        msg = ublkd_msg_error("device " + std::to_string(id) +
+                              (entry.state == DevState::resizing
+                                   ? " is being resized; retry"
+                                   : " is being torn down"));
+        return true;
+    }
+
     void handle_add(const std::string &body, int &code, std::string &msg) {
         UblkdAddRequest areq;
         std::string err;
@@ -253,13 +278,9 @@ private:
         // Deletion state machine: del is synchronous and yields while
         // draining, so a concurrent del of the same id would otherwise race
         // on the map iterator (erase invalidates the other handler's it).
-        if (it->second.stopping) {
-            code = 409;
-            msg = ublkd_msg_error("delete of device " + std::to_string(id) +
-                                  " is already in progress");
+        if (reject_if_busy(it->second, id, code, msg))
             return;
-        }
-        it->second.stopping = true;
+        it->second.state = DevState::stopping;
         it->second.dev->stop();
         it->second.dev->wait();
         it->second.dev->teardown();
@@ -285,11 +306,10 @@ private:
             msg = ublkd_msg_error("no such device: " + std::to_string(rreq.dev_id));
             return;
         }
-        if (it->second.stopping) {
-            code = 409;
-            msg = ublkd_msg_error("device is being deleted");
+        if (reject_if_busy(it->second, rreq.dev_id, code, msg))
             return;
-        }
+        it->second.state = DevState::resizing;
+        DEFER(it->second.state = DevState::running);
         int r = it->second.dev->resize(rreq.size_gb << 30, rreq.resize_fs, err);
         if (r == 0) {
             code = 200;
@@ -309,7 +329,7 @@ private:
             info.dev_path = "/dev/ublkb" + std::to_string(kv.first);
             info.config = kv.second.config;
             info.writable = kv.second.dev->writable();
-            info.state = kv.second.stopping ? "stopping" : "running";
+            info.state = state_name(kv.second.state);
             info.mode = kv.second.mode_shared ? "shared" : "exclusive";
             info.refcount = kv.second.mode_shared ? kv.second.refcount : 0;
             infos.push_back(std::move(info));
@@ -349,7 +369,7 @@ private:
             auto sit = shared_.find(resolved);
             if (sit != shared_.end()) {
                 auto dit = devices_.find(sit->second);
-                if (dit != devices_.end() && !dit->second.stopping) {
+                if (dit != devices_.end() && dit->second.state == DevState::running) {
                     dit->second.refcount++;
                     code = 200;
                     msg = ublkd_msg_acquired(sit->second,
@@ -359,7 +379,7 @@ private:
                              sit->second, dit->second.refcount);
                     return;
                 }
-                if (dit != devices_.end() && dit->second.stopping) {
+                if (dit != devices_.end() && dit->second.state != DevState::running) {
                     code = 409;
                     msg = ublkd_msg_error("shared device for this image is being "
                                           "torn down; retry");
@@ -458,12 +478,8 @@ private:
             msg = ublkd_msg_error("no such device: " + std::to_string(id));
             return;
         }
-        if (it->second.stopping) {
-            code = 409;
-            msg = ublkd_msg_error("device " + std::to_string(id) +
-                                  " is being torn down");
+        if (reject_if_busy(it->second, id, code, msg))
             return;
-        }
         if (--it->second.refcount > 0) {
             code = 200;
             msg = ublkd_msg_released(it->second.refcount);
@@ -472,7 +488,7 @@ private:
         }
         // Recycling yields during cache flush and image swap. Fence concurrent
         // release/del requests before either operation can yield.
-        it->second.stopping = true;
+        it->second.state = DevState::stopping;
         // last reference (or an exclusive lease): back to the pool if it came
         // from there and can be recycled safely, otherwise tear it down
         if (it->second.mode_shared) {
@@ -487,7 +503,6 @@ private:
             LOG_INFO("ublkd: released /dev/ublkb` back to the pool", id);
             return;
         }
-        it->second.stopping = true;
         it->second.dev->stop();
         it->second.dev->wait();
         it->second.dev->teardown();
