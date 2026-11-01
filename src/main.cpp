@@ -34,6 +34,7 @@
 #include <scsi.h>
 #include <scsi_defs.h>
 #include <fcntl.h>
+#include <linux/falloc.h>
 #include <scsi/scsi.h>
 #include <sys/resource.h>
 #include <sys/prctl.h>
@@ -188,16 +189,134 @@ void complete_command(struct tcmu_device *dev, struct tcmulib_cmd *cmd,
     odev->inflight.fetch_sub(1, std::memory_order_release);
 }
 
+// SCSI provisioning fields. The backend only de-allocates on UNMAP, so the
+// device must not claim that unmapped LBAs read back as zeros, otherwise the
+// guest is free to zero a range by unmapping it.
+static constexpr uint8_t INQUIRY_EVPD = 0x01;
+static constexpr uint8_t VPD_B2_PAGE_CODE = 0xb2;
+static constexpr uint8_t VPD_B2_PAGE_LENGTH = 4;
+static constexpr uint8_t VPD_B2_LBPU = 0x80;
+static constexpr uint8_t VPD_B2_LBPWS = 0x40;
+static constexpr uint8_t VPD_B2_LBPWS10 = 0x20;
+static constexpr size_t VPD_B2_LENGTH = 8;
+static constexpr uint8_t RC16_LBPME = 0x80;
+static constexpr size_t RC16_LENGTH = 32;
+static constexpr uint8_t WRITE_SAME_UNMAP = 0x08;
+
+// UNMAP parameter list, SBC-3 5.30: an 8-byte header followed by 16-byte
+// block descriptors, each holding an LBA and a block count
+static constexpr size_t UNMAP_PARAM_HEADER = 8;
+static constexpr size_t UNMAP_DESC_LENGTH_OFFSET = 2;
+static constexpr size_t UNMAP_DESC_LENGTH = 16;
+static constexpr size_t UNMAP_DESC_BLOCKS_OFFSET = 8;
+static constexpr size_t UNMAP_MAX_PARAM_LENGTH =
+    UNMAP_PARAM_HEADER + VPD_MAX_UNMAP_BLOCK_DESC_COUNT * UNMAP_DESC_LENGTH;
+static constexpr int UNMAP_CDB_PARAM_LENGTH = 7;
+
+static int emulate_vpd_b2(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
+    uint8_t data[VPD_B2_LENGTH] = {};
+    data[1] = VPD_B2_PAGE_CODE;
+    data[3] = VPD_B2_PAGE_LENGTH;
+    if (tcmu_dev_get_unmap_enabled(dev))
+        data[5] = VPD_B2_LBPU | VPD_B2_LBPWS | VPD_B2_LBPWS10;
+    tcmu_memcpy_into_iovec(cmd->iovec, cmd->iov_cnt, data, sizeof(data));
+    return TCMU_STS_OK;
+}
+
+static int emulate_read_capacity_16(ImageFile *file, struct tcmulib_cmd *cmd) {
+    uint8_t data[RC16_LENGTH] = {};
+    uint64_t last_lba = file->num_lbas - 1;
+    for (int i = 0; i < 8; i++)
+        data[i] = (uint8_t)(last_lba >> (56 - 8 * i));
+    uint32_t block_size = file->block_size;
+    data[8] = (uint8_t)(block_size >> 24);
+    data[9] = (uint8_t)(block_size >> 16);
+    data[10] = (uint8_t)(block_size >> 8);
+    data[11] = (uint8_t)block_size;
+    data[14] = RC16_LBPME;
+    tcmu_memcpy_into_iovec(cmd->iovec, cmd->iov_cnt, data, sizeof(data));
+    return TCMU_STS_OK;
+}
+
+// WRITE SAME carries one LBA of data. The guest only uses it to write zeros;
+// anything else is left unimplemented rather than silently zeroed.
+static bool iovec_is_zero(const struct iovec *iov, size_t cnt) {
+    for (size_t i = 0; i < cnt; i++) {
+        auto p = (const uint8_t *)iov[i].iov_base;
+        for (size_t j = 0; j < iov[i].iov_len; j++)
+            if (p[j] != 0)
+                return false;
+    }
+    return true;
+}
+
+static uint16_t be16(const uint8_t *p) {
+    return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
+}
+
+static uint64_t be64(const uint8_t *p) {
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++)
+        v = (v << 8) | p[i];
+    return v;
+}
+
+static uint32_t be32(const uint8_t *p) {
+    uint32_t v = 0;
+    for (int i = 0; i < 4; i++)
+        v = (v << 8) | p[i];
+    return v;
+}
+
+static int emulate_unmap(ImageFile *file, struct tcmulib_cmd *cmd) {
+    if (file->read_only)
+        return TCMU_STS_WR_ERR;
+    uint32_t param_len = be16(&cmd->cdb[UNMAP_CDB_PARAM_LENGTH]);
+    if (param_len == 0)
+        return TCMU_STS_OK;
+    if (param_len < UNMAP_PARAM_HEADER || param_len > UNMAP_MAX_PARAM_LENGTH)
+        return TCMU_STS_INVALID_PARAM_LIST_LEN;
+    uint8_t params[UNMAP_MAX_PARAM_LENGTH] = {};
+    if (tcmu_memcpy_from_iovec(params, param_len, cmd->iovec, cmd->iov_cnt) != param_len)
+        return TCMU_STS_INVALID_PARAM_LIST_LEN;
+    uint32_t desc_len = be16(&params[UNMAP_DESC_LENGTH_OFFSET]);
+    if (desc_len % UNMAP_DESC_LENGTH != 0 || desc_len + UNMAP_PARAM_HEADER > param_len)
+        return TCMU_STS_INVALID_PARAM_LIST;
+    uint32_t count = desc_len / UNMAP_DESC_LENGTH;
+    uint64_t max_blocks = file->size / file->block_size;
+    for (uint32_t i = 0; i < count; i++) {
+        auto desc = &params[UNMAP_PARAM_HEADER + i * UNMAP_DESC_LENGTH];
+        uint64_t lba = be64(desc);
+        uint64_t blocks = be32(desc + UNMAP_DESC_BLOCKS_OFFSET);
+        if (blocks == 0)
+            continue;
+        if (lba > max_blocks || blocks > max_blocks - lba)
+            return TCMU_STS_RANGE;
+        uint64_t offset = lba * file->block_size;
+        uint64_t length = blocks * file->block_size;
+        if (file->fallocate(FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset, length) != 0)
+            return TCMU_STS_WR_ERR;
+    }
+    return TCMU_STS_OK;
+}
+
 void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
     obd_dev *odev = (obd_dev *)tcmu_dev_get_private(dev);
     ImageFile *file = odev->file;
     size_t ret = -1;
     size_t length;
+    uint64_t offset;
+    uint64_t lba;
+    uint64_t blocks;
+    uint64_t max_blocks;
 
     switch (cmd->cdb[0]) {
     case INQUIRY:
         photon::thread_yield();
-        ret = tcmu_emulate_inquiry(dev, NULL, cmd->cdb, cmd->iovec, cmd->iov_cnt);
+        if ((cmd->cdb[1] & INQUIRY_EVPD) && cmd->cdb[2] == VPD_B2_PAGE_CODE)
+            ret = emulate_vpd_b2(dev, cmd);
+        else
+            ret = tcmu_emulate_inquiry(dev, NULL, cmd->cdb, cmd->iovec, cmd->iov_cnt);
         complete_command(dev, cmd, ret);
         break;
 
@@ -210,8 +329,7 @@ void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
     case SERVICE_ACTION_IN_16:
         photon::thread_yield();
         if (cmd->cdb[1] == READ_CAPACITY_16)
-            ret = tcmu_emulate_read_capacity_16(file->num_lbas, file->block_size, cmd->cdb,
-                                                cmd->iovec, cmd->iov_cnt);
+            ret = emulate_read_capacity_16(file, cmd);
         else
             ret = TCMU_STS_NOT_HANDLED;
         complete_command(dev, cmd, ret);
@@ -272,18 +390,39 @@ void cmd_handler(struct tcmu_device *dev, struct tcmulib_cmd *cmd) {
         }
         break;
 
+    case UNMAP:
+        ret = emulate_unmap(file, cmd);
+        complete_command(dev, cmd, ret);
+        break;
+
     case WRITE_SAME:
     case WRITE_SAME_16:
-        if (cmd->cdb[1] & 0x08) {
-            length = tcmu_lba_to_byte(dev, tcmu_cdb_get_xfer_length(cmd->cdb));
-            ret = file->fallocate(3, tcmu_cdb_to_byte(dev, cmd->cdb), length);
-            if (ret == 0) {
-                complete_command(dev, cmd, TCMU_STS_OK);
-            } else {
-                complete_command(dev, cmd, TCMU_STS_WR_ERR);
-            }
+        lba = tcmu_cdb_get_lba(cmd->cdb);
+        blocks = tcmu_cdb_get_xfer_length(cmd->cdb);
+        max_blocks = file->size / file->block_size;
+        if (lba >= max_blocks) {
+            complete_command(dev, cmd, TCMU_STS_RANGE);
+            break;
+        }
+        // a zero block count means through the last logical block
+        // see SBC-3 r0, PDF p.105: https://www.t10.org/ftp/t10/document.05/05-344r0.pdf
+        if (blocks == 0)
+            blocks = max_blocks - lba;
+        if (blocks > max_blocks - lba) {
+            complete_command(dev, cmd, TCMU_STS_RANGE);
+            break;
+        }
+        offset = tcmu_lba_to_byte(dev, lba);
+        length = tcmu_lba_to_byte(dev, blocks);
+        if (cmd->cdb[1] & WRITE_SAME_UNMAP) {
+            ret = file->fallocate(FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset, length);
+            complete_command(dev, cmd, ret == 0 ? TCMU_STS_OK : TCMU_STS_WR_ERR);
+        } else if (iovec_is_zero(cmd->iovec, cmd->iov_cnt)) {
+            ret = file->fallocate(FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE, offset, length);
+            complete_command(dev, cmd, ret == 0 ? TCMU_STS_OK : TCMU_STS_WR_ERR);
         } else {
-            LOG_ERROR("unknown write_same command `", cmd->cdb[0]);
+            LOG_ERROR("write_same with non-zero payload is not supported, opcode: `",
+                      cmd->cdb[0]);
             complete_command(dev, cmd, TCMU_STS_NOT_HANDLED);
         }
         break;
@@ -421,6 +560,7 @@ static int dev_open(struct tcmu_device *dev) {
     tcmu_dev_set_block_size(dev, file->block_size);
     tcmu_dev_set_num_lbas(dev, file->num_lbas);
     tcmu_dev_set_unmap_enabled(dev, true);
+    tcmu_dev_set_max_unmap_len(dev, VPD_MAX_WRITE_SAME_LENGTH);
     tcmu_dev_set_write_cache_enabled(dev, false);
     tcmu_dev_set_write_protect_enabled(dev, file->read_only);
 

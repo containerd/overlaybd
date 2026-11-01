@@ -139,10 +139,137 @@ jobs:
         sudo umount obd_mp
         ls -l /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0/vol1
         sudo unlink /sys/kernel/config/target/loopback/naa.123456789abcdef/tpgt_1/lun/lun_0/vol1
-        wget https://overlaybd.blob.core.windows.net/overlaybd/e2etest.tar.gz
-        gzip -k -d e2etest.tar.gz
+
+        # --- tcmu write-zeroes / unmap on a sparse layer over a real lower ---
+        # A 1G ext4 image is written into an append layer and sealed in place,
+        # so unmapped ranges fall through to non-zero lower data and can be
+        # told apart from zeroed ones.
+        if [ ! -f e2etest.tar ]; then
+          wget -q https://overlaybd.blob.core.windows.net/overlaybd/e2etest.tar.gz
+          gzip -k -d e2etest.tar.gz
+        fi
+        sudo mkdir -p /var/lib/overlaybd/test/st
+        sudo /opt/overlaybd/bin/overlaybd-create \
+          /var/lib/overlaybd/test/st/lower.data \
+          /var/lib/overlaybd/test/st/lower.index 1
+        echo '{"lowers":[],"upper":{"data":"/var/lib/overlaybd/test/st/lower.data","index":"/var/lib/overlaybd/test/st/lower.index"}}' \
+          | sudo tee /var/lib/overlaybd/test/st/lower.json >/dev/null
+        sudo /opt/overlaybd/bin/overlaybd-apply --mkfs e2etest.tar /var/lib/overlaybd/test/st/lower.json
+        sudo /opt/overlaybd/bin/overlaybd-commit --seal \
+          /var/lib/overlaybd/test/st/lower.data \
+          /var/lib/overlaybd/test/st/lower.index
+
+        sudo /opt/overlaybd/bin/overlaybd-create -s \
+          /var/lib/overlaybd/test/st/upper.data \
+          /var/lib/overlaybd/test/st/upper.index 1
+        echo '{"lowers":[{"file":"/var/lib/overlaybd/test/st/lower.data"}],"upper":{"data":"/var/lib/overlaybd/test/st/upper.data","index":"/var/lib/overlaybd/test/st/upper.index"},"resultFile":"/var/lib/overlaybd/test/st/result.log"}' \
+          | sudo tee /var/lib/overlaybd/test/st/config.json >/dev/null
+        sudo mkdir -p /sys/kernel/config/target/core/user_1/vol3
+        echo -n dev_config=overlaybd/var/lib/overlaybd/test/st/config.json \
+          | sudo tee /sys/kernel/config/target/core/user_1/vol3/control
+        echo -n 1 | sudo tee /sys/kernel/config/target/core/user_1/vol3/enable
+        sudo mkdir -p /sys/kernel/config/target/loopback/naa.123456789abcdee/tpgt_1/lun/lun_0
+        echo -n "naa.123456789abcdee" \
+          | sudo tee /sys/kernel/config/target/loopback/naa.123456789abcdee/tpgt_1/nexus
+        sudo ln -s /sys/kernel/config/target/core/user_1/vol3 \
+          /sys/kernel/config/target/loopback/naa.123456789abcdee/tpgt_1/lun/lun_0/vol3
+        sleep 2
+        dev=$(lsscsi | awk '/TCMU/ {print $7; exit}')
+        test -b "$dev"
+        echo "tcmu sparse device: $dev"
+
+        upper=/var/lib/overlaybd/test/st/upper.data
+        blocks=8
+        zero_lba=8
+        unmap_lba=24
+        head -c $((blocks * 4096)) /dev/zero > /tmp/zero_expected
+
+        # Read the lower content at the unmap range before the upper layer
+        # covers it; it must be non-zero, otherwise a hole and a zeroed extent
+        # are indistinguishable.
+        rm -f /tmp/unmap_lower
+        sudo dd if="$dev" bs=4k skip=$unmap_lba count=$blocks of=/tmp/unmap_lower status=none
+        python3 -c "import sys; d = open('/tmp/unmap_lower', 'rb').read(); sys.exit(0 if any(d) else 1)"
+
+        # zeroout: BLKZEROOUT -> WRITE SAME without UNMAP -> ZERO_RANGE.
+        # Guard blocks on both sides must stay untouched, so the command
+        # length is checked and not just its start.
+        zero_start=$((zero_lba - blocks))
+        dd if=/dev/urandom of=/tmp/zero_pattern bs=4k count=$((blocks * 3)) status=none
+        sudo dd if=/tmp/zero_pattern of="$dev" bs=4k seek=$zero_start conv=notrunc status=none
+        sudo sync
+        du_written=$(sudo du -k "$upper" | cut -f1)
+        sudo blkdiscard -z -o $((zero_lba * 4096)) -l $((blocks * 4096)) "$dev"
+        sudo sync
+        sudo dd if="$dev" bs=4k skip=$zero_lba count=$blocks status=none | cmp - /tmp/zero_expected
+        head -c $((blocks * 4096)) /tmp/zero_pattern > /tmp/zero_head
+        tail -c $((blocks * 4096)) /tmp/zero_pattern > /tmp/zero_tail
+        sudo dd if="$dev" bs=4k skip=$zero_start count=$blocks status=none | cmp - /tmp/zero_head
+        sudo dd if="$dev" bs=4k skip=$((zero_lba + blocks)) count=$blocks status=none | cmp - /tmp/zero_tail
+        du_zeroed=$(sudo du -k "$upper" | cut -f1)
+        test "$du_zeroed" -eq "$du_written"
+        sudo filefrag -v "$upper" | grep -q "unwritten"
+
+        # unmap: SCSI UNMAP -> PUNCH_HOLE. The runtime index keeps a zeroed
+        # mapping so the range reads as zero; only a reopen rebuilds it as a
+        # hole that falls through to the lower layer.
+        unmap_start=$((unmap_lba - blocks))
+        dd if=/dev/urandom of=/tmp/unmap_pattern bs=4k count=$((blocks * 3)) status=none
+        sudo dd if=/tmp/unmap_pattern of="$dev" bs=4k seek=$unmap_start conv=notrunc status=none
+        sudo sync
+        du_before_unmap=$(sudo du -k "$upper" | cut -f1)
+        sudo blkdiscard -o $((unmap_lba * 4096)) -l $((blocks * 4096)) "$dev"
+        sudo sync
+        sudo dd if="$dev" bs=4k skip=$unmap_lba count=$blocks status=none | cmp - /tmp/zero_expected
+        head -c $((blocks * 4096)) /tmp/unmap_pattern > /tmp/unmap_head
+        tail -c $((blocks * 4096)) /tmp/unmap_pattern > /tmp/unmap_tail
+        sudo dd if="$dev" bs=4k skip=$unmap_start count=$blocks status=none | cmp - /tmp/unmap_head
+        sudo dd if="$dev" bs=4k skip=$((unmap_lba + blocks)) count=$blocks status=none | cmp - /tmp/unmap_tail
+        du_after_unmap=$(sudo du -k "$upper" | cut -f1)
+        test "$du_after_unmap" -lt "$du_before_unmap"
+        # the punched range must have no extent; du is not exact because ext4
+        # extent-tree metadata is not part of the data extents
+        sudo filefrag -v "$upper" | awk -v lo=$((unmap_lba + 1)) -v hi=$((unmap_lba + blocks)) \
+          '/^ *[0-9]+:/ { l=$2; h=$3; gsub(/\.\./,"",l); gsub(/:/,"",h); if (l+0<=hi && h+0>=lo) found=1 } END { exit found }'
+
+        # reopen: removing the core device closes the image; recreating it makes
+        # the sparse index rebuild from fiemap
+        sudo unlink /sys/kernel/config/target/loopback/naa.123456789abcdee/tpgt_1/lun/lun_0/vol3
+        sudo rmdir /sys/kernel/config/target/loopback/naa.123456789abcdee/tpgt_1/lun/lun_0
+        sudo rmdir /sys/kernel/config/target/core/user_1/vol3
+        sudo mkdir /sys/kernel/config/target/core/user_1/vol3
+        echo -n dev_config=overlaybd/var/lib/overlaybd/test/st/config.json \
+          | sudo tee /sys/kernel/config/target/core/user_1/vol3/control
+        echo -n 1 | sudo tee /sys/kernel/config/target/core/user_1/vol3/enable
+        sudo mkdir -p /sys/kernel/config/target/loopback/naa.123456789abcdee/tpgt_1/lun/lun_0
+        sudo ln -s /sys/kernel/config/target/core/user_1/vol3 \
+          /sys/kernel/config/target/loopback/naa.123456789abcdee/tpgt_1/lun/lun_0/vol3
+        sleep 2
+        dev=$(lsscsi | awk '/TCMU/ {print $7; exit}')
+        test -b "$dev"
+        # zeroed stays zero, punched falls through to the lower layer; the guard
+        # at LBA 16..23 was overwritten by the unmap pattern, so it is checked
+        # against unmap_head instead of zero_tail
+        sudo dd if="$dev" bs=4k skip=$zero_lba count=$blocks status=none | cmp - /tmp/zero_expected
+        sudo dd if="$dev" bs=4k skip=$unmap_lba count=$blocks status=none | cmp - /tmp/unmap_lower
+        du_reopen=$(sudo du -k "$upper" | cut -f1)
+        test "$du_reopen" -eq "$du_after_unmap"
+        sudo filefrag -v "$upper" | grep -q "unwritten"
+        sudo dd if="$dev" bs=4k skip=$zero_start count=$blocks status=none | cmp - /tmp/zero_head
+        sudo dd if="$dev" bs=4k skip=$unmap_start count=$blocks status=none | cmp - /tmp/unmap_head
+        sudo dd if="$dev" bs=4k skip=$((unmap_lba + blocks)) count=$blocks status=none | cmp - /tmp/unmap_tail
+
+        # leave no core device behind for the next e2e step
+        sudo unlink /sys/kernel/config/target/loopback/naa.123456789abcdee/tpgt_1/lun/lun_0/vol3
+        sudo rmdir /sys/kernel/config/target/loopback/naa.123456789abcdee/tpgt_1/lun/lun_0
+        sudo rmdir /sys/kernel/config/target/core/user_1/vol3
+
+        if [ ! -f e2etest.tar ]; then
+          wget https://overlaybd.blob.core.windows.net/overlaybd/e2etest.tar.gz
+          gzip -k -d e2etest.tar.gz
+        fi
         mkdir test_data
-        tar -zxvf e2etest.tar.gz -C test_data/
+        tar -xf e2etest.tar -C test_data/
         truncate -s 2g img1
         truncate -s 2g img2
         /opt/overlaybd/bin/overlaybd-apply --mkfs --raw e2etest.tar img1
