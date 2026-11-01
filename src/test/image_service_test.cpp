@@ -31,6 +31,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>
+#include <sys/vfs.h>
+#include <algorithm>
 #include <fstream>
 #include <memory>
 #include <thread>
@@ -666,32 +668,32 @@ void check_upper_engine(uint32_t engine, bool sparse, bool snapshot = false) {
         EXPECT_EQ(bool(data_flags & O_DIRECT), direct);
         EXPECT_EQ(index_flags & O_DIRECT, 0);
         EXPECT_EQ(bool(lower_flags & O_DIRECT), direct);
-        std::vector<char> input(4097, 'A'), output(4097, 0);
+        std::vector<char> input(8193, 'A'), output(8193, 0);
         iovec lower_read_iov{output.data() + 1, 4096};
         ASSERT_EQ(image->preadv(&lower_read_iov, 1, 32768), 4096);
         EXPECT_EQ(memcmp(lower_input.data() + 1, output.data() + 1, 4096), 0);
-        iovec iov{input.data() + 1, 512};
-        iovec read_iov{output.data() + 1, 512};
-        ASSERT_EQ(image->pwritev(&iov, 1, 0), 512);
-        ASSERT_EQ(image->preadv(&read_iov, 1, 0), 512);
-        EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 512), 0);
+        iovec iov{input.data() + 1, 4096};
+        iovec read_iov{output.data() + 1, 4096};
+        ASSERT_EQ(image->pwritev(&iov, 1, 0), 4096);
+        ASSERT_EQ(image->preadv(&read_iov, 1, 0), 4096);
+        EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 4096), 0);
         iov.iov_len = read_iov.iov_len = 4096;
         ASSERT_EQ(image->pwritev(&iov, 1, 0), 4096);
         ASSERT_EQ(image->preadv(&read_iov, 1, 0), 4096);
         EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 4096), 0);
-        iovec split[2]{{input.data() + 1, 512}, {input.data() + 513, 3584}};
-        ASSERT_EQ(image->pwritev(split, 2, 4096), 4096);
-        iovec read_split[2]{{output.data() + 1, 1536}, {output.data() + 1537, 2560}};
-        ASSERT_EQ(image->preadv(read_split, 2, 4096), 4096);
+        iovec split[2]{{input.data() + 1, 4096}, {input.data() + 4097, 4096}};
+        ASSERT_EQ(image->pwritev(split, 2, 4096), 8192);
+        iovec read_split[2]{{output.data() + 1, 4096}, {output.data() + 4097, 4096}};
+        ASSERT_EQ(image->preadv(read_split, 2, 4096), 8192);
+        EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 8192), 0);
+        iov.iov_len = 4096;
+        ASSERT_EQ(image->pwritev(&iov, 1, (1 << 20) - 4096), 4096);
+        read_iov.iov_len = 4096;
+        ASSERT_EQ(image->preadv(&read_iov, 1, (1 << 20) - 4096), 4096);
         EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 4096), 0);
-        iov.iov_len = 512;
-        ASSERT_EQ(image->pwritev(&iov, 1, (1 << 20) - 512), 512);
-        read_iov.iov_len = 512;
-        ASSERT_EQ(image->preadv(&read_iov, 1, (1 << 20) - 512), 512);
-        EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 512), 0);
         std::vector<photon::join_handle *> writers;
         std::atomic<int> failures{0};
-        size_t concurrent_size = direct ? 4096 : 512;
+        size_t concurrent_size = 4096;
         for (int slot = 0; slot < 8; ++slot) {
             auto thread = photon::thread_create11([&, slot] {
                 std::vector<char> buffer(concurrent_size + 1, 'a' + slot);
@@ -715,16 +717,17 @@ void check_upper_engine(uint32_t engine, bool sparse, bool snapshot = false) {
                     ASSERT_EQ(output[1 + byte], 'a' + slot);
             }
         } else {
-            ASSERT_EQ(image->preadv(&read_iov, 1, 65536), 4096);
-            for (int slot = 0; slot < 8; ++slot)
-                for (int byte = 0; byte < 512; ++byte)
-                    ASSERT_EQ(output[1 + slot * 512 + byte], 'a' + slot);
+            for (int slot = 0; slot < 8; ++slot) {
+                ASSERT_EQ(image->preadv(&read_iov, 1, 65536 + slot * 4096), 4096);
+                for (int byte = 0; byte < 4096; ++byte)
+                    ASSERT_EQ(output[1 + byte], 'a' + slot);
+            }
         }
         writers.clear();
         for (int writer = 0; writer < 2; ++writer) {
             auto thread = photon::thread_create11([&, writer] {
                 std::vector<char> buffer(4097, writer ? 'D' : 'C');
-                size_t size = direct || writer == 0 ? 4096 : 512;
+                size_t size = 4096;
                 iovec part{buffer.data() + 1, size};
                 auto offset = direct ? 131072 + writer * 4096
                                      : (writer ? 32768 : 16384);
@@ -737,7 +740,7 @@ void check_upper_engine(uint32_t engine, bool sparse, bool snapshot = false) {
         for (auto thread : writers) photon::thread_join(thread);
         ASSERT_EQ(failures.load(), 0);
         for (int writer = 0; writer < 2; ++writer) {
-            size_t size = direct || writer == 0 ? 4096 : 512;
+            size_t size = 4096;
             auto offset = direct ? 131072 + writer * 4096
                                  : (writer ? 32768 : 16384);
             read_iov.iov_len = size;
@@ -757,14 +760,15 @@ void check_upper_engine(uint32_t engine, bool sparse, bool snapshot = false) {
                     ASSERT_EQ(output[1 + byte], 'a' + slot);
             }
         } else {
-            ASSERT_EQ(image->preadv(&read_iov, 1, 65536), 4096);
-            for (int slot = 0; slot < 8; ++slot)
-                for (int byte = 0; byte < 512; ++byte)
-                    ASSERT_EQ(output[1 + slot * 512 + byte], 'a' + slot);
+            for (int slot = 0; slot < 8; ++slot) {
+                ASSERT_EQ(image->preadv(&read_iov, 1, 65536 + slot * 4096), 4096);
+                for (int byte = 0; byte < 4096; ++byte)
+                    ASSERT_EQ(output[1 + byte], 'a' + slot);
+            }
         }
-        read_iov.iov_len = 512;
-        ASSERT_EQ(image->preadv(&read_iov, 1, (1 << 20) - 512), 512);
-        EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 512), 0);
+        read_iov.iov_len = 4096;
+        ASSERT_EQ(image->preadv(&read_iov, 1, (1 << 20) - 4096), 4096);
+        EXPECT_EQ(memcmp(input.data() + 1, output.data() + 1, 4096), 0);
     });
     worker.join();
 }
@@ -791,6 +795,126 @@ TEST(UpperIOEngine, HybridIouringDirect) {
 }
 TEST(UpperIOEngine, SparseIouringDirect) {
     check_upper_engine(ImageConfigNS::IOENGINE_IOURING_DIRECT, true);
+}
+
+namespace {
+// Writes a range whose length follows the device block size, reopens the image,
+// and checks what the untouched part of the same host-fs block reads back as.
+void check_sparse_reload(bool block4k) {
+    std::thread worker([=] {
+        ASSERT_EQ(photon::init(photon::INIT_EVENT_EPOLL,
+                               photon::INIT_IO_LIBCURL | photon::INIT_IO_LIBAIO),
+                  0);
+        DEFER(photon::fini());
+
+        auto directory = upper_test_directory();
+        ASSERT_FALSE(directory.empty());
+        auto data = directory + "/data";
+        auto index = directory + "/index";
+        auto lower_data = directory + "/lower-data";
+        auto lower_index = directory + "/lower-index";
+        auto lower = directory + "/lower";
+        auto service_path = directory + "/service.json";
+        auto image_path = directory + "/image.json";
+        const size_t BLOCK = 4096;
+        const char LOWER_FILL = (char)0xa5;
+
+        {
+            std::ofstream service(service_path);
+            service << "{\"ioEngine\":" << ioengine_psync
+                    << ",\"enableAudit\":false,\"logPath\":\"\",\"logLevel\":2,"
+                    << "\"cacheConfig\":{\"cacheType\":\"file\",\"cacheDir\":\""
+                    << directory << "/cache\"},\"gzipCacheConfig\":{\"enable\":false}}";
+        }
+        {
+            std::unique_ptr<IFile> fdata(
+                open_localfile_adaptor(data.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600));
+            std::unique_ptr<IFile> findex(
+                open_localfile_adaptor(index.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600));
+            ASSERT_NE(fdata, nullptr);
+            ASSERT_NE(findex, nullptr);
+            LSMT::LayerInfo info(fdata.get(), findex.get());
+            info.virtual_size = 1 << 20;
+            info.rw_type = LSMT::RWType::Sparse;
+            std::unique_ptr<LSMT::IFileRW> layer(LSMT::create_file_rw(info, false));
+            ASSERT_NE(layer, nullptr);
+        }
+        {
+            std::unique_ptr<IFile> fdata(open_localfile_adaptor(
+                lower_data.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600));
+            std::unique_ptr<IFile> findex(open_localfile_adaptor(
+                lower_index.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600));
+            ASSERT_NE(fdata, nullptr);
+            ASSERT_NE(findex, nullptr);
+            LSMT::LayerInfo info(fdata.get(), findex.get());
+            info.virtual_size = 1 << 20;
+            std::unique_ptr<LSMT::IFileRW> layer(LSMT::create_file_rw(info, false));
+            ASSERT_NE(layer, nullptr);
+            std::vector<char> fill(BLOCK * 2, LOWER_FILL);
+            ASSERT_EQ(layer->pwrite(fill.data(), fill.size(), 0), (ssize_t)fill.size());
+            std::unique_ptr<IFile> sealed(
+                open_localfile_adaptor(lower.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600));
+            ASSERT_NE(sealed, nullptr);
+            ASSERT_EQ(layer->commit(LSMT::CommitArgs(sealed.get())), 0);
+        }
+        {
+            std::ofstream image(image_path);
+            image << "{\"lowers\":[{\"file\":\"" << lower
+                  << "\"}],\"upper\":{\"data\":\"" << data
+                  << "\",\"index\":\"" << index << "\"},\"block4k\":"
+                  << (block4k ? "true" : "false") << "}";
+        }
+
+        std::unique_ptr<ImageService> service(create_image_service(service_path.c_str()));
+        ASSERT_NE(service, nullptr);
+        std::unique_ptr<ImageFile> image(service->create_image_file(image_path.c_str(), ""));
+        ASSERT_NE(image, nullptr);
+        ASSERT_EQ(image->block_size, block4k ? 4096u : 512u);
+
+        const size_t write_len = block4k ? BLOCK : 512;
+        std::vector<char> write_buf(write_len, 'A');
+        ASSERT_EQ(image->pwrite(write_buf.data(), write_len, BLOCK), (ssize_t)write_len);
+
+        image.reset();
+        image.reset(service->create_image_file(image_path.c_str(), ""));
+        ASSERT_NE(image, nullptr);
+        ASSERT_EQ(image->block_size, block4k ? 4096u : 512u);
+
+        struct statfs host;
+        ASSERT_EQ(0, statfs(directory.c_str(), &host));
+        size_t host_block = host.f_bsize;
+        ASSERT_LE(host_block, BLOCK);
+
+        std::vector<char> read_buf(BLOCK, 0);
+        ASSERT_EQ(image->pread(read_buf.data(), BLOCK, BLOCK), (ssize_t)BLOCK);
+        for (size_t i = 0; i < write_len; i++)
+            ASSERT_EQ(read_buf[i], 'A');
+        if (block4k) {
+            for (size_t i = write_len; i < BLOCK; i++)
+                ASSERT_EQ(read_buf[i], LOWER_FILL);
+        } else {
+            size_t zero_end = std::min(BLOCK, (write_len + host_block - 1) / host_block * host_block);
+            for (size_t i = write_len; i < zero_end; i++)
+                ASSERT_EQ(read_buf[i], 0);
+            for (size_t i = zero_end; i < BLOCK; i++)
+                ASSERT_EQ(read_buf[i], LOWER_FILL);
+        }
+
+        std::vector<char> lower_buf(BLOCK, 0);
+        ASSERT_EQ(image->pread(lower_buf.data(), BLOCK, 0), (ssize_t)BLOCK);
+        for (size_t i = 0; i < BLOCK; i++)
+            ASSERT_EQ(lower_buf[i], LOWER_FILL);
+    });
+    worker.join();
+}
+}  // namespace
+
+TEST(DeviceBlock, SparseReloadSafeWith4K) {
+    check_sparse_reload(true);
+}
+
+TEST(DeviceBlock, SparseReloadUnsafeWith512) {
+    check_sparse_reload(false);
 }
 
 int main(int argc, char** argv) {

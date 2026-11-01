@@ -16,6 +16,7 @@
 
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
+#include <photon/fs/aligned-file.h>
 #include <photon/fs/virtual-file.h>
 #include <photon/fs/extfs/extfs.h>
 #include <photon/photon.h>
@@ -134,8 +135,10 @@ int main(int argc, char **argv) {
 
     bool gen_turboOCI = (gz_index_path != "" );
 
-    auto target = create_ext4fs(imgfile, mkfs, !gen_turboOCI);
-    DEFER({ delete target; });
+    auto aligned_file = new_aligned_file_adaptor(imgfile, 4096, true, false);
+    DEFER(delete aligned_file);
+    auto target = create_ext4fs(aligned_file, mkfs, !gen_turboOCI);
+    DEFER(delete target);
 
     photon::fs::IFile* src_file = nullptr;
     SHA256File* checksum_file = nullptr;

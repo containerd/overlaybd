@@ -16,6 +16,7 @@
 #include "io_dispatch.h"
 
 #include <cerrno>
+#include <linux/falloc.h>
 
 #include <ublk_cmd.h>
 
@@ -46,10 +47,17 @@ int ublk_dispatch_io(UblkIOTarget *tgt, uint8_t op, uint64_t offset_bytes,
         return (tgt->fdatasync() == 0) ? 0 : -EIO;
 
     case UBLK_IO_OP_DISCARD:
+        // same as the TCMU WRITE_SAME+UNMAP path: de-allocate the range
+        return (tgt->fallocate(FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, offset_bytes,
+                               len_bytes) == 0)
+                   ? 0
+                   : -EIO;
+
     case UBLK_IO_OP_WRITE_ZEROES:
-        // same as the TCMU WRITE_SAME+UNMAP path:
-        // fallocate(3) = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE
-        return (tgt->fallocate(3, offset_bytes, len_bytes) == 0) ? 0 : -EIO;
+        return (tgt->fallocate(FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE, offset_bytes,
+                               len_bytes) == 0)
+                   ? 0
+                   : -EIO;
 
     default:
         return -ENOTSUP;

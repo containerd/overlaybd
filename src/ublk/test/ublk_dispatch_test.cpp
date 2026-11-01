@@ -18,6 +18,7 @@
 #include "../io_dispatch.h"
 
 #include <gtest/gtest.h>
+#include <linux/falloc.h>
 #include <ublk_cmd.h>
 
 #include <cerrno>
@@ -130,21 +131,20 @@ TEST(io_dispatch, flush_maps_to_fdatasync) {
     EXPECT_EQ(ublk_dispatch_io(&tgt, UBLK_IO_OP_FLUSH, 0, 0, nullptr), -EIO);
 }
 
-TEST(io_dispatch, discard_and_write_zeroes_punch_hole) {
+TEST(io_dispatch, discard_and_write_zeroes) {
     MemTarget tgt(1 << 20);
     char wbuf[4096], rbuf[4096], zero[4096] = {};
     memset(wbuf, 0xcd, sizeof(wbuf));
     ublk_dispatch_io(&tgt, UBLK_IO_OP_WRITE, 0, sizeof(wbuf), wbuf);
 
     EXPECT_EQ(ublk_dispatch_io(&tgt, UBLK_IO_OP_DISCARD, 0, sizeof(wbuf), nullptr), 0);
-    // fallocate(3) = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, as in tcmu
-    EXPECT_EQ(tgt.last_fallocate_mode, 3);
+    EXPECT_EQ(tgt.last_fallocate_mode, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE);
     ublk_dispatch_io(&tgt, UBLK_IO_OP_READ, 0, sizeof(rbuf), rbuf);
     EXPECT_EQ(memcmp(rbuf, zero, sizeof(rbuf)), 0);
 
     tgt.last_fallocate_mode = -1;
     EXPECT_EQ(ublk_dispatch_io(&tgt, UBLK_IO_OP_WRITE_ZEROES, 0, 4096, nullptr), 0);
-    EXPECT_EQ(tgt.last_fallocate_mode, 3);
+    EXPECT_EQ(tgt.last_fallocate_mode, FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE);
 
     tgt.fallocate_ret = -1;
     EXPECT_EQ(ublk_dispatch_io(&tgt, UBLK_IO_OP_DISCARD, 0, 4096, nullptr), -EIO);
