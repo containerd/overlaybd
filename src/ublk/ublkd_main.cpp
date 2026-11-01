@@ -566,6 +566,10 @@ private:
     bool return_to_pool(int dev_id, DevEntry &entry) {
         if ((int)pool_idle_.size() >= pool_high_)
             return false;
+        if (entry.dev->dev_sectors() != (pool_size_gb_ << 30) >> 9) {
+            LOG_WARN("dev ` capacity drifted from the pool, not recycling", dev_id);
+            return false;
+        }
         if (ublk_device_is_mounted(dev_id)) {
             LOG_WARN("dev ` still mounted, not recycling it", dev_id);
             return false;
