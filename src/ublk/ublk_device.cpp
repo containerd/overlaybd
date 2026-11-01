@@ -359,7 +359,7 @@ void UblkDevice::queue_loop(const struct ublksrv_dev *dev, photon::semaphore *st
 // control plane: ctrl dev lifecycle, owned by the main thread
 // ---------------------------------------------------------------------------
 
-void UblkDevice::set_dev_parameters() {
+int UblkDevice::set_dev_parameters() {
     const struct ublksrv_ctrl_dev_info *info = ublksrv_ctrl_get_dev_info(ctrl_dev_);
     uint8_t bs_shift = (uint8_t)__builtin_ctz(file_->block_size);
 
@@ -388,8 +388,11 @@ void UblkDevice::set_dev_parameters() {
     p.discard.max_discard_segments = 1;
 
     int ret = ublksrv_ctrl_set_params(ctrl_dev_, &p);
-    if (ret)
+    if (ret) {
         LOG_ERROR("ublk dev ` set params failed: `", info->dev_id, ret);
+        return -1;
+    }
+    return 0;
 }
 
 static void notify_ready(int ready_fd, int dev_id) {
@@ -1050,7 +1053,17 @@ int UblkDevice::start(const UblkDeviceOpts &opts) {
         return -1;
     }
 
-    set_dev_parameters();
+    if (set_dev_parameters() != 0) {
+        last_error_ = "setting device parameters failed (see overlaybd log)";
+        ublksrv_ctrl_stop_dev(ctrl_dev_); // unblock the queue thread
+        while (!queue_exited_.load())
+            photon::thread_usleep(10 * 1000);
+        queue_thread_.join();
+        ublksrv_dev_deinit(dev_);
+        dev_ = nullptr;
+        cleanup_failed_start(true);
+        return -1;
+    }
 
     ret = ublksrv_ctrl_start_dev(ctrl_dev_, getpid());
     if (ret < 0) {
