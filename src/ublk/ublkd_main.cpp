@@ -91,6 +91,12 @@ public:
         refill_pool();
     }
 
+    // Called only by the main maintenance coroutine, never by acquire.
+    void maintain_pool() {
+        if (pool_low_ > 0)
+            refill_pool();
+    }
+
     ~UblkdServer() {
         // stop all devices in parallel: STOP first, join afterwards, so the
         // total teardown time is about the slowest device instead of the sum
@@ -257,6 +263,8 @@ private:
         it->second.dev->stop();
         it->second.dev->wait();
         it->second.dev->teardown();
+        if (it->second.pooled)
+            free_slots_.push_back(it->second.pool_slot);
         devices_.erase(id); // re-lookup by key: `it` may not survive yields
         code = 200;
         msg = ublkd_msg_ok();
@@ -434,8 +442,6 @@ private:
         LOG_INFO("ublkd: acquired /dev/ublkb` mode ` pooled ` image `", id,
                  shared ? "shared" : "exclusive", from_pool ? 1 : 0,
                  areq.config.c_str());
-        if (pool_low_ > 0)
-            refill_pool();
     }
 
     void handle_release(const std::string &body, int &code, std::string &msg) {
@@ -464,6 +470,9 @@ private:
             LOG_INFO("ublkd: release dev ` refcount `", id, it->second.refcount);
             return;
         }
+        // Recycling yields during cache flush and image swap. Fence concurrent
+        // release/del requests before either operation can yield.
+        it->second.stopping = true;
         // last reference (or an exclusive lease): back to the pool if it came
         // from there and can be recycled safely, otherwise tear it down
         if (it->second.mode_shared) {
@@ -482,6 +491,8 @@ private:
         it->second.dev->stop();
         it->second.dev->wait();
         it->second.dev->teardown();
+        if (it->second.pooled)
+            free_slots_.push_back(it->second.pool_slot);
         devices_.erase(id);
         code = 200;
         msg = ublkd_msg_released(0);
@@ -509,14 +520,16 @@ private:
                 continue;
             if (!cand->writable()) // first version pools writable devices only
                 continue;
+            // Reserve before swap_image yields: another acquire must not take
+            // the same device or invalidate this vector iterator.
+            int slot = it->slot;
+            pool_idle_.erase(it);
             ImageFile *old_file = nullptr;
             ImageFileTarget *old_target = nullptr;
             auto *new_target = ublk_make_image_target(real);
             if (cand->swap_image(real, new_target, &old_file, &old_target) != 0) {
                 delete new_target;
                 // a device we cannot swap is not trustworthy: drop it
-                int slot = it->slot;
-                pool_idle_.erase(it);
                 cand->stop();
                 cand->wait();
                 cand->teardown();
@@ -524,8 +537,7 @@ private:
                 free_slots_.push_back(slot);
                 return nullptr;
             }
-            *slot_out = it->slot;
-            pool_idle_.erase(it);
+            *slot_out = slot;
             delete old_target;
             delete old_file; // placeholder image released
             return cand;
@@ -555,16 +567,20 @@ private:
         ImageFile *old_file = nullptr;
         ImageFileTarget *old_target = nullptr;
         auto *ph_target = ublk_make_image_target(ph);
-        UblkDevice *dev = entry.dev.release();
+        // Keep the active entry valid while swap_image yields: /v1/list
+        // may inspect this stopping device before recycling completes.
+        UblkDevice *dev = entry.dev.get();
         if (dev->swap_image(ph, ph_target, &old_file, &old_target) != 0) {
             delete ph_target;
             delete ph;
-            entry.dev.reset(dev); // give it back so the caller tears it down
             return false;
         }
         delete old_target;
         delete old_file; // the tenant's image
-        pool_idle_.push_back({dev, entry.pool_slot});
+        // Other releases or maintenance may fill the pool while swap yields.
+        if ((int)pool_idle_.size() >= pool_high_)
+            return false;
+        pool_idle_.push_back({entry.dev.release(), entry.pool_slot});
         return true;
     }
 
@@ -576,11 +592,12 @@ private:
         return base;
     }
 
-    // Bring the idle pool up to the low watermark. Synchronous and
-    // best-effort: creating a device is ~8ms, and this runs after a request
-    // has already been answered.
+    // Startup and main-loop maintenance only. Bound each pass so sustained
+    // acquires cannot keep this coroutine from observing shutdown.
     void refill_pool() {
-        while ((int)pool_idle_.size() < pool_low_) {
+        int remaining = pool_low_ - (int)pool_idle_.size();
+        while (remaining-- > 0 && (int)pool_idle_.size() < pool_low_ &&
+               !shutdown_requested) {
             // each pooled device needs its own placeholder files
             int slot;
             if (!free_slots_.empty()) {
@@ -604,6 +621,14 @@ private:
                 free_slots_.push_back(slot);
                 LOG_WARN("pool refill: device start failed, pool stays at `",
                          (int)pool_idle_.size());
+                return;
+            }
+            if ((int)pool_idle_.size() >= pool_high_) {
+                dev->stop();
+                dev->wait();
+                dev->teardown();
+                delete dev;
+                free_slots_.push_back(slot);
                 return;
             }
             LOG_INFO("pool refill: /dev/ublkb` parked (slot `, idle `)",
@@ -756,8 +781,11 @@ int main(int argc, char **argv) {
 
     // main coroutine idles here; signal handlers and connection handlers run
     // as photon coroutines in this thread
-    while (!server->shutdown_requested)
+    while (!server->shutdown_requested) {
         photon::thread_usleep(200 * 1000);
+        if (!server->shutdown_requested)
+            server->maintain_pool();
+    }
 
     LOG_INFO("overlaybd-ublkd: draining devices and exiting");
     sock->terminate();
