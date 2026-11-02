@@ -882,7 +882,8 @@ int UblkDevice::resize(uint64_t new_size_bytes, bool resize_fs, std::string &err
         return -1;
     }
     uint64_t current = (uint64_t)st.st_size;
-    if (new_size_bytes <= current) {
+    if (new_size_bytes < current ||
+        (new_size_bytes == current && new_size_bytes <= image_size())) {
         err = "new size must be larger than the current " +
               std::to_string(current >> 30) + " GiB (only growing is supported)";
         return -3;
