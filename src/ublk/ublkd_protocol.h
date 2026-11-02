@@ -37,7 +37,7 @@ struct UblkdDeviceInfo {
     std::string dev_path; // /dev/ublkbN
     std::string config;
     bool writable = false;
-    std::string state; // "running" / "stopping"
+    std::string state; // "running" / "resizing" / "stopping"
     std::string mode;  // "exclusive" / "shared"
     int refcount = 0;  // shared devices only (0 for exclusive)
 };

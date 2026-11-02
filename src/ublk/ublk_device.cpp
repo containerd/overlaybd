@@ -876,9 +876,16 @@ int UblkDevice::resize(uint64_t new_size_bytes, bool resize_fs, std::string &err
         err = "device is read-only; resize applies to writable images only";
         return -3;
     }
-    if (new_size_bytes <= image_size()) {
+    struct stat st;
+    if (file_->get_base()->fstat(&st) != 0) {
+        err = "cannot read the current image size";
+        return -1;
+    }
+    uint64_t current = (uint64_t)st.st_size;
+    if (new_size_bytes < current ||
+        (new_size_bytes == current && new_size_bytes <= image_size())) {
         err = "new size must be larger than the current " +
-              std::to_string(image_size() >> 30) + " GiB (only growing is supported)";
+              std::to_string(current >> 30) + " GiB (only growing is supported)";
         return -3;
     }
     if (!kernel_supports_update_size()) {
@@ -897,6 +904,7 @@ int UblkDevice::resize(uint64_t new_size_bytes, bool resize_fs, std::string &err
               "); image already grown, kernel size unchanged";
         return -1;
     }
+    file_->num_lbas = new_size_bytes / file_->block_size;
     LOG_INFO("resized /dev/ublkb` to ` bytes (resize_fs=`)", dev_id_, new_size_bytes,
              resize_fs);
     return 0;
