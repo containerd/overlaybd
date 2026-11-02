@@ -2030,6 +2030,326 @@ TEST_F(WarpFileTest, commit_with_uuid) {
     EXPECT_EQ(uu, uu_commit);
 }
 
+class StagingTest : public FileTest {
+public:
+    struct FreeDeleter {
+        void operator()(char *p) const {
+            free(p);
+        }
+    };
+    using Buffer = unique_ptr<char, FreeDeleter>;
+
+    // the expected content of the virtual file
+    vector<char> expected;
+
+    static Buffer pattern(size_t size, uint32_t seed) {
+        void *p = nullptr;
+        EXPECT_EQ(0, posix_memalign(&p, ALIGNMENT4K, size));
+        auto x = seed * 2654435761u + 1;
+        for (size_t i = 0; i < size; i++) {
+            x = x * 1103515245 + 12345;
+            ((char *)p)[i] = x >> 16;
+        }
+        return Buffer((char *)p);
+    }
+
+    static RemoteMapping mapping(off_t offset, uint32_t count, off_t roffset) {
+        RemoteMapping m;
+        m.offset = offset;
+        m.count = count;
+        m.roffset = roffset;
+        return m;
+    }
+
+    void expect(off_t offset, const char *data, size_t count) {
+        if (expected.size() < offset + count)
+            expected.resize(offset + count, 0);
+        memcpy(&expected[offset], data, count);
+    }
+
+    // `data` is what the target holds at `roffset`
+    void map(IFileRW *file, off_t offset, uint32_t count, off_t roffset, const char *data) {
+        ASSERT_EQ((int)count, file->ioctl(IFileRW::RemoteData, mapping(offset, count, roffset)));
+        expect(offset, data, count);
+    }
+
+    void write(IFileRW *file, off_t offset, const char *data, size_t count) {
+        ASSERT_EQ((ssize_t)count, file->pwrite(data, count, offset));
+        expect(offset, data, count);
+    }
+
+    static off_t append_payload(IFileRW *file, const char *data, size_t count) {
+        auto upper = file->get_lower_files().back();
+        auto pos = upper->lseek(0, SEEK_END);
+        EXPECT_GE(pos, (off_t)HeaderTrailer::SPACE);
+        EXPECT_EQ((ssize_t)count, upper->pwrite(data, count, pos));
+        return pos;
+    }
+
+    void expect_rejected(IFileRW *file, off_t offset, uint32_t count, off_t roffset, int err) {
+        errno = 0;
+        EXPECT_EQ(-1, file->ioctl(IFileRW::RemoteData, mapping(offset, count, roffset)));
+        EXPECT_EQ(err, errno);
+    }
+
+    void verify(IFileRO *file) {
+        auto readback = pattern(expected.size(), 0);
+        ASSERT_EQ((ssize_t)expected.size(), file->pread(readback.get(), expected.size(), 0));
+        EXPECT_EQ(0, memcmp(expected.data(), readback.get(), expected.size()));
+    }
+
+    // the index of a sealed layer as it is stored in the layer
+    vector<SegmentMapping> sealed_index(const char *fn, HeaderTrailer &trailer) {
+        unique_ptr<IFile> file(lfs->open(fn, O_RDONLY));
+        ALIGNED_MEM(buf, HeaderTrailer::SPACE, ALIGNMENT4K);
+        auto pht = verify_ht(file.get(), buf, true);
+        if (pht == nullptr) {
+            ADD_FAILURE() << "no valid trailer in " << fn;
+            return {};
+        }
+        trailer = *pht;
+        vector<SegmentMapping> index(pht->index_size);
+        auto bytes = index.size() * sizeof(SegmentMapping);
+        EXPECT_EQ((ssize_t)bytes, file->pread(index.data(), bytes, pht->index_offset));
+        return index;
+    }
+};
+
+// staged data stays unmapped until RemoteData maps it, then survives reopen and close_seal()
+TEST_F(StagingTest, stage_and_map) {
+    auto file = create_file_rw();
+    ASSERT_NE(nullptr, file);
+    ASSERT_EQ(0, file->can_map_staged_data());
+    auto index_size = file_size(lfs, idx_name.back().c_str());
+
+    // the first payload needs more than one mapping
+    const size_t N1 = (Segment::MAX_LENGTH + 100) * ALIGNMENT, N2 = 64 << 10;
+    auto a = pattern(N1, 1), b = pattern(N2, 2), c = pattern(32 << 10, 3);
+    auto pa = append_payload(file, a.get(), N1);
+    auto pb = append_payload(file, b.get(), N2);
+    EXPECT_EQ((off_t)HeaderTrailer::SPACE, pa);
+    EXPECT_EQ(pa + (off_t)N1, pb);
+    EXPECT_EQ(pb + (ssize_t)N2, file_size(lfs, data_name.back().c_str()));
+    EXPECT_EQ(0UL, file->index()->size());
+    EXPECT_EQ(index_size, file_size(lfs, idx_name.back().c_str()));
+
+    expect_rejected(file, (1 << 20) + 1, ALIGNMENT, pa, EINVAL);
+    expect_rejected(file, 1 << 20, 100, pa, EINVAL);
+    expect_rejected(file, 1 << 20, ALIGNMENT, pa + 1, EINVAL);
+    expect_rejected(file, -(off_t)ALIGNMENT, ALIGNMENT, pa, EINVAL);
+    expect_rejected(file, 0, ALIGNMENT, -(off_t)ALIGNMENT, EINVAL);
+    expect_rejected(file, 0, ALIGNMENT, 0, EINVAL);
+    expect_rejected(file, 0, ALIGNMENT, pa - ALIGNMENT, EINVAL);
+    expect_rejected(file, 0, 2 * ALIGNMENT, pb + N2 - ALIGNMENT, EINVAL);
+    expect_rejected(file, 0, ALIGNMENT, pb + N2, EINVAL);
+    expect_rejected(file, 0, ALIGNMENT, INT64_MAX & ~(off_t)(ALIGNMENT - 1), EINVAL);
+    EXPECT_EQ(pb + (ssize_t)N2, file_size(lfs, data_name.back().c_str()));
+    EXPECT_EQ(0UL, file->index()->size());
+    EXPECT_EQ(index_size, file_size(lfs, idx_name.back().c_str()));
+
+    map(file, 1 << 20, N1, pa, a.get());
+    EXPECT_EQ(2UL, file->index()->size());
+    map(file, 0, N2, pb, b.get());
+    // overrides a part of the first payload
+    map(file, (1 << 20) + 4096, 8192, pb, b.get());
+    EXPECT_EQ(index_size + 4 * (ssize_t)sizeof(SegmentMapping),
+              file_size(lfs, idx_name.back().c_str()));
+
+    write(file, 12 << 20, c.get(), 32 << 10);
+    SegmentMapping written;
+    ASSERT_EQ(1UL, file->index()->lookup(Segment{(12 << 20) / ALIGNMENT, 1}, &written, 1));
+    EXPECT_EQ((uint64_t)(pb + N2), written.moffset * ALIGNMENT);
+    map(file, 24 << 20, ALIGNMENT, pb + N2, c.get());
+    verify(file);
+    delete file;
+
+    file = open_file_rw();
+    ASSERT_NE(nullptr, file);
+    verify(file);
+    ASSERT_EQ(0, file->can_map_staged_data());
+    map(file, 0, ALIGNMENT, pa, a.get());
+    auto d = pattern(4096, 4);
+    auto pd = append_payload(file, d.get(), 4096);
+    EXPECT_EQ(pb + (off_t)N2 + (32 << 10), pd);
+    map(file, 20 << 20, 4096, pd, d.get());
+    verify(file);
+    auto data_end = file_size(lfs, data_name.back().c_str());
+    EXPECT_EQ(pd + 4096, data_end);
+
+    IFileRO *sealed = nullptr;
+    ASSERT_EQ(0, file->close_seal(&sealed));
+    delete file;
+    ASSERT_NE(nullptr, sealed);
+    verify(sealed);
+    delete sealed;
+
+    // close_seal() appends the index and the trailer after the data in place
+    HeaderTrailer ht;
+    auto index = sealed_index(data_name.back().c_str(), ht);
+    EXPECT_EQ((uint64_t)data_end, ht.index_offset);
+    auto index_bytes = (index.size() * sizeof(SegmentMapping) + ALIGNMENT - 1) / ALIGNMENT * ALIGNMENT;
+    EXPECT_EQ(data_end + (ssize_t)(index_bytes + HeaderTrailer::SPACE),
+              file_size(lfs, data_name.back().c_str()));
+    uint64_t end = 0;
+    for (auto &m : index) {
+        EXPECT_EQ(0, (int)m.tag);
+        EXPECT_FALSE(m.zeroed);
+        EXPECT_LE(end, (uint64_t)m.offset);
+        end = m.end();
+        EXPECT_LE((uint64_t)pa, m.moffset * ALIGNMENT);
+        EXPECT_LE(m.mend() * ALIGNMENT, (uint64_t)data_end);
+    }
+
+    auto ro = open_file_ro(data_name.back().c_str());
+    ASSERT_NE(nullptr, ro);
+    verify(ro);
+    delete ro;
+}
+
+// staging into a layer stacked on a sealed lower layer only touches the upper layer
+TEST_F(StagingTest, stacked_lower) {
+    auto lower_rw = create_file_rw();
+    ASSERT_NE(nullptr, lower_rw);
+    auto l = pattern(256 << 10, 5);
+    write(lower_rw, 0, l.get(), 256 << 10);
+    IFileRO *lower = nullptr;
+    ASSERT_EQ(0, lower_rw->close_seal(&lower));
+    delete lower_rw;
+    auto lower_size = file_size(lfs, data_name.front().c_str());
+
+    auto upper = create_file_rw();
+    ASSERT_NE(nullptr, upper);
+    auto file = stack_files(upper, lower, /* ownership = */ true, /* check_order = */ false);
+    ASSERT_NE(nullptr, file);
+    ASSERT_EQ(0, file->can_map_staged_data());
+    auto u = pattern(64 << 10, 6);
+    auto pu = append_payload(file, u.get(), 64 << 10);
+    EXPECT_EQ((off_t)HeaderTrailer::SPACE, pu);
+    map(file, 64 << 10, 32 << 10, pu + (32 << 10), u.get() + (32 << 10));
+    verify(file);
+    EXPECT_EQ(lower_size, file_size(lfs, data_name.front().c_str()));
+    EXPECT_EQ(pu + (64 << 10), file_size(lfs, data_name.back().c_str()));
+    delete file;
+
+    // seal the upper layer alone, as `overlaybd-commit --seal` does
+    file = open_file_rw();
+    ASSERT_NE(nullptr, file);
+    ASSERT_EQ(0, file->close_seal());
+    delete file;
+    HeaderTrailer ht;
+    auto index = sealed_index(data_name.back().c_str(), ht);
+    ASSERT_EQ(1UL, index.size());
+    EXPECT_EQ(128UL, (uint64_t)index[0].offset);
+    EXPECT_EQ(64U, (uint32_t)index[0].length);
+    EXPECT_EQ((uint64_t)(pu + (32 << 10)) / ALIGNMENT, (uint64_t)index[0].moffset);
+    EXPECT_EQ(0, (int)index[0].tag);
+
+    IFile *files[] = {lfs->open(data_name.front().c_str(), O_RDONLY),
+                      lfs->open(data_name.back().c_str(), O_RDONLY)};
+    auto image = open_files_ro(files, 2, true);
+    ASSERT_NE(nullptr, image);
+    verify(image);
+    delete image;
+}
+
+// close_seal() merges the mappings that are contiguous both in the virtual file and in the layer
+TEST_F(StagingTest, close_seal_merges_mappings) {
+    auto file = create_file_rw();
+    ASSERT_NE(nullptr, file);
+    const uint32_t N = 64 << 10;
+    auto a = pattern(3 * N, 8), w = pattern(2 * N, 9);
+    auto pa = append_payload(file, a.get(), 3 * N);
+    for (uint32_t i = 0; i < 3; i++)
+        map(file, (1 << 20) + i * N, N, pa + i * N, a.get() + i * N);
+    // logically adjacent to the payload, but not contiguous with it in the layer
+    map(file, (1 << 20) + 3 * N, N, pa, a.get());
+    // contiguous with the payload in the layer, but not logically adjacent to it
+    write(file, 8 << 20, w.get(), N);
+    write(file, (8 << 20) + N, w.get() + N, N);
+    ASSERT_EQ(0, file->fallocate(3, 12 << 20, N));
+    ASSERT_EQ(0, file->fallocate(3, (12 << 20) + N, N));
+    vector<char> zeros(2 * N, 0);
+    expect(12 << 20, zeros.data(), 2 * N);
+    EXPECT_EQ(8UL, file->index()->size());
+
+    IFileRO *sealed = nullptr;
+    ASSERT_EQ(0, file->close_seal(&sealed));
+    delete file;
+    ASSERT_NE(nullptr, sealed);
+    EXPECT_EQ(4UL, sealed->index()->size());
+    verify(sealed);
+    delete sealed;
+
+    HeaderTrailer ht;
+    auto index = sealed_index(data_name.back().c_str(), ht);
+    ASSERT_EQ(4UL, index.size());
+    auto expect_mapping = [](const SegmentMapping &m, off_t offset, uint32_t length,
+                             off_t moffset, bool zeroed) {
+        EXPECT_EQ((uint64_t)offset / ALIGNMENT, (uint64_t)m.offset);
+        EXPECT_EQ(length / ALIGNMENT, (uint32_t)m.length);
+        EXPECT_EQ((uint64_t)moffset / ALIGNMENT, (uint64_t)m.moffset);
+        EXPECT_EQ(zeroed, (bool)m.zeroed);
+    };
+    expect_mapping(index[0], 1 << 20, 3 * N, pa, false);
+    expect_mapping(index[1], (1 << 20) + 3 * N, N, pa, false);
+    expect_mapping(index[2], 8 << 20, 2 * N, pa + 3 * N, false);
+    expect_mapping(index[3], 12 << 20, 2 * N, pa + 5 * N, true);
+    // the rest of the last index block maps nothing
+    vector<SegmentMapping> padding(ALIGNMENT / sizeof(SegmentMapping) - index.size());
+    unique_ptr<IFile> fdata(lfs->open(data_name.back().c_str(), O_RDONLY));
+    auto padding_bytes = padding.size() * sizeof(SegmentMapping);
+    ASSERT_EQ((ssize_t)padding_bytes,
+              fdata->pread(padding.data(), padding_bytes,
+                           ht.index_offset + index.size() * sizeof(SegmentMapping)));
+    for (auto &m : padding)
+        EXPECT_EQ((uint64_t)SegmentMapping::INVALID_OFFSET, (uint64_t)m.offset);
+
+    auto ro = open_file_ro(data_name.back().c_str());
+    ASSERT_NE(nullptr, ro);
+    EXPECT_EQ(4UL, ro->index()->size());
+    verify(ro);
+    delete ro;
+}
+
+// only a plain append-mode layer maps embedded payload, while warp keeps external RemoteData
+TEST_F(StagingTest, other_layer_types) {
+    auto data = pattern(64 << 10, 7);
+    for (auto rw_type : {RWType::Sparse, RWType::Hybrid}) {
+        auto file = create_file_rw(rw_type);
+        ASSERT_NE(nullptr, file);
+        DEFER(delete file);
+        auto data_size = file_size(lfs, data_name.back().c_str());
+        // the sparse layer leaves it unimplemented, the hybrid one does not support it
+        auto err = rw_type == RWType::Sparse ? ENOSYS : ENOTSUP;
+        errno = 0;
+        EXPECT_EQ(-1, file->can_map_staged_data());
+        EXPECT_EQ(err, errno);
+        expect_rejected(file, 0, 4096, HeaderTrailer::SPACE, err);
+        EXPECT_EQ(data_size, file_size(lfs, data_name.back().c_str()));
+        EXPECT_EQ(0UL, file->index()->size());
+    }
+
+    name_next_layer();
+    auto ftarget = lfs->open(layer_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    ASSERT_NE(nullptr, ftarget);
+    ASSERT_EQ((ssize_t)(64 << 10), ftarget->pwrite(data.get(), 64 << 10, 0));
+    auto fmeta = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    auto findex = lfs->open(idx_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    WarpFileArgs args(findex, fmeta, ftarget);
+    args.virtual_size = vsize;
+    auto warp = create_warpfile(args, true);
+    ASSERT_NE(nullptr, warp);
+    DEFER(delete warp);
+    errno = 0;
+    EXPECT_EQ(-1, warp->can_map_staged_data());
+    EXPECT_EQ(ENOSYS, errno);
+    map(warp, 1 << 20, 32 << 10, 16 << 10, data.get() + (16 << 10));
+    verify(warp);
+    // unaligned mappings are rejected rather than truncated
+    expect_rejected(warp, 0, 100, 0, EINVAL);
+    expect_rejected(warp, 0, ALIGNMENT, 1, EINVAL);
+}
+
 int main(int argc, char **argv) {
 
     auto seed = 154574045;

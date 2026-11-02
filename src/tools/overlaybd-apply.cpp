@@ -40,6 +40,7 @@
 #include "comm_func.h"
 #include "sha256file.h"
 #include "qcow2converter.h"
+#include "../overlaybd/tar/fsmeta_file.h"
 
 
 using namespace std;
@@ -78,6 +79,22 @@ public:
     UNIMPLEMENTED(ssize_t readv(const struct iovec *iov, int iovcnt) override);
     UNIMPLEMENTED(ssize_t preadv(const struct iovec *iov, int iovcnt, off_t offset) override);
 };
+
+// the file is gone as soon as it is closed
+static photon::fs::IFile *create_temp_file() {
+    auto dir = getenv("TMPDIR");
+    std::string path = std::string(dir && *dir ? dir : "/tmp") + "/overlaybd-apply-XXXXXX";
+    int fd = mkstemp(&path[0]);
+    if (fd < 0) {
+        LOG_ERRNO_RETURN(0, nullptr, "failed to create temporary file `", path);
+    }
+    unlink(path.c_str());
+    auto file = new_localfile_adaptor(fd);
+    if (file == nullptr) {
+        close(fd);
+    }
+    return file;
+}
 
 int main(int argc, char **argv) {
     std::string image_config_path, input_path, gz_index_path, config_path, sha256_checksum;
@@ -133,8 +150,18 @@ int main(int argc, char **argv) {
     }
 
     bool gen_turboOCI = (gz_index_path != "" );
+    photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
+    // a plain append-mode layer gets all the file data ahead of the fs metadata
+    auto staging = gen_turboOCI ? nullptr : dynamic_cast<LSMT::IFileRW *>(base_file);
+    if (staging && staging->can_map_staged_data() != 0) {
+        staging = nullptr;
+    }
 
-    auto target = create_ext4fs(imgfile, mkfs, !gen_turboOCI);
+    std::unique_ptr<photon::fs::IFile> fsmeta_sparse;
+    std::unique_ptr<FsMetaFile> fsmeta;
+    // with staging, the fs (mkfs included) is created once the file data is in place
+    photon::fs::IFileSystem *target =
+        staging ? nullptr : create_ext4fs(imgfile, mkfs, !gen_turboOCI);
     DEFER({ delete target; });
 
     photon::fs::IFile* src_file = nullptr;
@@ -167,14 +194,7 @@ int main(int argc, char **argv) {
         src_file = checksum_file = new_sha256_file(src_file, true);
     }
 
-    photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
-
-    auto tar = new UnTar(src_file, target, 0, 4096, base_file, gen_turboOCI);
-
-    if (tar->extract_all() < 0) {
-        fprintf(stderr, "failed to extract\n");
-        exit(-1);
-    } else {
+    auto verify_checksum = [&]() {
         if (checksum_file != nullptr) {
             auto calc = checksum_file->sha256_checksum();
             if (calc != sha256_checksum) {
@@ -182,9 +202,51 @@ int main(int argc, char **argv) {
                 exit(-1);
             }
         }
-        fprintf(stdout, "overlaybd-apply done\n");
-        fprintf(stderr, "%s\n",  sha256_checksum.c_str());
+    };
+
+    if (staging) {
+        auto headers = create_temp_file();
+        if (headers == nullptr) {
+            fprintf(stderr, "failed to create a temporary file\n");
+            exit(-1);
+        }
+        DEFER(delete headers);
+        UnTar scan(src_file, nullptr, 0, 4096);
+        if (scan.stage_tar(headers, staging->get_lower_files().back()) < 0) {
+            fprintf(stderr, "failed to stage file data\n");
+            exit(-1);
+        }
+        verify_checksum();
+        if (headers->lseek(0, SEEK_SET) != 0) {
+            fprintf(stderr, "failed to rewind the tar headers\n");
+            exit(-1);
+        }
+        fsmeta_sparse.reset(create_temp_file());
+        struct stat image_st;
+        if (fsmeta_sparse == nullptr || imgfile->fstat(&image_st) != 0) {
+            fprintf(stderr, "failed to create fs metadata staging file\n");
+            return -1;
+        }
+        fsmeta.reset(new FsMetaFile(imgfile, fsmeta_sparse.get(), image_st.st_size));
+        target = create_ext4fs(fsmeta.get(), mkfs, false);
+        UnTar replay(headers, target, 0, 4096, base_file);
+        if (replay.extract_staged(fsmeta.get(), [&]() {
+                delete target;
+                target = nullptr;
+            }) < 0) {
+            fprintf(stderr, "failed to extract\n");
+            return -1;
+        }
+    } else {
+        auto tar = new UnTar(src_file, target, 0, 4096, base_file, gen_turboOCI);
+        if (tar->extract_all() < 0) {
+            fprintf(stderr, "failed to extract\n");
+            exit(-1);
+        }
+        verify_checksum();
     }
+    fprintf(stdout, "overlaybd-apply done\n");
+    fprintf(stderr, "%s\n",  sha256_checksum.c_str());
 
     return 0;
 }

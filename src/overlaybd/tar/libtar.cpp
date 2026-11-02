@@ -23,8 +23,13 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <utime.h>
+#include <linux/falloc.h>
+#include <algorithm>
+#include <cstddef>
+#include <new>
 #include <set>
 #include <string>
+#include <vector>
 #include <photon/fs/path.h>
 #include <photon/common/alog-stdstring.h>
 #include <photon/common/string_view.h>
@@ -33,6 +38,7 @@
 #include <photon/fs/fiemap.h>
 #include "../lsmt/file.h"
 #include "../lsmt/index.h"
+#include "fsmeta_file.h"
 
 /*
  * Archive members may be stored with a leading / ("/usr/lib") or without
@@ -139,6 +145,167 @@ ssize_t UnTar::dump_tar_headers(photon::fs::IFile *as) {
     return count;
 }
 
+ssize_t UnTar::stage_tar(photon::fs::IFile *headers, photon::fs::IFile *target) {
+    const off_t base = target->lseek(0, SEEK_END);
+    if (base < 0) {
+        LOG_ERRNO_RETURN(0, -1, "failed to locate the end of the upper data file");
+    }
+    const size_t BUF_SIZE = 1024 * 1024;
+    void *mem = nullptr;
+    if (posix_memalign(&mem, FS_BLOCKSIZE, BUF_SIZE) != 0) {
+        LOG_ERROR_RETURN(ENOMEM, -1, "failed to allocate the staging buffer");
+    }
+    DEFER(free(mem));
+    auto buf = (char *)mem;
+    size_t buffered = 0;
+    off_t staged = 0;
+    auto flush = [&]() -> int {
+        if (buffered == 0) {
+            return 0;
+        }
+        if (target->pwrite(buf, buffered, base + staged) != (ssize_t)buffered) {
+            LOG_ERRNO_RETURN(EIO, -1, "failed to stage ` bytes", buffered);
+        }
+        staged += buffered;
+        buffered = 0;
+        return 0;
+    };
+
+    ssize_t count = 0;
+    int ret;
+    while ((ret = read_header(headers)) == 0) {
+        count++;
+        size_t size = get_size();
+        size_t left = (size + T_BLOCKSIZE - 1) & T_BLOCKMASK;
+        if (!TH_ISREG(header) || left == 0) {
+            continue;
+        }
+        auto end = headers->lseek(0, SEEK_CUR);
+        if (end < T_BLOCKSIZE) {
+            LOG_ERRNO_RETURN(0, -1, "failed to locate the dumped header of `", get_pathname());
+        }
+        size_t pad = (size_t)(-(base + staged + buffered)) & (FS_BLOCKSIZE - 1);
+        memset(buf + buffered, 0, pad);
+        buffered += pad;
+        if (buffered == BUF_SIZE && flush() != 0) {
+            return -1;
+        }
+        off_t roffset = base + staged + buffered;
+        if (headers->pwrite(&roffset, sizeof(roffset),
+                            end - T_BLOCKSIZE + offsetof(TarHeader, devmajor)) !=
+            (ssize_t)sizeof(roffset)) {
+            LOG_ERRNO_RETURN(0, -1, "failed to record the offset of staged data");
+        }
+        while (left > 0) {
+            auto n = std::min(left, BUF_SIZE - buffered);
+            if (file->read(buf + buffered, n) != (ssize_t)n) {
+                LOG_ERRNO_RETURN(EIO, -1, "failed to read the data of `", get_pathname());
+            }
+            if (left == n) {
+                // Tar padding is arbitrary, but mapped block tails must be zero.
+                size_t tail = (size_t)(-size) & (T_BLOCKSIZE - 1);
+                memset(buf + buffered + n - tail, 0, tail);
+            }
+            buffered += n;
+            left -= n;
+            if (buffered == BUF_SIZE && flush() != 0) {
+                return -1;
+            }
+        }
+    }
+    if (ret != 1) {
+        LOG_ERRNO_RETURN(0, -1, "failed to read tar header");
+    }
+    if (flush() != 0) {
+        return -1;
+    }
+    if (staged > 0) {
+        // the fs metadata appended next begins at a block boundary
+        size_t pad = (size_t)(-(base + staged)) & (FS_BLOCKSIZE - 1);
+        if (pad > 0) {
+            memset(buf, 0, pad);
+            if (target->pwrite(buf, pad, base + staged) != (ssize_t)pad) {
+                LOG_ERRNO_RETURN(EIO, -1, "failed to pad the staged data");
+            }
+        }
+    }
+    LOG_INFO("staged ` bytes of file data at offset ` of the top layer, ` objects", staged, base,
+             count);
+    return count;
+}
+
+int UnTar::extract_staged(FsMetaFile *fsmeta, const std::function<void()> &close_fs) {
+    if (fsmeta != nullptr && !close_fs) {
+        LOG_ERROR_RETURN(EINVAL, -1, "fs metadata staging requires closing ext4 before commit");
+    }
+    auto lsmt = dynamic_cast<LSMT::IFileRW *>(fs_base_file);
+    if (lsmt == nullptr || lsmt->can_map_staged_data() != 0) {
+        LOG_ERROR_RETURN(ENOTSUP, -1, "the base file cannot map staged data");
+    }
+    // stage_tar() rewrote devmajor of the regular file headers
+    options |= TAR_IGNORE_CRC;
+    meta_only = from_tar_idx = defer_mapping = true;
+    pending.clear();
+    if (extract_all() != 0) {
+        return -1;
+    }
+    // a freed metadata block reused for file data may still be cached dirty until now
+    if (fs->syncfs() != 0) {
+        LOG_ERRNO_RETURN(0, -1, "failed to sync fs metadata");
+    }
+    if (close_fs) {
+        close_fs();
+        fs = nullptr;
+        xattr_fs = nullptr;
+    }
+    if (fsmeta != nullptr) {
+        // Ext4 allocates whole blocks, so a payload extent cannot share a block with metadata.
+        for (auto &it : pending) {
+            for (auto &lba : it.second) {
+                fsmeta->discard(lba.offset, lba.count);
+            }
+        }
+        if (fsmeta->commit() != 0) {
+            return -1;
+        }
+    }
+    return apply_pending();
+}
+
+int UnTar::apply_pending() {
+    auto lsmt = static_cast<LSMT::IFileRW *>(fs_base_file);
+    size_t mapped = 0, zeroed = 0;
+    for (auto &it : pending) {
+        for (auto &lba : it.second) {
+            if (lba.roffset >= 0) {
+                if (fs_base_file->ioctl(LSMT::IFileRW::RemoteData, lba) != (int)lba.count) {
+                    LOG_ERRNO_RETURN(0, -1, "failed to map staged data, offset: `, count: `, roffset: `",
+                                     lba.offset, lba.count, lba.roffset);
+                }
+                mapped += lba.count;
+                continue;
+            }
+            // the tail of a last block reads as zero, unless the block is a reused one
+            LSMT::Segment s{(uint64_t)lba.offset / T_BLOCKSIZE, lba.count / T_BLOCKSIZE};
+            std::vector<LSMT::SegmentMapping> pm(s.length);
+            auto n = lsmt->index()->lookup(s, pm.data(), pm.size());
+            if (std::any_of(pm.begin(), pm.begin() + n, [](const LSMT::SegmentMapping &m) {
+                    return !m.zeroed;
+                })) {
+                if (fs_base_file->fallocate(FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, lba.offset,
+                                            lba.count) != 0) {
+                    LOG_ERRNO_RETURN(0, -1, "failed to zero stale data, offset: `, count: `",
+                                     lba.offset, lba.count);
+                }
+                zeroed += lba.count;
+            }
+        }
+    }
+    pending.clear();
+    LOG_INFO("mapped ` bytes of staged data, zeroed ` bytes of stale block tails", mapped, zeroed);
+    return 0;
+}
+
 int UnTar::extract_all() {
     int i, count = 0;
     unpackedPaths.clear();
@@ -205,7 +372,7 @@ int UnTar::extract_file(const char *filename) {
             return -1;
         } else {
             if (!S_ISDIR(s.st_mode)) {
-                if (fs->unlink(filename) == -1 && errno != ENOENT) {
+                if (unlink_file(filename, s) == -1 && errno != ENOENT) {
                     LOG_ERRNO_RETURN(EEXIST, -1, "remove exist file ` failed", filename);
                 }
             } else if (!TH_ISDIR(header)) {
@@ -259,6 +426,17 @@ int UnTar::extract_file(const char *filename) {
     return 0;
 }
 
+int UnTar::unlink_file(const char *path, const struct stat &st) {
+    if (fs->unlink(path) != 0) {
+        return -1;
+    }
+    // the last link frees the blocks of the inode for reuse
+    if (S_ISREG(st.st_mode) && st.st_nlink <= 1) {
+        pending.erase(st.st_ino);
+    }
+    return 0;
+}
+
 int UnTar::extract_regfile_meta_only(const char *filename) {
     size_t size = get_size();
     LOG_DEBUG("  ==> extracting: ` (` bytes) (turboOCIv1 index)", filename, size);
@@ -270,34 +448,67 @@ int UnTar::extract_regfile_meta_only(const char *filename) {
 
     off_t p = 0;
     if (from_tar_idx) {
-        p = *((off_t*)&header.devmajor);
+        memcpy(&p, header.devmajor, sizeof(p));
     } else {
         p = file->lseek(0, SEEK_CUR);
     }
-    struct photon::fs::fiemap_t<8192> fie(0, size);
-
-    if (fout->fallocate(0, 0, size) != 0 || fout->fiemap(&fie)!=0 ){
-        return -1;
+    // an empty file owns no block
+    if (size > 0 && map_regfile_data(fout, size, p) != 0) {
+        LOG_ERRNO_RETURN(0, -1, "failed to map the data of `", filename);
     }
-    auto count = ((size+ T_BLOCKSIZE - 1) / T_BLOCKSIZE) * T_BLOCKSIZE;
-    for (uint32_t i = 0; i < fie.fm_mapped_extents; i++) {
-        LSMT::RemoteMapping lba;
-        lba.offset = fie.fm_extents[i].fe_physical;
-        lba.count = (fie.fm_extents[i].fe_length < count ? fie.fm_extents[i].fe_length : count);
-        lba.roffset = p;
-        int nwrite = fs_base_file->ioctl(LSMT::IFileRW::RemoteData, lba);
-        if (nwrite < 0) {
-            LOG_ERRNO_RETURN(0, -1, "failed to write lba");
-        }
-        p += nwrite;
-        count-=lba.count;
-    }
-
-    struct stat st;
-    fout->fstat(&st);
-    LOG_DEBUG("reg file size `", st.st_size);
     if (not from_tar_idx) {
         file->lseek(((size+ T_BLOCKSIZE - 1) / T_BLOCKSIZE) * T_BLOCKSIZE, SEEK_CUR); // skip size
+    }
+    return 0;
+}
+
+// maps the blocks allocated for the file to its data at offset of the base file's backing data
+int UnTar::map_regfile_data(photon::fs::IFile *fout, size_t size, off_t offset) {
+    if (fout->fallocate(0, 0, size) != 0) {
+        return -1;
+    }
+    photon::fs::fiemap probe(0, size, 0);
+    if (fout->fiemap(&probe) != 0) {
+        return -1;
+    }
+    std::vector<char> mem(sizeof(photon::fs::fiemap) +
+                          probe.fm_mapped_extents * sizeof(photon::fs::fiemap_extent));
+    auto fie = new (mem.data()) photon::fs::fiemap(0, size, probe.fm_mapped_extents);
+    if (fout->fiemap(fie) != 0) {
+        return -1;
+    }
+
+    std::vector<LSMT::RemoteMapping> *deferred = nullptr;
+    if (defer_mapping) {
+        struct stat st;
+        if (fout->fstat(&st) != 0) {
+            return -1;
+        }
+        deferred = &pending[st.st_ino];
+        deferred->clear();
+    }
+    size_t alignment = defer_mapping ? FS_BLOCKSIZE : T_BLOCKSIZE;
+    size_t data_len = (size + alignment - 1) & ~(alignment - 1);
+    // extents come in file order, and a file allocated in full has no hole
+    size_t pos = 0;
+    for (uint32_t i = 0; i < fie->fm_mapped_extents; i++) {
+        auto &e = fie->fm_extents[i];
+        size_t len = pos < data_len ? std::min((size_t)e.fe_length, data_len - pos) : 0;
+        if (len > 0) {
+            LSMT::RemoteMapping lba{(off_t)e.fe_physical, (uint32_t)len, offset + (off_t)pos};
+            if (deferred) {
+                deferred->push_back(lba);
+            } else if (fs_base_file->ioctl(LSMT::IFileRW::RemoteData, lba) != (int)len) {
+                return -1;
+            }
+        }
+        if (deferred && len < e.fe_length) {
+            deferred->push_back({(off_t)(e.fe_physical + len), (uint32_t)(e.fe_length - len), -1});
+        }
+        pos += e.fe_length;
+    }
+    if (pos < data_len) {
+        LOG_ERROR_RETURN(EIO, -1, "only ` bytes are allocated for ` bytes", pos, size);
     }
     return 0;
 }
