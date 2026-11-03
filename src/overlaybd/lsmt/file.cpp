@@ -1951,6 +1951,10 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
         if ((args.virtual_size % ALIGNMENT4K) != 0)
             LOG_ERROR_RETURN(EINVAL, nullptr, "sparse layer virtual size must be 4K aligned, got `",
                              args.virtual_size);
+        fiemap_t<1> map(0, FIEMAP_MAX_OFFSET);
+        map.fm_flags = FIEMAP_FLAG_SYNC;
+        if (fdata->fiemap(&map) != 0)
+            LOG_ERRNO_RETURN(0, nullptr, "sparse layers require FIEMAP support");
         auto io_align = LSMTFile::detect_host_blksize(fdata);
         if (io_align == 0)
             LOG_ERROR_RETURN(EINVAL, nullptr,
