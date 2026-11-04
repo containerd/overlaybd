@@ -375,6 +375,71 @@ TEST_F(GzIndexTest, fstat) {
     EXPECT_EQ(static_cast<size_t>(st.st_size), data_size);
 }
 
+// An index whose only entry starts after the requested offset must be rejected.
+// The header CRC32C authenticates such an index, but the skip length computed in
+// GzFile::extract (offset - de_pos) goes negative and, once widened into
+// strm.avail_out, grants inflate multiple GiB of room in a 64KiB stack buffer.
+TEST_F(GzIndexTest, pread_index_entry_after_offset) {
+    auto idx = photon::fs::open_localfile_adaptor("/tmp/findex", O_RDONLY);
+    ASSERT_NE(idx, nullptr);
+    DEFER(delete idx);
+    struct stat st;
+    ASSERT_EQ(idx->fstat(&st), 0);
+    std::vector<unsigned char> raw(st.st_size);
+    ASSERT_EQ(idx->pread(&raw[0], raw.size(), 0), (ssize_t)raw.size());
+
+    IndexFileHeader h;
+    memcpy(&h, &raw[0], sizeof(h));
+    ASSERT_EQ(h.cal_crc(), h.crc);
+    ASSERT_EQ(h.index_size, (int32_t)sizeof(IndexEntry));
+    ASSERT_GT(h.index_num, 0);
+    ASSERT_EQ(h.dict_compress_algo, 1);
+
+    // reuse a genuine entry so its en_pos/bits/window stay valid
+    std::vector<unsigned char> entries(h.index_num * h.index_size);
+    uLongf entries_len = entries.size();
+    ASSERT_EQ(uncompress(&entries[0], &entries_len, &raw[0] + h.index_start, h.index_area_len), Z_OK);
+    IndexEntry e;
+    memcpy(&e, &entries[0], sizeof(e));
+    e.de_pos = 0x40000000; // 1GiB, beyond every offset read below
+
+    std::vector<unsigned char> area(compressBound(sizeof(e)));
+    uLongf area_len = area.size();
+    ASSERT_EQ(compress2(&area[0], &area_len, (const Bytef *)&e, sizeof(e), h.dict_compress_level), Z_OK);
+    h.index_num = 1;
+    h.index_area_len = area_len;
+    h.index_file_size = h.index_start + (int64_t)area_len;
+    h.crc = h.cal_crc();
+    memcpy(&raw[0], &h, sizeof(h));
+
+    const char *fn_evil = "/tmp/findex_evil";
+    auto evil = photon::fs::open_localfile_adaptor(fn_evil, O_CREAT | O_TRUNC | O_RDWR, 0644);
+    ASSERT_NE(evil, nullptr);
+    DEFER({ delete evil; ::unlink(fn_evil); });
+    ASSERT_EQ(evil->pwrite(&raw[0], h.index_start, 0), (ssize_t)h.index_start);
+    ASSERT_EQ(evil->pwrite(&area[0], area_len, h.index_start), (ssize_t)area_len);
+
+    auto data = photon::fs::open_localfile_adaptor("/tmp/fdata.gz", O_RDONLY);
+    ASSERT_NE(data, nullptr);
+    DEFER(delete data);
+    auto evilgz = new_gzfile(data, evil);
+    ASSERT_NE(evilgz, nullptr);
+    DEFER(delete evilgz);
+
+    char buf[4096];
+    // the guard must reject the entry up front; reaching inflate at all means the
+    // negative skip length was already handed to strm.avail_out
+    errno = 0;
+    EXPECT_EQ(evilgz->pread(buf, sizeof(buf), 0), -1);
+    EXPECT_EQ(errno, EINVAL);
+    errno = 0;
+    EXPECT_EQ(evilgz->pread(buf, sizeof(buf), 1 << 20), -1);
+    EXPECT_EQ(errno, EINVAL);
+    errno = 0;
+    EXPECT_EQ(evilgz->pread(buf, sizeof(buf), 0x40000000 - 1), -1);
+    EXPECT_EQ(errno, EINVAL);
+}
+
 class GzCacheTest : public ::testing::Test {
 protected:
     static photon::fs::IFile *defile;

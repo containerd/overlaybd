@@ -213,13 +213,19 @@ IndexEntry *GzFile::seek_index(INDEX &index, off_t offset) {
     tmp.de_pos = offset;
     INDEX::iterator iter = std::upper_bound(index.begin(), index.end(), &tmp, indx_compare);
     if (iter == index.end()) {
-        return index.at(index.size() - 1);
+        iter--;
+    } else if (iter == index.begin()) {
+        // every entry starts after the requested offset, no usable entry
+        LOG_ERROR_RETURN(EINVAL, nullptr, "No index entry covers offset:`, first de_pos:`",
+                         offset, (*iter)->de_pos + 0);
+    } else {
+        iter--;
     }
-    int idx = iter - index.begin();
-    if (idx > 0) {
-        idx --;
+    if ((*iter)->de_pos < 0 || (*iter)->de_pos > offset) {
+        LOG_ERROR_RETURN(EINVAL, nullptr, "Invalid index entry de_pos:` for offset:`",
+                         (*iter)->de_pos + 0, offset);
     }
-    return index.at(idx);
+    return *iter;
 }
 
 int GzFile::get_dict_by_index(const IndexEntry *found_idx, unsigned char *dict_buf) {
@@ -264,6 +270,16 @@ ssize_t GzFile::extract(
     unsigned char dict[WINSIZE];
     unsigned char discard[CHUNK];
 
+    if (buf_len < 0) {
+        LOG_ERRNO_RETURN(EINVAL, -1, "invalid buf_len: `", buf_len);
+    }
+    // an untrusted index may place the entry after the requested offset, which
+    // would make the skip length below negative and overflow strm.avail_out
+    if (found_idx->de_pos < 0 || found_idx->de_pos > offset) {
+        LOG_ERRNO_RETURN(EINVAL, -1, "invalid index entry de_pos:` for offset:`",
+                         found_idx->de_pos + 0, offset);
+    }
+
     z_stream strm;
     memset(&strm, 0, sizeof(strm));
 
@@ -305,7 +321,7 @@ ssize_t GzFile::extract(
             strm.avail_out = CHUNK;
             strm.next_out = discard;
             offset -= CHUNK;
-        } else if (offset != 0) {
+        } else if (offset > 0) {
             strm.avail_out = static_cast<unsigned int>(offset);
             strm.next_out = discard;
             offset = 0;
