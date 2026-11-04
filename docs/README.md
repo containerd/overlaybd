@@ -207,6 +207,14 @@ Overlaybd is an open-source sub-project of [containerd](https://www.cncf.io/proj
   - Snapshotter & conversion tools: [containerd/accelerated-container-image](https://github.com/containerd/accelerated-container-image)
   - P2P distribution: [data-accelerator/dadi-p2proxy](https://github.com/data-accelerator/dadi-p2proxy)
 
+- **Open specifications**: The image format is fully documented and open for independent
+  implementation:
+  [LSMT](https://containerd.github.io/overlaybd/#/specs/lsmt.md),
+  [ZFile](https://containerd.github.io/overlaybd/#/specs/zfile.md).
+
+- **Independent re-implementations**: [AgentENV](https://github.com/kvcache-ai/AgentENV/tree/v0.2.4/storage/overlaybd/src)
+  provides an open-source Rust re-implementation of the overlaybd image format.
+
 - **Neutral governance**: Originally proposed by Alibaba Cloud, it is
   maintained in the open rather than controlled by a single vendor.
 
@@ -214,13 +222,6 @@ Overlaybd is an open-source sub-project of [containerd](https://www.cncf.io/proj
   contributions and feedback from across the industry — distribution packagers (Gentoo),
   cloud providers (Azure Linux / Ubuntu targets), users at organizations such as
   Databricks, and members of the EROFS, kernel, and containerd communities.
-
-- **Open specifications**: The image format is fully documented and open for independent
-  implementation:
-  [LSMT](https://containerd.github.io/overlaybd/#/specs/lsmt.md),
-  [ZFile](https://containerd.github.io/overlaybd/#/specs/zfile.md).
-  Actually we already see several re-implementations of overlaybd / zfile, such as
-  [AgentEnv](https://github.com/kvcache-ai/AgentENV/tree/main/storage/overlaybd/src).
 
 - **Join the discussion**: For synchronous communication, catch us in the `#overlaybd`
   channel on the [CNCF slack](https://cloud-native.slack.com) (cloud-native.slack.com).
