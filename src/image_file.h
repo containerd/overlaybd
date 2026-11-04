@@ -75,12 +75,15 @@ public:
 
     int fstat(struct stat *buf) override {
         int ret = m_file->fstat(buf);
-        block_size = buf->st_blksize;
-        size = buf->st_size;
+        if (ret != 0)
+            return ret;
+        block_size = conf.block4k() ? 4096 : buf->st_blksize;
         if (block_size == 0)
             block_size = 512;
+        size = buf->st_size;
         num_lbas = size / block_size;
-        return ret;
+        buf->st_blksize = block_size;
+        return 0;
     }
 
     ssize_t pread(void *buf, size_t count, off_t offset) override {

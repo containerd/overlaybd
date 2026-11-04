@@ -26,6 +26,7 @@
 #include "../overlaybd/lsmt/file.h"
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
+#include <photon/fs/aligned-file.h>
 #include <photon/fs/extfs/extfs.h>
 #include <photon/common/uuid.h>
 #include <photon/photon.h>
@@ -111,7 +112,13 @@ int main(int argc, char **argv) {
     }
 
     if (mkfs) {
-        if (make_extfs(file) < 0) {
+        auto aligned = new_aligned_file_adaptor(file, 4096, true, false);
+        if (!aligned) {
+            fprintf(stderr, "create aligned adaptor failed\n");
+            exit(-1);
+        }
+        DEFER(delete aligned);
+        if (make_extfs(aligned) < 0) {
             fprintf(stderr, "mkfs failed, %s\n", strerror(errno));
             exit(-1);
         }

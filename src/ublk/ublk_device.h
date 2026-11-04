@@ -167,7 +167,7 @@ private:
     int acquire_rw_image_lock(const UblkDeviceOpts &opts); // daemon path only
     int claim_instance(const std::string &image_root, const std::string &inst,
                        std::string &cache_root);
-    void set_dev_parameters();
+    int set_dev_parameters();
     void ctrl_del_and_deinit();
     void queue_loop(const struct ublksrv_dev *dev, photon::semaphore *started,
                     int *init_ret);

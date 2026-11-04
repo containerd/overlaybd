@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <photon/common/alog.h>
 #include <photon/fs/localfs.h>
+#include <photon/fs/aligned-file.h>
 #include <photon/fs/virtual-file.h>
 #include <photon/fs/extfs/extfs.h>
 #include <photon/photon.h>
@@ -139,8 +140,10 @@ int main(int argc, char **argv) {
             exit(-1);
         }
     } else {
-        auto target = create_ext4fs(imgfile, mkfs, false);
-        DEFER({ delete target; });
+        auto aligned_file = new_aligned_file_adaptor(imgfile, 4096, true, false);
+        DEFER(delete aligned_file);
+        auto target = create_ext4fs(aligned_file, mkfs, false);
+        DEFER(delete target);
 
         photon::fs::IFile *base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
         bool gen_turboOCI = true;

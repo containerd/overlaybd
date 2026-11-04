@@ -32,6 +32,7 @@ limitations under the License.
 #include "photon/common/alog.h"
 #include "photon/common/uuid.h"
 #include "photon/fs/filesystem.h"
+#include "photon/fs/fiemap.h"
 #include "photon/fs/virtual-file.h"
 #include <photon/common/alog.h>
 #include <photon/common/utility.h>
@@ -916,6 +917,15 @@ public:
         m_index_mutable = true;
     }
 
+    // returns 0 when the block size of the data file's filesystem cannot be
+    // determined; the caller refuses the layer instead of guessing one
+    static uint32_t detect_host_blksize(IFile *fdata) {
+        struct stat st;
+        if (fdata == nullptr || fdata->fstat(&st) != 0 || st.st_blksize <= 0)
+            return 0;
+        return (uint32_t)std::max<off_t>(st.st_blksize, (off_t)ALIGNMENT);
+    }
+
     ~LSMTFile() {
         LOG_DEBUG(" ~LSMTFile()");
         if (close() != 0)
@@ -1146,6 +1156,9 @@ public:
 #ifndef FALLOC_FL_PUNCH_HOLE
 #define FALLOC_FL_PUNCH_HOLE 0x02 /* de-allocates range */
 #endif
+#ifndef FALLOC_FL_ZERO_RANGE
+#define FALLOC_FL_ZERO_RANGE 0x10 /* zeroes a range, without writing data */
+#endif
     virtual int fallocate(int mode, off_t offset, off_t len) override {
         auto max_length_bytes = Segment::MAX_LENGTH * ALIGNMENT;
 
@@ -1156,10 +1169,28 @@ public:
             offset += max_length_bytes;
             len -= max_length_bytes;
         }
-        if (((mode & FALLOC_FL_PUNCH_HOLE) == 0) || ((mode & FALLOC_FL_KEEP_SIZE) == 0)) {
-            LOG_ERRNO_RETURN(ENOSYS, -1, "only support FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE");
+        if (mode != (FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE) &&
+            mode != (FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE)) {
+            LOG_ERRNO_RETURN(ENOSYS, -1,
+                             "only support FALLOC_FL_PUNCH_HOLE or FALLOC_FL_ZERO_RANGE, "
+                             "with FALLOC_FL_KEEP_SIZE");
         }
         CHECK_ALIGNMENT(len, offset);
+        if (mode & FALLOC_FL_PUNCH_HOLE) {
+            SegmentMapping m{
+                (uint64_t)offset / (uint64_t)ALIGNMENT,
+                (uint32_t)len / (uint32_t)ALIGNMENT,
+                0,
+            };
+            m.discard();
+            return this->discard(m);
+        }
+        return this->zero_range(offset, len);
+    }
+
+    // a write-zero leaves the range readable as zero, expressed here with a
+    // zero-filled mapping
+    virtual int zero_range(off_t offset, off_t len) {
         SegmentMapping m{
             (uint64_t)offset / (uint64_t)ALIGNMENT,
             (uint32_t)len / (uint32_t)ALIGNMENT,
@@ -1438,37 +1469,79 @@ public:
                                        m.length * ALIGNMENT);
     }
 
+    // keep the range allocated but uninitialized, so it reads back as zero and
+    // survives a reopen as FIEMAP_EXTENT_UNWRITTEN, instead of turning into a
+    // hole that falls through to the lower layers
+    int zero_range(off_t offset, off_t len) override {
+        auto moffset = BASE_MOFFSET + offset;
+        if (m_files[m_rw_tag]->fallocate(FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE, moffset,
+                                         len) != 0) {
+            LOG_ERRNO_RETURN(0, -1, "failed to zero range on sparse data file, offset: `, len: `",
+                             moffset, len);
+        }
+        SegmentMapping m{
+            (uint64_t)offset / (uint64_t)ALIGNMENT,
+            (uint32_t)len / (uint32_t)ALIGNMENT,
+            (uint64_t)moffset / (uint64_t)ALIGNMENT,
+        };
+        m.zeroed = 1;
+        m.tag = m_rw_tag;
+        LOG_DEBUG("insert zero mapping: `", m);
+        index_insert(m);
+        return 0;
+    }
+
+    // sparse layers map identically, so the mapped offset of a segment is its
+    // logical offset plus the header; units are ALIGNMENT blocks
+    static void append_mapping(vector<SegmentMapping> &mappings, uint64_t offset, uint64_t length,
+                               bool zeroed) {
+        while (length > 0) {
+            uint32_t n = (uint32_t)std::min<uint64_t>(length, Segment::MAX_LENGTH);
+            if (!mappings.empty()) {
+                auto &last = mappings.back();
+                if (last.zeroed == (uint32_t)zeroed && last.offset + last.length == offset &&
+                    last.length + n <= Segment::MAX_LENGTH) {
+                    last.length += n;
+                    offset += n;
+                    length -= n;
+                    continue;
+                }
+            }
+            mappings.emplace_back(offset, n, offset + HeaderTrailer::SPACE / ALIGNMENT);
+            mappings.back().zeroed = zeroed;
+            offset += n;
+            length -= n;
+        }
+    }
+
+    // rebuild the index from the allocation state of the data file: a written
+    // extent is data, an unwritten extent reads as zero, and a gap between
+    // extents is a hole that falls through to the lower layers
     static int create_mappings(const IFile *file, vector<SegmentMapping> &mappings,
                                off_t base = BASE_MOFFSET) {
-
-        auto moffset = base;
+        auto f = const_cast<IFile *>(file);
+        uint64_t pos = base;
         while (true) {
-            auto begin = const_cast<IFile *>(file)->lseek(moffset, SEEK_DATA);
-            if (begin == -1)
-                break;
-            auto end = const_cast<IFile *>(file)->lseek(begin, SEEK_HOLE);
-            if (end == -1)
-                break;
-            LOG_DEBUG("segment find: [ mbegin: `, mend: ` ]", begin, end);
-            uint64_t total_length = (end - begin) / ALIGNMENT;
-            uint64_t prev_offset = ((uint64_t)begin - base) / (uint64_t)ALIGNMENT;
-            uint64_t prev_moffset = (uint64_t)(begin / ALIGNMENT);
-            while (total_length > Segment::MAX_LENGTH) {
-                uint32_t length = Segment::MAX_LENGTH;
-                LOG_DEBUG("segment mapping {offset: `, length:`, moffset: `}", prev_offset, length,
-                          prev_moffset);
-                mappings.emplace_back(prev_offset, length, prev_moffset);
-                prev_moffset += Segment::MAX_LENGTH;
-                prev_offset += Segment::MAX_LENGTH;
-                total_length -= Segment::MAX_LENGTH;
+            fiemap_t<256> map(pos, FIEMAP_MAX_OFFSET - pos);
+            map.fm_flags = FIEMAP_FLAG_SYNC;
+            if (f->fiemap(&map) != 0) {
+                LOG_ERRNO_RETURN(0, -1, "failed to fiemap sparse data file, offset: `", pos);
             }
-            LOG_DEBUG("segment mapping {offset: `, length:`, moffset: `}", prev_offset,
-                      total_length, prev_moffset);
-            mappings.emplace_back(prev_offset, (uint32_t)total_length, prev_moffset);
-            moffset = end;
-        }
-        if (errno != ENXIO) {
-            LOG_ERRNO_RETURN(0, -1, "seek EOF failed, expected errno ENXIO(-6)");
+            for (uint32_t i = 0; i < map.fm_mapped_extents; i++) {
+                auto &e = map.fm_extents[i];
+                uint64_t begin = std::max<uint64_t>(e.fe_logical, (uint64_t)base);
+                uint64_t end = e.fe_logical_end();
+                if (end <= begin)
+                    continue;
+                LOG_DEBUG("segment find: [ mbegin: `, mend: `, unwritten: ` ]", begin, end,
+                          (e.fe_flags & FIEMAP_EXTENT_UNWRITTEN) != 0);
+                append_mapping(mappings, (begin - base) / ALIGNMENT, (end - begin) / ALIGNMENT,
+                               (e.fe_flags & FIEMAP_EXTENT_UNWRITTEN) != 0);
+            }
+            if (map.fm_mapped_extents == 0 ||
+                (map.fm_extents[map.fm_mapped_extents - 1].fe_flags & FIEMAP_EXTENT_LAST))
+                break;
+            pos = map.fm_extents[map.fm_mapped_extents - 1].fe_logical_end();
         }
         LOG_INFO("segment size: `", mappings.size());
         return 0;
@@ -1476,6 +1549,9 @@ public:
 
     virtual int update_vsize(size_t vsize) override {
         LOG_INFO("update vsize for LSMTSparseFile ", VALUE(vsize));
+        if ((vsize % ALIGNMENT4K) != 0)
+            LOG_ERROR_RETURN(EINVAL, -1, "sparse layer virtual size must be 4K aligned, got `",
+                             vsize);
         m_vsize = vsize;
         if (update_header_vsize(m_files[m_rw_tag], vsize) < 0) {
             LOG_ERROR_RETURN(0, -1, "failed to update data vsize");
@@ -1817,6 +1893,19 @@ IFileRW *open_file_rw(IFile *fdata, IFile *findex, bool ownership) {
         }
     }
     IndexLog *log = nullptr;
+    if (rw_type == RWType::Sparse) {
+        auto io_align = LSMTFile::detect_host_blksize(fdata);
+        if (io_align == 0) {
+            delete pi;
+            LOG_ERROR_RETURN(EINVAL, nullptr,
+                             "failed to get the block size of the data file's filesystem");
+        }
+        if (ALIGNMENT4K % io_align != 0) {
+            delete pi;
+            LOG_ERROR_RETURN(EINVAL, nullptr,
+                             "host fs block size ` is larger than the 4K device block", io_align);
+        }
+    }
     if (findex && !(log = IndexLog::open(findex, ownership))) {
         delete pi;
         return nullptr;
@@ -1855,6 +1944,24 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
     }
     if ((args.rw_type != RWType::Sparse) && (!fdata || !findex)) {
         LOG_ERROR_RETURN(0, nullptr, "invalid file ptr, fdata: `, findex: `", fdata, findex);
+    }
+    if (args.rw_type == RWType::Sparse) {
+        if (fdata == nullptr)
+            LOG_ERROR_RETURN(EINVAL, nullptr, "sparse layer requires a data file");
+        if ((args.virtual_size % ALIGNMENT4K) != 0)
+            LOG_ERROR_RETURN(EINVAL, nullptr, "sparse layer virtual size must be 4K aligned, got `",
+                             args.virtual_size);
+        fiemap_t<1> map(0, FIEMAP_MAX_OFFSET);
+        map.fm_flags = FIEMAP_FLAG_SYNC;
+        if (fdata->fiemap(&map) != 0)
+            LOG_ERRNO_RETURN(0, nullptr, "sparse layers require FIEMAP support");
+        auto io_align = LSMTFile::detect_host_blksize(fdata);
+        if (io_align == 0)
+            LOG_ERROR_RETURN(EINVAL, nullptr,
+                             "failed to get the block size of the data file's filesystem");
+        if (ALIGNMENT4K % io_align != 0)
+            LOG_ERROR_RETURN(EINVAL, nullptr,
+                             "host fs block size ` is larger than the 4K device block", io_align);
     }
     LSMTFile *rst = nullptr;
     if (args.rw_type != RWType::Sparse) {

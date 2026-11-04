@@ -544,6 +544,13 @@ int ImageFile::init_image_file() {
     m_upper_file = upper_file;
 
 SUCCESS_EXIT:
+    if (m_file != nullptr) {
+        struct stat st;
+        if (m_file->fstat(&st) != 0 || (st.st_size % LSMT::ALIGNMENT4K) != 0) {
+            set_failed("image size is not 4K aligned");
+            return -1;
+        }
+    }
     if (conf.download().enable() && !record_no_download) {
         start_bk_dl_thread();
     }
@@ -645,6 +652,12 @@ int ImageFile::resize(uint64_t target_size, bool resize_fs) {
     if (read_only) {
         LOG_ERROR_RETURN(EROFS, -1, "cannot resize a read-only image (no upper layer)");
     }
+    // a size that is not a multiple of the device block would leave a
+    // truncated tail block
+    uint32_t align = LSMT::ALIGNMENT4K;
+    if (target_size % align != 0) {
+        LOG_ERROR_RETURN(EINVAL, -1, "target size must be ` aligned, got `", align, target_size);
+    }
 
     auto rw = (LSMT::IFileRW *)m_file;
     struct stat st;
@@ -667,7 +680,12 @@ int ImageFile::resize(uint64_t target_size, bool resize_fs) {
 
     if (resize_fs) {
 #ifdef PHOTON_ENABLE_RESIZE
-        if (photon::fs::resize_extfs(m_file, target_size, 0) != 0) {
+        auto aligned = new_aligned_file_adaptor(m_file, LSMT::ALIGNMENT4K, true, false);
+        if (aligned == nullptr) {
+            LOG_ERROR_RETURN(0, -1, "failed to create 4K aligned adaptor for resize");
+        }
+        DEFER(delete aligned);
+        if (photon::fs::resize_extfs(aligned, target_size, 0) != 0) {
             if (target_size >= current) {
                 LOG_ERROR("resize_extfs failed. "
                           "Re-run to retry or use e2fsck to recover.");

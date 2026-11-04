@@ -236,7 +236,7 @@ public:
                 auto slice_count = rand() % 4 + 1;
                 vector<int> seg_offset{0};
                 for (int i = 0; i < slice_count - 1; i++) {
-                    seg_offset.push_back(rand() % length);
+                    seg_offset.push_back(DO_ALIGN(rand() % length));
                 }
                 seg_offset.push_back(length);
                 for (auto i = 0; i < slice_count; i++) {
@@ -295,7 +295,7 @@ public:
             auto slice_count = rand() % 4 + 1;
             vector<int> seg_offset{0};
             for (int i = 0; i < slice_count - 1; i++) {
-                seg_offset.push_back(rand() % length);
+                seg_offset.push_back(DO_ALIGN(rand() % length));
             }
             seg_offset.push_back(length);
             for (auto i = 0; i < slice_count; i++) {
