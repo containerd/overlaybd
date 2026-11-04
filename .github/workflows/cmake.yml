@@ -349,6 +349,75 @@ jobs:
         sudo umount ublk_mp
         # always unmount before del; del stops the daemon and removes /dev/ublkbN
         sudo /opt/overlaybd/bin/overlaybd-ublk del -n $devid
+    - name: E2E Test ublk pool
+      working-directory: ${{github.workspace}}/build
+      shell: bash
+      run: |
+        # ublk_drv may live in linux-modules-extra (see the ublk step above).
+        sudo modprobe ublk_drv || {
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+          sudo modprobe ublk_drv
+        }
+        ls -l /dev/ublk-control
+        sudo make install
+        W=$RUNNER_TEMP/ublk-pool
+        rm -rf "$W"
+        mkdir -p "$W/img" "$W/cache"
+        echo "{\"logConfig\":{\"logLevel\":1,\"logPath\":\"$W/ublkd.log\"},\"cacheConfig\":{\"cacheType\":\"file\",\"cacheDir\":\"$W/cache\",\"cacheSizeGB\":1},\"gzipCacheConfig\":{\"enable\":false},\"credentialConfig\":{\"mode\":\"file\",\"path\":\"$W/cred.json\"},\"ioEngine\":0,\"workpoolSize\":4,\"download\":{\"enable\":false},\"p2pConfig\":{\"enable\":false},\"exporterConfig\":{\"enable\":false,\"uriPrefix\":\"/metrics\",\"port\":9863,\"updateInterval\":1000000}}" > "$W/service.json"
+        create=/opt/overlaybd/bin/overlaybd-create
+        [ -x "$create" ] || create=${{github.workspace}}/build/output/overlaybd-create
+        cfgs=""
+        for i in 0 1 2 3 4 5 6 7; do
+          "$create" -s "$W/img/$i.data" "$W/img/$i.index" 1
+          printf '{"lowers":[],"upper":{"index":"%s","data":"%s"}}\n' \
+            "$W/img/$i.index" "$W/img/$i.data" > "$W/img/$i.json"
+          cfgs="$cfgs $W/img/$i.json"
+        done
+        sudo /opt/overlaybd/bin/overlaybd-ublkd \
+          --socket-path "$W/ublkd.sock" \
+          --service-config "$W/service.json" \
+          --cache-dir "$W/cache" \
+          --pool-low 8 --pool-high 8 --pool-size-gb 1 \
+          > "$W/daemon.out" 2>&1 &
+        dpid=$!
+        ready=no
+        for _ in $(seq 1 150); do
+          if [ -S "$W/ublkd.sock" ]; then ready=yes; break; fi
+          sudo kill -0 "$dpid" 2>/dev/null || break
+          sleep 0.2
+        done
+        if [ "$ready" != yes ]; then
+          echo "::error::overlaybd-ublkd did not come up on kernel $(uname -r)"
+          cat "$W/daemon.out" || true
+          sudo dmesg | tail -40 || true
+          sudo kill "$dpid" 2>/dev/null || true
+          exit 1
+        fi
+        # Concurrent acquire/release with a continuous /v1/list reader; the
+        # script also asserts that no device is left after the last release.
+        # shellcheck disable=SC2086
+        rc=0
+        sudo python3 ${{github.workspace}}/src/ublk/test/pool_stress.py \
+          "$W/ublkd.sock" 8 $cfgs || rc=$?
+        # sudo runs the daemon as its child, so address the daemon by its unique
+        # socket path and wait for the device nodes to disappear.
+        sudo pkill -TERM -f "overlaybd-ublkd --socket-path $W/ublkd.sock" || true
+        for _ in $(seq 1 100); do
+          ls /dev/ublkb* >/dev/null 2>&1 || break
+          sleep 0.2
+        done
+        sudo pkill -9 -f "overlaybd-ublkd --socket-path $W/ublkd.sock" || true
+        cat "$W/ublkd.log" 2>/dev/null | tail -40 || true
+        if [ $rc -ne 0 ]; then
+          echo "::error::ublk pool stress failed"
+          exit $rc
+        fi
+        if ls /dev/ublkb* >/dev/null 2>&1; then
+          echo "::error::ublk devices left after daemon shutdown"
+          ls -l /dev/ublkb* || true
+          exit 1
+        fi
     - name: Unit Test
       working-directory: ${{github.workspace}}/build
       shell: bash

@@ -275,18 +275,19 @@ private:
                                   "); use /v1/release");
             return;
         }
-        // Deletion state machine: del is synchronous and yields while
-        // draining, so a concurrent del of the same id would otherwise race
-        // on the map iterator (erase invalidates the other handler's it).
+        // stop() -> wait() yields while in-flight I/O finishes; reject overlaps,
+        // then remove this entry from devices_ so a reused dev_id cannot
+        // overwrite it.
         if (reject_if_busy(it->second, id, code, msg))
             return;
         it->second.state = DevState::stopping;
-        it->second.dev->stop();
-        it->second.dev->wait();
-        it->second.dev->teardown();
-        if (it->second.pooled)
-            free_slots_.push_back(it->second.pool_slot);
-        devices_.erase(id); // re-lookup by key: `it` may not survive yields
+        DevEntry entry = std::move(it->second);
+        devices_.erase(it);
+        entry.dev->stop();
+        entry.dev->wait();
+        entry.dev->teardown();
+        if (entry.pooled)
+            free_slots_.push_back(entry.pool_slot);
         code = 200;
         msg = ublkd_msg_ok();
         LOG_INFO("ublkd: deleted /dev/ublkb`", id);
@@ -486,29 +487,30 @@ private:
             LOG_INFO("ublkd: release dev ` refcount `", id, it->second.refcount);
             return;
         }
-        // Recycling yields during cache flush and image swap. Fence concurrent
-        // release/del requests before either operation can yield.
+        // Recycling yields in stop() -> wait() and in the pool flush/swap;
+        // reject overlaps, then remove this entry from devices_ so a reused
+        // dev_id cannot overwrite it.
         it->second.state = DevState::stopping;
-        // last reference (or an exclusive lease): back to the pool if it came
-        // from there and can be recycled safely, otherwise tear it down
         if (it->second.mode_shared) {
             char resolved[PATH_MAX];
             if (realpath(it->second.config.c_str(), resolved) != nullptr)
                 shared_.erase(resolved);
         }
-        if (it->second.pooled && return_to_pool(id, it->second)) {
-            devices_.erase(id);
+        DevEntry entry = std::move(it->second);
+        devices_.erase(it);
+        // last reference (or an exclusive lease): back to the pool if it came
+        // from there and can be recycled safely, otherwise tear it down
+        if (entry.pooled && return_to_pool(id, entry)) {
             code = 200;
             msg = ublkd_msg_released(0);
             LOG_INFO("ublkd: released /dev/ublkb` back to the pool", id);
             return;
         }
-        it->second.dev->stop();
-        it->second.dev->wait();
-        it->second.dev->teardown();
-        if (it->second.pooled)
-            free_slots_.push_back(it->second.pool_slot);
-        devices_.erase(id);
+        entry.dev->stop();
+        entry.dev->wait();
+        entry.dev->teardown();
+        if (entry.pooled)
+            free_slots_.push_back(entry.pool_slot);
         code = 200;
         msg = ublkd_msg_released(0);
         LOG_INFO("ublkd: released and removed /dev/ublkb`", id);
