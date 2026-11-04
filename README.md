@@ -20,6 +20,7 @@ Overlaybd has 2 core component:
   is a compression file format which support seekalbe online decompression.
 
 This repository is an implementation of overlaybd based on [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt).
+An open-source Rust rewrite of overlaybd is available in the [AgentENV](https://github.com/kvcache-ai/AgentENV/tree/v0.2.4/storage/overlaybd/src) repository.
 
 Overlaybd can be used as the storage backend of [Accelerated Container Image](https://github.com/containerd/accelerated-container-image), which is a solution of remote container image by fetching image data on-demand without downloading and unpacking the whole image before the container starts.
 

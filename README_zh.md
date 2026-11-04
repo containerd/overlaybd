@@ -20,6 +20,7 @@ Overlaybd 有 2 个核心组件：
   是一种支持可随机寻址（seekable）在线解压的压缩文件格式。
 
 本仓库是 overlaybd 基于 [TCMU](https://www.kernel.org/doc/Documentation/target/tcmu-design.txt) 的实现。
+[AgentENV](https://github.com/kvcache-ai/AgentENV/tree/v0.2.4/storage/overlaybd/src) 仓库中有一个用 Rust 重写的 Overlaybd。
 
 Overlaybd 可作为 [Accelerated Container Image](https://github.com/containerd/accelerated-container-image)（加速容器镜像）的存储后端；该方案通过按需拉取镜像数据实现远程容器镜像，无需在容器启动前下载并解压整个镜像。
 
