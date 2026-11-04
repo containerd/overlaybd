@@ -40,6 +40,16 @@ struct LayerConfig : public ConfigUtils::Config {
     APPCFG_PARA(digest, std::string, "");
     APPCFG_PARA(targetDigest, std::string, "");
     APPCFG_PARA(size, uint64_t, 0);
+
+    static bool is_valid(rapidjson::Value &v) {
+        using ConfigUtils::FieldType;
+        return ConfigUtils::HasValidFields(
+            v, {{"gzipIndex", FieldType::String},    {"file", FieldType::String},
+                {"targetFile", FieldType::String},  {"dir", FieldType::String},
+                {"digest", FieldType::String},      {"targetDigest", FieldType::String},
+                {"size", FieldType::Uint64}});
+    }
+    bool is_valid() { return is_valid(*this); }
 };
 
 struct UpperConfig : public ConfigUtils::Config {
@@ -49,6 +59,15 @@ struct UpperConfig : public ConfigUtils::Config {
     APPCFG_PARA(data, std::string, "");
     APPCFG_PARA(target, std::string, "");
     APPCFG_PARA(gzipIndex, std::string, "");
+
+    static bool is_valid(rapidjson::Value &v) {
+        using ConfigUtils::FieldType;
+        return ConfigUtils::HasValidFields(v, {{"index", FieldType::String},
+                                              {"data", FieldType::String},
+                                              {"target", FieldType::String},
+                                              {"gzipIndex", FieldType::String}});
+    }
+    bool is_valid() { return is_valid(*this); }
 };
 
 struct DownloadConfig : public ConfigUtils::Config {
@@ -73,6 +92,24 @@ struct ImageConfig : public ConfigUtils::Config {
     APPCFG_PARA(accelerationLayer, bool, false);
     APPCFG_PARA(recordTracePath, std::string, "");
     APPCFG_PARA(block4k, bool, true);
+
+    static bool is_valid(rapidjson::Value &v) {
+        if (!v.IsObject())
+            return false;
+        if (v.HasMember("lowers")) {
+            auto &lowers = v["lowers"];
+            if (!lowers.IsArray())
+                return false;
+            for (auto &l : lowers.GetArray())
+                if (!LayerConfig::is_valid(l))
+                    return false;
+        }
+        if (v.HasMember("upper") && !UpperConfig::is_valid(v["upper"]))
+            return false;
+        return (!v.HasMember("accelerationLayer") || v["accelerationLayer"].IsBool()) &&
+               (!v.HasMember("block4k") || v["block4k"].IsBool());
+    }
+    bool is_valid() { return is_valid(*this); }
 };
 
 struct P2PConfig : public ConfigUtils::Config {

@@ -1130,6 +1130,38 @@ TEST_F(CreateSnapshotTest, reject_request_bad_lowers) {
     delete imgfile;
 }
 
+TEST_F(CreateSnapshotTest, reject_request_bad_fields) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+
+    // a mistyped field would abort the accessor, so the request must be rejected first
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [
+        { "file" : "/opt/overlaybd/baselayers/ext4_64" },
+        { "file" : "/tmp/overlaybd/data0.lsmt", "size" : "0" }
+    ],
+    "upper": { "index" : "/tmp/overlaybd/index1.lsmt", "data" : "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [ { "file" : 5 } ],
+    "upper": { "index" : "/tmp/overlaybd/index1.lsmt", "data" : "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [ { "file" : "/opt/overlaybd/baselayers/ext4_64" } ],
+    "upper": { "index" : "/tmp/overlaybd/index1.lsmt", "data" : "/tmp/overlaybd/data1.lsmt" },
+    "accelerationLayer" : "yes"
+})delimiter");
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    delete imgfile;
+}
+
 TEST_F(CreateSnapshotTest, create_snapshot_twice) {
     const std::string data0 = "/tmp/overlaybd/data0.lsmt";
     create_file_rw(data0.c_str(), "/tmp/overlaybd/index0.lsmt");

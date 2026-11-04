@@ -981,7 +981,7 @@ int ImageFile::create_snapshot(const char *new_config_path) {
     if (!new_cfg.ParseJSONStream(new_cfg_bytes)) {
         LOG_ERROR_RETURN(0, -1, "Error parse new config json: `.", new_config_path);
     }
-    if (!new_cfg.IsObject() || !new_cfg.HasMember("lowers") || !new_cfg["lowers"].IsArray())
+    if (!new_cfg.is_valid())
         LOG_ERROR_RETURN(EINVAL, -1, "` is not a snapshot request.", new_config_path);
 
     if (snapshot_request_matches(conf, new_cfg)) {
