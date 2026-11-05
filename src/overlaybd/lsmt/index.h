@@ -26,6 +26,7 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 #include <inttypes.h>
 #include <cstddef>
 #include <assert.h>
+#include <errno.h>
 #include <sys/types.h>
 
 namespace LSMT {
@@ -164,6 +165,18 @@ public:
     // virtual IMemoryIndex0* gc_index() = 0;
     virtual IMemoryIndex *load_range_index(int, int) const = 0;
     
+    // build the backing index that commit_index0() would produce, shifting tags by
+    // `tag_shift`, without modifying this index; the caller owns the result
+    virtual IMemoryIndex *prepare_commit(int tag_shift) const {
+        errno = ENOSYS;
+        return nullptr;
+    }
+
+    // install the index of prepare_commit(), drop the writable mappings
+    virtual void apply_commit(IMemoryIndex *prepared) {
+        delete prepared;
+    }
+
     // commit index0 (upper index) to backing index (lower index)
     // rebuild backing index before async-compact.
     // merge the image's backing_index and gc_idx( dump from original index0 ) for pread()

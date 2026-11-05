@@ -374,7 +374,7 @@ public:
         srand(154574045);
     }
 
-    void create_file_rw(char *data_name, char *index_name, bool sparse = false) {
+    void create_file_rw(const char *data_name, const char *index_name, bool sparse = false) {
         auto fdata = photon::fs::open_localfile_adaptor(data_name, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         auto findex = photon::fs::open_localfile_adaptor(index_name, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
         LSMT::LayerInfo args(fdata, findex);
@@ -382,6 +382,30 @@ public:
         args.virtual_size = 64 << 20;
         auto file = LSMT::create_file_rw(args, true);
         delete file;
+    }
+
+    static off_t file_size(const std::string &path) {
+        struct stat st;
+        return ::stat(path.c_str(), &st) == 0 ? st.st_size : -1;
+    }
+
+    static void write_file(const std::string &path, const std::string &content) {
+        int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        ASSERT_GE(fd, 0) << path;
+        EXPECT_EQ(::write(fd, content.data(), content.size()), (ssize_t)content.size());
+        ::close(fd);
+    }
+
+    static void append_bytes(const std::string &path, size_t count) {
+        int fd = ::open(path.c_str(), O_WRONLY | O_APPEND);
+        ASSERT_GE(fd, 0) << path;
+        std::string junk(count, 'x');
+        EXPECT_EQ(::write(fd, junk.data(), count), (ssize_t)count);
+        ::close(fd);
+    }
+
+    std::string move_record(const std::string &data_path, const std::string &move_to) {
+        return data_path + "\n" + move_to + "\n";
     }
 };
 
@@ -915,6 +939,648 @@ TEST(DeviceBlock, SparseReloadSafeWith4K) {
 
 TEST(DeviceBlock, SparseReloadUnsafeWith512) {
     check_sparse_reload(false);
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_idempotent) {
+    const std::string data0 = "/tmp/overlaybd/data0.lsmt";
+    create_file_rw(data0.c_str(), "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+
+    auto len = 1 << 20;
+    ALIGNED_MEM4K(buf, len);
+    for (auto i = 0; i < len; i++)
+        buf[i] = rand() % 256;
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf, len, 0), len);
+
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), 0);
+    auto sealed_size = file_size(data0);
+    EXPECT_GT(sealed_size, (off_t)len);
+
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), 0);
+    EXPECT_EQ(file_size(data0), sealed_size);
+
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_invalid_lowers) {
+    const std::string data0 = "/tmp/overlaybd/data0.lsmt";
+    create_file_rw(data0.c_str(), "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+
+    auto len = 1 << 20;
+    ALIGNED_MEM4K(buf, len);
+    for (auto i = 0; i < len; i++)
+        buf[i] = rand() % 256;
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf, len, 0), len);
+    auto size0 = file_size(data0);
+
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [ { "file" : "/opt/overlaybd/baselayers/ext4_64" } ],
+    "upper": { "index": "/tmp/overlaybd/index1.lsmt", "data": "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [
+        { "file" : "/opt/overlaybd/baselayers/ext4_64" },
+        { "file" : "/tmp/overlaybd/data1.lsmt" }
+    ],
+    "upper": { "index": "/tmp/overlaybd/index1.lsmt", "data": "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [
+        { "file" : "/opt/overlaybd/baselayers/ext4_64", "digest": "sha256:0" },
+        { "file" : "/tmp/overlaybd/data0.lsmt" }
+    ],
+    "upper": { "index": "/tmp/overlaybd/index1.lsmt", "data": "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    EXPECT_EQ(file_size(data0), size0);
+    ALIGNED_MEM4K(buf0, len);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf0, len, 0), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf0[i], buf[i]);
+
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_commit_failure) {
+    const std::string data0 = "/tmp/overlaybd/data0.lsmt";
+    create_file_rw(data0.c_str(), "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+
+    auto len = 1 << 20;
+    ALIGNED_MEM4K(buf, len);
+    for (auto i = 0; i < len; i++)
+        buf[i] = rand() % 256;
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf, len, 0), len);
+    auto size0 = file_size(data0);
+
+    // updating the config fails when its path is a directory
+    ASSERT_EQ(::unlink(image_config_path.c_str()), 0);
+    ASSERT_EQ(::mkdir(image_config_path.c_str(), 0755), 0);
+
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+    // the seal is not rolled back, its tail is unreachable for reads and writes
+    EXPECT_GT(file_size(data0), size0);
+    EXPECT_NE(::access((image_config_path + ".snapshot").c_str(), F_OK), 0);
+    EXPECT_NE(::access((image_config_path + ".snapshot.undo").c_str(), F_OK), 0);
+
+    ALIGNED_MEM4K(buf0, len);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf0, len, 0), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf0[i], buf[i]);
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf0, 4096, len), 4096);
+
+    // the same request succeeds once the config path is writable again
+    ASSERT_EQ(::rmdir(image_config_path.c_str()), 0);
+    write_file(image_config_path, image_config_content);
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), 0);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf0, len, 0), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf0[i], buf[i]);
+
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_move_commit_failure) {
+    const std::string data0 = "/tmp/overlaybd/data0.lsmt";
+    const std::string moved = "/tmp/overlaybd/archive/data0.lsmt";
+    create_file_rw(data0.c_str(), "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+    ::unlink(moved.c_str());
+
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [
+        { "file" : "/opt/overlaybd/baselayers/ext4_64" },
+        { "file" : "/tmp/overlaybd/archive/data0.lsmt" }
+    ],
+    "upper": { "index" : "/tmp/overlaybd/index1.lsmt", "data" : "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+
+    auto len = 1 << 20;
+    ALIGNED_MEM4K(buf, len);
+    for (auto i = 0; i < len; i++)
+        buf[i] = rand() % 256;
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf, len, 0), len);
+
+    // updating the config fails when its path is a directory
+    ASSERT_EQ(::unlink(image_config_path.c_str()), 0);
+    ASSERT_EQ(::mkdir(image_config_path.c_str(), 0755), 0);
+
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+    // the move is undone, and neither the target nor the records are left behind
+    EXPECT_EQ(::access(data0.c_str(), F_OK), 0);
+    EXPECT_NE(::access(moved.c_str(), F_OK), 0);
+    EXPECT_NE(::access((image_config_path + ".snapshot").c_str(), F_OK), 0);
+    EXPECT_NE(::access((image_config_path + ".snapshot.undo").c_str(), F_OK), 0);
+
+    ALIGNED_MEM4K(buf0, len);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf0, len, 0), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf0[i], buf[i]);
+
+    // the same request succeeds once the config path is writable again
+    ASSERT_EQ(::rmdir(image_config_path.c_str()), 0);
+    write_file(image_config_path, image_config_content);
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), 0);
+    EXPECT_NE(::access(data0.c_str(), F_OK), 0);
+    EXPECT_EQ(::access(moved.c_str(), F_OK), 0);
+
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, reject_request_bad_lowers) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+
+    // a request whose lowers is not an array is rejected instead of aborting the daemon
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : "invalid",
+    "upper": { "index" : "/tmp/overlaybd/index1.lsmt", "data" : "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : { "file" : "/opt/overlaybd/baselayers/ext4_64" },
+    "upper": { "index" : "/tmp/overlaybd/index1.lsmt", "data" : "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    write_file(new_image_config_path, "[1, 2]");
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, reject_request_bad_fields) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+
+    // a mistyped field would abort the accessor, so the request must be rejected first
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [
+        { "file" : "/opt/overlaybd/baselayers/ext4_64" },
+        { "file" : "/tmp/overlaybd/data0.lsmt", "size" : "0" }
+    ],
+    "upper": { "index" : "/tmp/overlaybd/index1.lsmt", "data" : "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [ { "file" : 5 } ],
+    "upper": { "index" : "/tmp/overlaybd/index1.lsmt", "data" : "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [ { "file" : "/opt/overlaybd/baselayers/ext4_64" } ],
+    "upper": { "index" : "/tmp/overlaybd/index1.lsmt", "data" : "/tmp/overlaybd/data1.lsmt" },
+    "accelerationLayer" : "yes"
+})delimiter");
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_twice) {
+    const std::string data0 = "/tmp/overlaybd/data0.lsmt";
+    create_file_rw(data0.c_str(), "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+    create_file_rw("/tmp/overlaybd/data2.lsmt", "/tmp/overlaybd/index2.lsmt");
+
+    auto len = 1 << 20;
+    auto offset = 4 << 20;
+    ALIGNED_MEM4K(buf0, len);
+    ALIGNED_MEM4K(buf1, len);
+    for (auto i = 0; i < len; i++) {
+        buf0[i] = rand() % 256;
+        buf1[i] = rand() % 256;
+    }
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf0, len, 0), len);
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), 0);
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf1, len, offset), len);
+
+    auto config2 = test_dir + "/image_config2.json";
+    write_file(config2, R"delimiter({
+    "lowers" : [
+        { "file" : "/opt/overlaybd/baselayers/ext4_64" },
+        { "file" : "/tmp/overlaybd/data0.lsmt" },
+        { "file" : "/tmp/overlaybd/data1.lsmt" }
+    ],
+    "upper": { "index": "/tmp/overlaybd/index2.lsmt", "data": "/tmp/overlaybd/data2.lsmt" }
+})delimiter");
+    EXPECT_EQ(imgfile->create_snapshot(config2.c_str()), 0);
+
+    ALIGNED_MEM4K(buf, len);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf, len, 0), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf[i], buf0[i]);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf, len, offset), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf[i], buf1[i]);
+    delete imgfile;
+
+    imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf, len, 0), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf[i], buf0[i]);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf, len, offset), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf[i], buf1[i]);
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, recover_uncommitted_snapshot) {
+    const std::string data0 = "/tmp/overlaybd/data0.lsmt";
+    create_file_rw(data0.c_str(), "/tmp/overlaybd/index0.lsmt");
+
+    auto len = 1 << 20;
+    ALIGNED_MEM4K(buf, len);
+    for (auto i = 0; i < len; i++)
+        buf[i] = rand() % 256;
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf, len, 0), len);
+    auto orig_size = file_size(data0);
+    delete imgfile;
+
+    // a seal appended to the data file, then the process died
+    append_bytes(data0, 4096);
+    write_file(image_config_path + ".snapshot", "{}");
+
+    imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+    // the tail stays in place, a reopened layer never looks at it
+    EXPECT_EQ(file_size(data0), orig_size + 4096);
+    EXPECT_NE(::access((image_config_path + ".snapshot").c_str(), F_OK), 0);
+
+    ALIGNED_MEM4K(buf0, len);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf0, len, 0), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf0[i], buf[i]);
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, recover_committed_snapshot) {
+    const std::string data0 = "/tmp/overlaybd/data0.lsmt";
+    const std::string moved = "/tmp/overlaybd/archive/data0.lsmt";
+    create_file_rw(data0.c_str(), "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+    ::unlink(moved.c_str());
+
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [
+        { "file" : "/opt/overlaybd/baselayers/ext4_64" },
+        { "file" : "/tmp/overlaybd/archive/data0.lsmt" }
+    ],
+    "upper": { "index" : "/tmp/overlaybd/index1.lsmt", "data" : "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), 0);
+    delete imgfile;
+
+    // the snapshot committed and only the cleanup of the record was lost; the record
+    // still names the previous upper, which the config no longer does
+    write_file(image_config_path + ".snapshot.undo", move_record(data0, moved));
+
+    imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+    EXPECT_NE(::access((image_config_path + ".snapshot.undo").c_str(), F_OK), 0);
+    // the committed move is not undone
+    EXPECT_NE(::access(data0.c_str(), F_OK), 0);
+    EXPECT_EQ(::access(moved.c_str(), F_OK), 0);
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_move) {
+    const std::string data0 = "/tmp/overlaybd/data0.lsmt";
+    const std::string moved = "/tmp/overlaybd/archive/2026/data0.lsmt";
+    create_file_rw(data0.c_str(), "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+    ::unlink(moved.c_str());
+
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [
+        { "file" : "/opt/overlaybd/baselayers/ext4_64" },
+        { "file" : "/tmp/overlaybd/archive/2026/data0.lsmt" }
+    ],
+    "upper": { "index": "/tmp/overlaybd/index1.lsmt", "data": "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+
+    auto len = 1 << 20;
+    ALIGNED_MEM4K(buf, len);
+    for (auto i = 0; i < len; i++)
+        buf[i] = rand() % 256;
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf, len, 0), len);
+
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), 0);
+    EXPECT_NE(::access(data0.c_str(), F_OK), 0);
+    EXPECT_EQ(::access(moved.c_str(), F_OK), 0);
+
+    // the same request describes the committed stack, so it is a no-op
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), 0);
+    delete imgfile;
+
+    imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+    ALIGNED_MEM4K(buf0, len);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf0, len, 0), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf0[i], buf[i]);
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_move_target_exists) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+    create_file_rw("/tmp/overlaybd/data2.lsmt", "/tmp/overlaybd/index2.lsmt");
+
+    // the last lower names a file which is not the old upper, so it is a move
+    // onto an occupied path
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [
+        { "file" : "/opt/overlaybd/baselayers/ext4_64" },
+        { "file" : "/tmp/overlaybd/data2.lsmt" }
+    ],
+    "upper": { "index": "/tmp/overlaybd/index1.lsmt", "data": "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+
+    auto len = 1 << 20;
+    ALIGNED_MEM4K(buf, len);
+    for (auto i = 0; i < len; i++)
+        buf[i] = rand() % 256;
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf, len, 0), len);
+
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+    EXPECT_NE(::access((image_config_path + ".snapshot").c_str(), F_OK), 0);
+    EXPECT_NE(::access((image_config_path + ".snapshot.undo").c_str(), F_OK), 0);
+
+    ALIGNED_MEM4K(buf0, len);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf0, len, 0), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf0[i], buf[i]);
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_rejects_symlink_upper) {
+    const std::string data0 = "/tmp/overlaybd/data0.lsmt";
+    const std::string link = "/tmp/overlaybd/data0_link.lsmt";
+    const std::string moved = "/tmp/overlaybd/archive/data0.lsmt";
+    create_file_rw(data0.c_str(), "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+    ::unlink(link.c_str());
+    ::unlink(moved.c_str());
+    ASSERT_EQ(::symlink("data0.lsmt", link.c_str()), 0);
+
+    // the device runs on a symlinked upper data file
+    write_file(image_config_path, R"delimiter({
+    "lowers" : [ { "file" : "/opt/overlaybd/baselayers/ext4_64" } ],
+    "upper": { "index": "/tmp/overlaybd/index0.lsmt", "data": "/tmp/overlaybd/data0_link.lsmt" }
+})delimiter");
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [
+        { "file" : "/opt/overlaybd/baselayers/ext4_64" },
+        { "file" : "/tmp/overlaybd/archive/data0.lsmt" }
+    ],
+    "upper": { "index": "/tmp/overlaybd/index1.lsmt", "data": "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    ASSERT_NE(imgfile, nullptr);
+
+    // a move would relocate the link itself and leave the new lower dangling
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+    EXPECT_EQ(::access(link.c_str(), F_OK), 0);
+    EXPECT_EQ(::access(data0.c_str(), F_OK), 0);
+    EXPECT_NE(::access(moved.c_str(), F_OK), 0);
+    EXPECT_NE(::access((image_config_path + ".snapshot").c_str(), F_OK), 0);
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, create_snapshot_rejects_newline_target) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+
+    // the last lower names a path holding a newline, which the undo record cannot store
+    write_file(new_image_config_path, R"delimiter({
+    "lowers" : [
+        { "file" : "/opt/overlaybd/baselayers/ext4_64" },
+        { "file" : "/tmp/overlaybd/archive/data\n0.lsmt" }
+    ],
+    "upper": { "index": "/tmp/overlaybd/index1.lsmt", "data": "/tmp/overlaybd/data1.lsmt" }
+})delimiter");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    ASSERT_NE(imgfile, nullptr);
+
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), -1);
+    EXPECT_NE(::access((image_config_path + ".snapshot").c_str(), F_OK), 0);
+    EXPECT_NE(::access((image_config_path + ".snapshot.undo").c_str(), F_OK), 0);
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, reject_layer_named_as_journal) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    // the upper data occupies a journal name and its content is not a snapshot record
+    const std::string clash = image_config_path + ".snapshot";
+    write_file(clash, "layer");
+
+    std::string cfg = R"delimiter({
+    "lowers" : [ { "file" : "/opt/overlaybd/baselayers/ext4_64" } ],
+    "upper": { "index": "/tmp/overlaybd/index0.lsmt", "data" : ")"delimiter";
+    cfg += clash + R"delimiter(" }
+})delimiter";
+    write_file(image_config_path, cfg);
+
+    EXPECT_EQ(imgservice->create_image_file(image_config_path.c_str(), ""), nullptr);
+    // the recovery refuses instead of deleting a file which is not a snapshot record
+    EXPECT_EQ(::access(clash.c_str(), F_OK), 0);
+    ::unlink(clash.c_str());
+}
+
+TEST_F(CreateSnapshotTest, reject_symlinked_journal) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    // a layer which is a symlink to a journal file must not be deleted either
+    const std::string clash = image_config_path + ".snapshot";
+    const std::string link = "/tmp/overlaybd/data_link.lsmt";
+    write_file(clash, "layer");
+    ::unlink(link.c_str());
+    ASSERT_EQ(::symlink(clash.c_str(), link.c_str()), 0);
+
+    std::string cfg = R"delimiter({
+    "lowers" : [ { "file" : "/opt/overlaybd/baselayers/ext4_64" } ],
+    "upper": { "index": "/tmp/overlaybd/index0.lsmt", "data" : ")"delimiter";
+    cfg += link + R"delimiter(" }
+})delimiter";
+    write_file(image_config_path, cfg);
+
+    EXPECT_EQ(imgservice->create_image_file(image_config_path.c_str(), ""), nullptr);
+    EXPECT_EQ(::access(clash.c_str(), F_OK), 0);
+    EXPECT_EQ(::access(link.c_str(), F_OK), 0);
+    ::unlink(link.c_str());
+    ::unlink(clash.c_str());
+}
+
+TEST_F(CreateSnapshotTest, reject_dangling_journal) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    // a dangling symlink occupies the name and is not a record, so it stays
+    const std::string clash = image_config_path + ".snapshot";
+    ::unlink(clash.c_str());
+    ASSERT_EQ(::symlink("/tmp/overlaybd/nowhere", clash.c_str()), 0);
+
+    EXPECT_EQ(imgservice->create_image_file(image_config_path.c_str(), ""), nullptr);
+    struct stat st;
+    EXPECT_EQ(::lstat(clash.c_str(), &st), 0);
+    ::unlink(clash.c_str());
+}
+
+TEST_F(CreateSnapshotTest, reject_request_named_as_journal) {
+    create_file_rw("/tmp/overlaybd/data0.lsmt", "/tmp/overlaybd/index0.lsmt");
+    create_file_rw("/tmp/overlaybd/data1.lsmt", "/tmp/overlaybd/index1.lsmt");
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+
+    // the request sits on the pending record name, and the cleanup must not unlink it
+    const std::string record = image_config_path + ".snapshot";
+    write_file(record, new_image_config_content);
+    EXPECT_EQ(imgfile->create_snapshot(record.c_str()), -1);
+    EXPECT_EQ(::access(record.c_str(), F_OK), 0);
+
+    // a symlink to the record is refused as well
+    const std::string link = "/tmp/overlaybd/request_link.json";
+    ::unlink(link.c_str());
+    ASSERT_EQ(::symlink(record.c_str(), link.c_str()), 0);
+    EXPECT_EQ(imgfile->create_snapshot(link.c_str()), -1);
+    EXPECT_EQ(::access(record.c_str(), F_OK), 0);
+    ::unlink(link.c_str());
+    ::unlink(record.c_str());
+
+    // the same request from its own path goes through
+    write_file(new_image_config_path, new_image_config_content);
+    EXPECT_EQ(imgfile->create_snapshot(new_image_config_path.c_str()), 0);
+
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, reject_lower_target_named_as_journal) {
+    // a lower target file which occupies a journal name is refused as well
+    const std::string clash = image_config_path + ".snapshot";
+    write_file(clash, "layer");
+
+    std::string cfg = R"delimiter({
+    "lowers" : [
+        { "file" : "/opt/overlaybd/baselayers/ext4_64", "targetFile" : ")"delimiter";
+    cfg += clash + R"delimiter(" }
+    ],
+    "upper": { "index": "/tmp/overlaybd/index0.lsmt", "data" : "/tmp/overlaybd/data0.lsmt" }
+})delimiter";
+    write_file(image_config_path, cfg);
+
+    EXPECT_EQ(imgservice->create_image_file(image_config_path.c_str(), ""), nullptr);
+    EXPECT_EQ(::access(clash.c_str(), F_OK), 0);
+    ::unlink(clash.c_str());
+}
+
+TEST_F(CreateSnapshotTest, recover_uncommitted_move) {
+    const std::string data0 = "/tmp/overlaybd/data0.lsmt";
+    const std::string moved = data0 + ".moved";
+    create_file_rw(data0.c_str(), "/tmp/overlaybd/index0.lsmt");
+
+    auto len = 1 << 20;
+    ALIGNED_MEM4K(buf, len);
+    for (auto i = 0; i < len; i++)
+        buf[i] = rand() % 256;
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf, len, 0), len);
+    delete imgfile;
+
+    // the layer was moved and sealed, then the process died before updating the config
+    ::unlink(moved.c_str());
+    ASSERT_EQ(::rename(data0.c_str(), moved.c_str()), 0);
+    append_bytes(moved, 4096);
+    write_file(image_config_path + ".snapshot", "{}");
+    write_file(image_config_path + ".snapshot.undo", move_record(data0, moved));
+
+    imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+    EXPECT_EQ(::access(data0.c_str(), F_OK), 0);
+    EXPECT_NE(::access(moved.c_str(), F_OK), 0);
+    EXPECT_NE(::access((image_config_path + ".snapshot").c_str(), F_OK), 0);
+    EXPECT_NE(::access((image_config_path + ".snapshot.undo").c_str(), F_OK), 0);
+
+    ALIGNED_MEM4K(buf0, len);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf0, len, 0), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf0[i], buf[i]);
+    delete imgfile;
+}
+
+TEST_F(CreateSnapshotTest, recover_uncommitted_seal_of_sparse_upper) {
+    const std::string data0 = "/tmp/overlaybd/data0.lsmt";
+    create_file_rw(data0.c_str(), "/tmp/overlaybd/index0.lsmt", true);
+
+    auto len = 1 << 20;
+    ALIGNED_MEM4K(buf, len);
+    for (auto i = 0; i < len; i++)
+        buf[i] = rand() % 256;
+
+    ImageFile *imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf, len, 0), len);
+    auto sparse_size = file_size(data0);
+    delete imgfile;
+
+    // a seal which was never committed appended an index and a trailer
+    append_bytes(data0, 4096);
+    write_file(image_config_path + ".snapshot", "{}");
+    ASSERT_GT(file_size(data0), sparse_size);
+
+    imgfile = imgservice->create_image_file(image_config_path.c_str(), "");
+    EXPECT_NE(imgfile, nullptr);
+    // a sparse layer is cut back to its vsize when it is opened
+    EXPECT_EQ(file_size(data0), sparse_size);
+
+    ALIGNED_MEM4K(buf0, len);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf0, len, 0), len);
+    for (auto i = 0; i < len; i++)
+        EXPECT_EQ(buf0[i], buf[i]);
+    delete imgfile;
 }
 
 int main(int argc, char** argv) {

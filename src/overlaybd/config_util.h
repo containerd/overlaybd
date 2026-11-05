@@ -22,6 +22,7 @@
 #include <rapidjson/pointer.h>
 #include <rapidjson/prettywriter.h>
 
+#include <initializer_list>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -115,6 +116,31 @@ struct is_vector<
            T, std::vector<typename T::value_type, typename T::allocator_type>>::value>::type> {
     static bool const value = true;
 };
+
+enum class FieldType { String, Uint64, Bool };
+
+struct FieldSpec {
+    const char *name;
+    FieldType type;
+};
+
+// the accessors below call RapidJSON getters without a type check, so a mistyped
+// member has to be rejected before it is read
+inline bool HasValidFields(Value &obj, std::initializer_list<FieldSpec> fields) {
+    if (!obj.IsObject())
+        return false;
+    for (auto &f : fields) {
+        if (!obj.HasMember(f.name))
+            continue;
+        auto &v = obj[f.name];
+        bool ok = f.type == FieldType::String   ? v.IsString()
+                  : f.type == FieldType::Uint64 ? v.IsUint64()
+                                                : v.IsBool();
+        if (!ok)
+            return false;
+    }
+    return true;
+}
 
 template <typename T, size_t N>
 T GetResult(Document *j, const char (&path)[N], const T &default_value) {
