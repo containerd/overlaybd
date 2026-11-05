@@ -113,6 +113,196 @@ TEST_F(FileTest, reject_oversized_rw_index) {
 
 void lookup_test(IMemoryIndex &idx);
 
+static void check_mapped_page(const std::string &path, off_t offset, const char *expected) {
+    if (::sysconf(_SC_PAGESIZE) != ALIGNMENT4K)
+        return;
+    int fd = ::open(path.c_str(), O_RDONLY);
+    ASSERT_GE(fd, 0);
+    DEFER(::close(fd));
+    void *page = ::mmap(nullptr, ALIGNMENT4K, PROT_READ, MAP_SHARED, fd, offset);
+    ASSERT_NE(MAP_FAILED, page);
+    EXPECT_EQ(0, memcmp(page, expected, ALIGNMENT4K));
+    EXPECT_EQ(0, ::munmap(page, ALIGNMENT4K));
+}
+
+static void check_compact_layout(IFileRW *rw, IFile *dest, bool warp,
+                                 const std::string &path) {
+    SegmentMapping extents[] = {{1, 1, 0}, {3, 1, 0}, {4, 1, 0}, {6, 1, 0},
+                                {8, 1, 0}, {12, 3, 0}, {17, 80, 0}};
+    extents[2].discard();
+    extents[5].discard();
+    vector<char> expected(104 * ALIGNMENT, 0);
+    for (size_t i = 0; i < LEN(extents); ++i) {
+        auto &m = extents[i];
+        auto size = m.length * ALIGNMENT;
+        auto offset = m.offset * ALIGNMENT;
+        if (m.zeroed) {
+            ASSERT_EQ(0, rw->fallocate(3, offset, size));
+        } else {
+            for (size_t j = 0; j < size; ++j)
+                expected[offset + j] = (char)(1 + (i * 37 + j / ALIGNMENT + j % 251) % 255);
+            ASSERT_EQ((ssize_t)size, rw->pwrite(expected.data() + offset, size, offset));
+        }
+    }
+    ASSERT_EQ(0, rw->commit(CommitArgs(dest)));
+    ALIGNED_MEM4K(trailer, HeaderTrailer::SPACE);
+    auto end = dest->lseek(0, SEEK_END);
+    ASSERT_EQ((ssize_t)HeaderTrailer::SPACE,
+              dest->pread(trailer, HeaderTrailer::SPACE, end - HeaderTrailer::SPACE));
+    auto ht = (HeaderTrailer *)trailer;
+    vector<SegmentMapping> index(ht->index_size);
+    auto bytes = index.size() * sizeof(SegmentMapping);
+    ASSERT_EQ((ssize_t)bytes, dest->pread(index.data(), bytes, ht->index_offset));
+    size_t n = 0;
+    for (auto &m : index) {
+        if (m.offset == Segment::INVALID_OFFSET)
+            continue;
+        ASSERT_LT(n, LEN(extents));
+        EXPECT_EQ(extents[n].offset + 0, m.offset + 0);
+        EXPECT_EQ(extents[n].length + 0, m.length + 0);
+        EXPECT_EQ(extents[n].zeroed + 0, m.zeroed + 0);
+        // Every logical page in this fixture contains data. Same-page fragments
+        // must share a physical page, while holes acquire no index entries.
+        if (!m.zeroed)
+            EXPECT_EQ(HeaderTrailer::SPACE / ALIGNMENT + m.offset, m.moffset + 0);
+        ++n;
+    }
+    EXPECT_EQ(LEN(extents), n);
+    EXPECT_EQ(HeaderTrailer::SPACE + expected.size(), ht->index_offset + 0);
+    vector<char> actual(expected.size());
+    ASSERT_EQ((ssize_t)actual.size(), dest->pread(actual.data(), actual.size(), HeaderTrailer::SPACE));
+    EXPECT_EQ(expected, actual);
+    check_mapped_page(path, HeaderTrailer::SPACE + 3 * ALIGNMENT4K,
+                      expected.data() + 3 * ALIGNMENT4K);
+    // There are no remote extents; the warp reader still requires a target.
+    unique_ptr<IFileRO> ro(warp ? open_warpfile_ro(dest, dest, false)
+                              : LSMT::open_file_ro(dest, false));
+    ASSERT_NE(nullptr, ro);
+    ASSERT_EQ((ssize_t)actual.size(), ro->pread(actual.data(), actual.size(), 0));
+    EXPECT_EQ(expected, actual);
+}
+
+TEST_F(FileTest, compact_page_offsets) {
+    unique_ptr<IFileRW> rw(create_file_rw());
+    unique_ptr<IFile> dest(lfs->open(layer_name.back().c_str(),
+                                   O_RDWR | O_CREAT | O_TRUNC, S_IRWXU));
+    ASSERT_NE(nullptr, rw);
+    ASSERT_NE(nullptr, dest);
+    check_compact_layout(rw.get(), dest.get(), false, "/tmp/" + layer_name.back());
+}
+
+class CountingCompactFile : public photon::fs::ForwardFile_Ownership {
+public:
+    vector<size_t> reads, writes;
+    explicit CountingCompactFile(IFile *file) : ForwardFile_Ownership(file, true) {}
+    ssize_t pread(void *buf, size_t count, off_t offset) override {
+        reads.push_back(count);
+        return m_file->pread(buf, count, offset);
+    }
+    ssize_t write(const void *buf, size_t count) override {
+        writes.push_back(count);
+        return m_file->write(buf, count);
+    }
+};
+
+TEST_F(FileTest, compact_page_batched_io) {
+    for (uint64_t logical : {0, 1}) {
+        name_next_layer();
+        auto src = lfs->open(data_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+        auto dst = lfs->open(layer_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+        ASSERT_NE(nullptr, src);
+        ASSERT_NE(nullptr, dst);
+        CountingCompactFile source(src), dest(dst);
+        vector<char> input(129 * ALIGNMENT);
+        for (size_t i = 0; i < input.size(); ++i)
+            input[i] = (char)(1 + i % 251);
+        ASSERT_EQ((ssize_t)input.size(), src->pwrite(input.data(), input.size(), 0));
+        vector<char> expected((logical ? 17 : 16) * ALIGNMENT4K, 0);
+        ASSERT_EQ((ssize_t)HeaderTrailer::SPACE, dest.write(expected.data(), HeaderTrailer::SPACE));
+        dest.writes.clear();
+        vector<IFile *> files{&source};
+        SegmentMapping m{logical, 128, 0};
+        CommitArgs args(&dest);
+        CompactOptions opt(&files, &m, 1, expected.size(), &args);
+        vector<SegmentMapping> index;
+        CompactPageWriter writer(opt, index, HeaderTrailer::SPACE / ALIGNMENT);
+        ASSERT_EQ(0, writer.copy(m));
+        EXPECT_EQ((vector<size_t>{32 * 1024, 32 * 1024}), source.reads);
+        memcpy(expected.data() + logical * ALIGNMENT, input.data(), 128 * ALIGNMENT);
+        if (logical) {
+            auto zero = SegmentMapping(m.end(), 1, 0).discard();
+            ASSERT_EQ(0, writer.copy(zero));
+            SegmentMapping remote{m.end() + 1, 1, 99, (uint8_t)SegmentType::remoteData};
+            index.push_back(remote); // Warp leaves remote mappings untouched.
+            SegmentMapping tail{m.end() + 2, 1, 128};
+            ASSERT_EQ(0, writer.copy(tail));
+            memcpy(expected.data() + tail.offset * ALIGNMENT,
+                   input.data() + tail.moffset * ALIGNMENT, ALIGNMENT);
+            EXPECT_EQ(remote, index[2]);
+            EXPECT_EQ(tail.offset + HeaderTrailer::SPACE / ALIGNMENT, index[3].moffset + 0);
+        }
+        ASSERT_EQ(0, writer.flush());
+        EXPECT_EQ(logical ? 3U : 2U, dest.writes.size());
+        EXPECT_EQ(HeaderTrailer::SPACE + expected.size(), writer.offset() * ALIGNMENT);
+        vector<char> actual(expected.size());
+        ASSERT_EQ((ssize_t)actual.size(), dest.pread(actual.data(), actual.size(), HeaderTrailer::SPACE));
+        EXPECT_EQ(expected, actual);
+    }
+}
+
+TEST_F(FileTest, compact_page_holes_and_flatten) {
+    unique_ptr<IFileRW> lower_rw(create_file_rw());
+    ASSERT_NE(nullptr, lower_rw);
+    vector<char> expected(ALIGNMENT4K, 0x11);
+    ASSERT_EQ((ssize_t)expected.size(), lower_rw->pwrite(expected.data(), expected.size(), 0));
+    unique_ptr<IFile> lower(lfs->open(layer_name.back().c_str(),
+                                    O_RDWR | O_CREAT | O_TRUNC, S_IRWXU));
+    ASSERT_NE(nullptr, lower);
+    ASSERT_EQ(0, lower_rw->commit(CommitArgs(lower.get())));
+
+    unique_ptr<IFileRW> upper_rw(create_file_rw());
+    ASSERT_NE(nullptr, upper_rw);
+    for (auto sector : {1, 3, 6}) {
+        memset(expected.data() + sector * ALIGNMENT, 0x22, ALIGNMENT);
+        ASSERT_EQ((ssize_t)ALIGNMENT,
+                  upper_rw->pwrite(expected.data() + sector * ALIGNMENT, ALIGNMENT,
+                                   sector * ALIGNMENT));
+    }
+    ASSERT_EQ(0, upper_rw->fallocate(3, 4 * ALIGNMENT, ALIGNMENT));
+    memset(expected.data() + 4 * ALIGNMENT, 0, ALIGNMENT);
+    unique_ptr<IFile> upper(lfs->open(layer_name.back().c_str(),
+                                    O_RDWR | O_CREAT | O_TRUNC, S_IRWXU));
+    ASSERT_NE(nullptr, upper);
+    ASSERT_EQ(0, upper_rw->commit(CommitArgs(upper.get())));
+    IFile *layers[] = {lower.get(), upper.get()};
+    unique_ptr<IFileRO> stacked(open_files_ro(layers, LEN(layers), false));
+    ASSERT_NE(nullptr, stacked);
+    vector<char> actual(ALIGNMENT4K);
+    ASSERT_EQ((ssize_t)actual.size(), stacked->pread(actual.data(), actual.size(), 0));
+    EXPECT_EQ(expected, actual); // Padding must not hide the lower layer's sectors.
+
+    name_next_layer();
+    auto path = "/tmp/" + layer_name.back();
+    unique_ptr<IFile> flat(lfs->open(layer_name.back().c_str(),
+                                   O_RDWR | O_CREAT | O_TRUNC, S_IRWXU));
+    ASSERT_NE(nullptr, flat);
+    ASSERT_EQ(0, stacked->flatten(flat.get()));
+    unique_ptr<IFileRO> ro(LSMT::open_file_ro(flat.get(), false));
+    ASSERT_NE(nullptr, ro);
+    ASSERT_EQ((ssize_t)actual.size(), ro->pread(actual.data(), actual.size(), 0));
+    EXPECT_EQ(expected, actual);
+    // All local fragments, including those from different input layers, share
+    // one physical page. The explicit zero sector is physically zero padding.
+    ASSERT_EQ((ssize_t)actual.size(), flat->pread(actual.data(), actual.size(), HeaderTrailer::SPACE));
+    EXPECT_EQ(expected, actual);
+    ALIGNED_MEM4K(trailer, HeaderTrailer::SPACE);
+    auto end = flat->lseek(0, SEEK_END);
+    ASSERT_EQ((ssize_t)HeaderTrailer::SPACE,
+              flat->pread(trailer, HeaderTrailer::SPACE, end - HeaderTrailer::SPACE));
+    EXPECT_EQ(2 * ALIGNMENT4K, ((HeaderTrailer *)trailer)->index_offset + 0);
+    check_mapped_page(path, HeaderTrailer::SPACE, expected.data());
+}
+
 TEST(Index, lookup) {
     const static SegmentMapping mapping[] = {{0, 10, 0}, {10, 10, 50}, {100, 10, 20}};
     Index idx(mapping, LEN(mapping), false);
@@ -1919,6 +2109,15 @@ TEST_F(WarpFileTest, commit) {
     verify_file(file);
     fcheck = nullptr; // delete by warpfile.
     delete file;
+}
+
+TEST_F(WarpFileTest, compact_page_offsets) {
+    unique_ptr<IFileRW> rw(create_warpfile_rw(ut_io_engine));
+    unique_ptr<IFile> dest(lfs->open(layer_name.back().c_str(),
+                                   O_RDWR | O_CREAT | O_TRUNC, S_IRWXU));
+    ASSERT_NE(nullptr, rw);
+    ASSERT_NE(nullptr, dest);
+    check_compact_layout(rw.get(), dest.get(), true, "/tmp/" + layer_name.back());
 }
 
 TEST_F(WarpFileTest, large_lba) {
