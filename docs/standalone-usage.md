@@ -111,6 +111,23 @@ exclusively across the daemon and CLI processes; devices owned by the
 daemon must be deleted through its API (the CLI `del` refuses them). A
 systemd unit template is installed at /opt/overlaybd/overlaybd-ublkd.service.
 
+#### Import a local blob into the managed cache
+
+After publishing an immutable blob to a registry, a local producer can seed the daemon's existing file cache without downloading the same bytes again:
+
+```bash
+BLOB=/absolute/path/to/finalized-blob
+DIGEST=sha256:$(sha256sum "$BLOB" | cut -d ' ' -f 1)
+SIZE=$(stat -c %s "$BLOB")
+curl --unix-socket "$SOCK" -X POST -H 'Content-Type: application/json' \
+  -d "{\"path\":\"$BLOB\",\"url\":\"https://registry.example/v2/repository/blobs/$DIGEST\",\"digest\":\"$DIGEST\",\"size\":$SIZE}" \
+  http://d/v1/cache/import
+```
+
+The source must be a regular file visible in the daemon's mount namespace; the final path component cannot be a symlink. Keep its contents immutable until the request completes. The daemon verifies the positive size and SHA-256 before writing any cache bytes. The URL must be an HTTP(S) registry blob URL ending in `/blobs/<digest>` and should match the URL used by subsequent image reads. This root-only local operation does not publish the blob or authenticate to the registry; publish durable content before importing it.
+
+The endpoint returns `200` on completion, `400` for invalid requests or local content, `409` when the managed file cache is unavailable or another cache type is configured, and `503` if cache population cannot complete. Import is an optional optimization: failures, partial imports, and later eviction retain the normal source-read path. Producers may remove their staging files after the request finishes. Cache imports use the same capacity, LRU eviction, allocation accounting, and free-space protection as downloaded blobs; they do not pin entries or create a separate retained copy. Existing active device and mount lifecycles are unchanged.
+
 ### Notes
 
 * Always unmount filesystems on `/dev/ublkbN` before `del` (or before stopping

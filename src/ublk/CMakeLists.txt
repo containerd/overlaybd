@@ -7,6 +7,7 @@ add_library(ublk_frontend_lib
     cli.cpp
     config_patch.cpp
     ublkd_protocol.cpp
+    cache_import.cpp
     pool_placeholder.cpp
     blkdev_hygiene.cpp
 )

@@ -23,6 +23,7 @@
 #include "ublkd_protocol.h"
 #include "pool_placeholder.h"
 #include "blkdev_hygiene.h"
+#include "cache_import.h"
 
 #include "../image_service.h"
 #include "../image_file.h"
@@ -127,7 +128,9 @@ public:
         int code = 404;
         std::string msg = ublkd_msg_error("unknown endpoint: " + target);
 
-        if (target == "/v1/add" && req.verb() == photon::net::http::Verb::POST) {
+        if (target == "/v1/cache/import" && req.verb() == photon::net::http::Verb::POST) {
+            ublkd_handle_cache_import(service_, body, code, msg);
+        } else if (target == "/v1/add" && req.verb() == photon::net::http::Verb::POST) {
             handle_add(body, code, msg);
         } else if (target == "/v1/del" && req.verb() == photon::net::http::Verb::POST) {
             handle_del(body, code, msg);

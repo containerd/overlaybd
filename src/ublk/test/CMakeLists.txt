@@ -22,3 +22,21 @@ add_test(
     NAME ublk_dispatch_test
     COMMAND ${EXECUTABLE_OUTPUT_PATH}/ublk_dispatch_test
 )
+
+# Exercises the real Photon file cache; no ublk device or privileged kernel
+# operations are needed. Keep assertions enabled in Release test builds.
+add_executable(ublkd_cache_import_test cache_import_test.cpp)
+target_compile_options(ublkd_cache_import_test PRIVATE -UNDEBUG)
+target_link_libraries(ublkd_cache_import_test
+    ublk_frontend_lib
+    photon_static
+    overlaybd_image_lib
+    libublksrv_static
+    ${CURL_LIBRARIES}
+    ${OPENSSL_SSL_LIBRARY}
+    ${OPENSSL_CRYPTO_LIBRARY}
+    ${AIO_LIBRARIES}
+)
+add_test(NAME ublkd_cache_import_test
+    COMMAND ${EXECUTABLE_OUTPUT_PATH}/ublkd_cache_import_test)
+set_tests_properties(ublkd_cache_import_test PROPERTIES TIMEOUT 180)
