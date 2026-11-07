@@ -10,6 +10,7 @@ add_subdirectory(overlaybd)
 add_library(overlaybd_image_lib
   image_file.cpp
   image_service.cpp
+  cache_import.cpp
   switch_file.cpp
   bk_download.cpp
   prefetch.cpp

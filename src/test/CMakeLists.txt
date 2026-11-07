@@ -74,3 +74,25 @@ if (NOT ORIGIN_EXT2FS)
         COMMAND ${EXECUTABLE_OUTPUT_PATH}/resize_test
     )
 endif()
+
+# Exercises the real Photon file cache; no ublk device or privileged kernel
+# operations are needed. Keep assertions enabled in Release test builds.
+# Keep this available with BUILD_UBLK_FRONTEND=OFF: neither ingestion nor its
+# HTTP parsing tests depend on libublksrv or a ublk-capable kernel.
+add_executable(ublkd_cache_import_test
+    ../ublk/test/cache_import_test.cpp
+    ../ublk/cache_import.cpp
+    ../ublk/ublkd_protocol.cpp
+)
+target_compile_options(ublkd_cache_import_test PRIVATE -UNDEBUG)
+target_link_libraries(ublkd_cache_import_test
+    photon_static
+    overlaybd_image_lib
+    ${CURL_LIBRARIES}
+    ${OPENSSL_SSL_LIBRARY}
+    ${OPENSSL_CRYPTO_LIBRARY}
+    ${AIO_LIBRARIES}
+)
+add_test(NAME ublkd_cache_import_test
+    COMMAND ${EXECUTABLE_OUTPUT_PATH}/ublkd_cache_import_test)
+set_tests_properties(ublkd_cache_import_test PROPERTIES TIMEOUT 180)

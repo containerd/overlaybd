@@ -17,6 +17,8 @@
 #pragma once
 
 #include <string>
+#include <atomic>
+#include <cstdint>
 #include "config.h"
 #include "exporter_server.h"
 #include "overlaybd/gzip_cache/cached_fs.h"
@@ -51,11 +53,21 @@ struct ImageAuthResponse : public ConfigUtils::Config {
 struct ImageFile;
 struct ApiServer;
 
+enum class CacheImportStatus { ok, invalid, unsupported, too_large, busy, unavailable };
+struct CacheImportResult {
+    CacheImportStatus status;
+    const char *message;
+};
+
 class ImageService {
 public:
     ImageService(const char *config_path = nullptr);
     ~ImageService();
     int init();
+    // Synchronous best-effort cache seeding. No publication, staging ownership,
+    // or HTTP policy lives here. Partial verified fills remain safe to read.
+    CacheImportResult import_local_blob(const std::string &path, const std::string &url,
+                                        const std::string &digest, int64_t size);
     ImageFile *create_image_file(const char *image_config_path, const std::string &dev_id);
     // bool enable_acceleration(GlobalFs *global_fs, ImageConfigNS::P2PConfig conf);
     bool enable_acceleration();
@@ -71,6 +83,7 @@ public:
     ApiServer *api_server = nullptr;
 
 private:
+    std::atomic_flag m_cache_import_active = ATOMIC_FLAG_INIT;
     int read_global_config_and_set();
     std::pair<std::string, std::string> reload_auth(const char *remote_path);
     void set_result_file(std::string &filename, std::string &data);

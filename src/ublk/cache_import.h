@@ -20,7 +20,6 @@
 
 class ImageService;
 
-// Import a finalized local registry blob through the daemon's managed file
-// cache. The caller must keep the source bytes immutable until this returns.
+// HTTP parsing and status mapping for ImageService::import_local_blob.
 void ublkd_handle_cache_import(ImageService *service, const std::string &body, int &code,
                                std::string &msg);

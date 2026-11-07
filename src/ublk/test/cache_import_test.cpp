@@ -19,6 +19,8 @@
 #include <dirent.h>
 #include <openssl/sha.h>
 #include <vector>
+#include <functional>
+#include <cerrno>
 #include <algorithm>
 #include <ftw.h>
 #include "../../image_service.h"
@@ -27,6 +29,7 @@
 #include <photon/fs/localfs.h>
 #include <photon/fs/forwardfs.h>
 #include <photon/photon.h>
+#include <photon/thread/thread11.h>
 #include <cassert>
 #include <iostream>
 #include <fstream>
@@ -50,6 +53,41 @@ public:
         std::string name(path);
         name = name.substr(name.rfind('/') + 1);
         return m_fs->open(name.c_str(), flags);
+    }
+};
+
+// Deterministic fault boundaries: open happens after full digest validation;
+// each pwrite happens after the corresponding source chunk is revalidated.
+class ImportFaultFile : public photon::fs::ForwardFile_Ownership {
+public:
+    std::function<void()> after_first;
+    bool fail_second;
+    int writes = 0;
+    ImportFaultFile(photon::fs::IFile *file, std::function<void()> hook, bool fail)
+        : ForwardFile_Ownership(file, true), after_first(hook), fail_second(fail) {}
+    ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+        if (++writes == 2 && fail_second) {
+            errno = EIO;
+            return -1;
+        }
+        auto n = m_file->pwrite(buf, count, offset);
+        if (writes == 1 && after_first) after_first();
+        return n;
+    }
+};
+
+class ImportFaultFS : public photon::fs::ForwardFS_Ownership {
+public:
+    std::function<void()> on_open, after_first;
+    bool fail_second = false;
+    explicit ImportFaultFS(photon::fs::IFileSystem *fs) : ForwardFS_Ownership(fs, false) {}
+    photon::fs::IFile *open(const char *path, int flags, mode_t) override {
+        return open(path, flags);
+    }
+    photon::fs::IFile *open(const char *path, int flags) override {
+        if (on_open) on_open();
+        auto file = m_fs->open(path, flags);
+        return file ? new ImportFaultFile(file, after_first, fail_second) : nullptr;
     }
 };
 
@@ -161,6 +199,94 @@ int main() {
         assert(import(service, source + "/" + bad, first, small) == 400);
         assert(file->pread(bytes.data(), small, 0) == (ssize_t)small && bytes[0] == 42);
         std::cout << "PASS digest mismatch rejected before cache writes" << std::endl;
+        // P2P actually using srcfs bypasses these cached bytes: never report a
+        // successful warmup for that read path. Oversized requests are bounded.
+        service.global_fs.remote_fs = src;
+        assert(import(service, source + "/" + first, first, small) == 409);
+        service.global_fs.remote_fs = nullptr;
+        assert(import(service, source + "/" + first, first,
+                      64ULL * 1024 * 1024 * 1024 + 1) == 413);
+        {
+            ImportFaultFS fault(cache);
+            service.global_fs.cached_fs = &fault;
+            const auto staged = source + "/staged";
+            auto prepare = [&](unsigned char tag) {
+                auto digest = make_blob(source, small, tag);
+                std::ifstream in(source + "/" + digest, std::ios::binary);
+                std::ofstream out(staged, std::ios::binary);
+                out << in.rdbuf();
+                return digest;
+            };
+            auto overwrite = [&](off_t offset) {
+                int fd = ::open(staged.c_str(), O_WRONLY);
+                assert(fd >= 0);
+                unsigned char changed = 255;
+                assert(::pwrite(fd, &changed, 1, offset) == 1);
+                assert(::close(fd) == 0);
+            };
+            auto read_back = [&](const std::string &digest, unsigned char tag,
+                                 bool has_prefix = false) {
+                auto name = "https://registry.test/v2/repo/blobs/" + digest;
+                std::unique_ptr<photon::fs::IFile> reader(cache->open(name.c_str(), O_RDONLY));
+                std::vector<unsigned char> data(small);
+                assert(reader);
+                if (has_prefix) {
+                    int opens = src->opens;
+                    assert(reader->pread(data.data(), 256 * 1024, 0) == 256 * 1024);
+                    for (size_t i = 0; i < 256 * 1024; ++i) assert(data[i] == tag);
+                    assert(src->opens == opens);
+                }
+                assert(reader->pread(data.data(), small, 0) == (ssize_t)small);
+                for (auto b : data) assert(b == tag);
+            };
+            // An overlapping request is rejected without waiting. The outer
+            // request and a subsequent retry must both remain usable.
+            auto concurrent = prepare(80);
+            fault.on_open = [&] {
+                auto contender = photon::thread_create11([&] {
+                    assert(import(service, staged, concurrent, small) == 429);
+                });
+                assert(contender);
+                photon::thread_join(photon::thread_enable_join(contender));
+            };
+            assert(import(service, staged, concurrent, small) == 200);
+            fault.on_open = nullptr;
+            assert(import(service, staged, concurrent, small) == 200);
+            read_back(concurrent, 80);
+
+            // Mutation exactly between the two passes must publish no corrupt
+            // bytes. A separately preserved remote blob supplies cache misses.
+            auto changed = prepare(81);
+            fault.on_open = [&] { overwrite(0); };
+            assert(import(service, staged, changed, small) == 400);
+            fault.on_open = nullptr;
+            read_back(changed, 81);
+
+            // Mutation after a verified prefix has been filled must leave that
+            // prefix safe and allow the untouched source to refill the suffix.
+            auto partial = prepare(82);
+            fault.after_first = [&] { overwrite(256 * 1024); };
+            assert(import(service, staged, partial, small) == 400);
+            fault.after_first = nullptr;
+            read_back(partial, 82, true);
+
+            auto truncated = prepare(83);
+            fault.after_first = [&] { assert(::truncate(staged.c_str(), 0) == 0); };
+            assert(import(service, staged, truncated, small) == 400);
+            fault.after_first = nullptr;
+            read_back(truncated, 83, true);
+
+            auto interrupted = prepare(84);
+            fault.fail_second = true;
+            assert(import(service, staged, interrupted, small) == 503);
+            fault.fail_second = false;
+            read_back(interrupted, 84, true);
+            assert(import(service, staged, interrupted, small) == 200);
+            service.global_fs.cached_fs = cache;
+            assert(::unlink(staged.c_str()) == 0);
+        }
+        std::cout << "PASS admission, source mutation, truncation and write failure fallback"
+                  << std::endl;
         // Drop the reader so normal LRU can reclaim this oldest entry.
         file.reset();
         for (int n = 0; n < 12; ++n) {
@@ -181,7 +307,7 @@ int main() {
             if (entry->d_name[0] == '.')
                 continue;
             struct stat entryStat;
-            assert(::stat((media + "/" + entry->d_name).c_str(), &entryStat) == 0);
+            assert(::stat((media + "/" + std::string(entry->d_name)).c_str(), &entryStat) == 0);
             used += entryStat.st_blocks * 512;
         }
         ::closedir(dir);
