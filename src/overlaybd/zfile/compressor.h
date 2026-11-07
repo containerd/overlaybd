@@ -61,6 +61,7 @@ public:
     CompressOptions opt;
     bool overwrite_header;
     int workers;
+    bool compress_index = false; // opt in; does not change the on-disk CompressOptions layout
 
     CompressArgs(const CompressOptions &opt, photon::fs::IFile *dict = nullptr,
                  unsigned char *dict_buf = nullptr, bool overwrite_header = false, int workers = 1)
