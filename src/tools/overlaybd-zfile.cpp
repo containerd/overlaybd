@@ -80,6 +80,7 @@ int main(int argc, char **argv) {
     std::string algorithm;
     int block_size;
     bool verbose = false;
+    bool compress_index = false;
 
     CLI::App app{"this is a zfile tool to create/extract zfile"};
     app.add_flag("-t", tar, "wrapper with tar")->default_val(false);
@@ -97,6 +98,7 @@ int main(int argc, char **argv) {
         ->required();
     app.add_option("target_file", fn_dst, "target file path")->type_name("FILEPATH");
     app.add_flag("--verbose", verbose, "output debug info")->default_val(false);
+    app.add_flag("--compress-index", compress_index, "compress the index when it saves space");
     CLI11_PARSE(app, argc, argv);
 
     set_log_output_level(verbose ? 0 : 1);
@@ -154,6 +156,7 @@ int main(int argc, char **argv) {
     }
     int ret = 0;
     CompressArgs args(opt);
+    args.compress_index = compress_index;
     if (!extract) {
         printf("compress file %s as %s\n", fn_src.c_str(), fn_dst.c_str());
         IFile *infile = (!pipe ? lfs->open(fn_src.c_str(), O_RDONLY) : new_streamFile() );
