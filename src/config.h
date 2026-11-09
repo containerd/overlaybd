@@ -116,6 +116,7 @@ struct P2PConfig : public ConfigUtils::Config {
     APPCFG_CLASS
 
     APPCFG_PARA(enable, bool, false);
+    APPCFG_PARA(cacheFirst, bool, false);
     APPCFG_PARA(address, std::string, "http://localhost:9731/accelerator");
 };
 
@@ -211,6 +212,11 @@ struct GlobalConfig : public ConfigUtils::Config {
     APPCFG_PARA(certConfig, CertConfig);
     APPCFG_PARA(userAgent, std::string, OVERLAYBD_VERSION);
     APPCFG_PARA(serviceConfig, ServiceConfig);
+
+    std::string effectiveCacheType() {
+        auto type = cacheConfig().cacheType();
+        return type.empty() ? cacheType() : type;
+    }
 };
 
 struct AuthConfig : public ConfigUtils::Config {

@@ -126,11 +126,30 @@ curl --unix-socket "$SOCK" -X POST -H 'Content-Type: application/json' \
 
 The source must be a regular file visible in the daemon's mount namespace; the final path component cannot be a symlink. Keep its contents immutable until the request completes. The daemon verifies the positive size and SHA-256 before writing any cache bytes, then verifies each reread chunk against the first pass before publishing it. In-place mutation cannot publish unchecked bytes; an error may leave an already verified prefix in cache. The URL must be an HTTP(S) registry blob URL ending in `/blobs/<digest>` and should match the URL used by subsequent image reads. This root-only local operation does not publish the blob or authenticate to the registry; publish durable content before importing it.
 
-The endpoint returns `200` on completion, `400` for invalid requests or local content, `409` when the managed file cache is unavailable or another cache type is configured, `413` for blobs above 64 GiB, `429` while another import is active, and `503` if cache population cannot complete. A P2P read path that bypasses the managed cache at admission also returns `409`; later read-path changes are not serialized with imports.
+The endpoint returns `200` on completion, `400` for invalid requests or local content, `409` when the managed file cache is unavailable or another cache type is configured, `413` for blobs above 64 GiB, `429` while another import is active, and `503` if cache population cannot complete. Both `cacheConfig.cacheType: "file"` and the legacy top-level `cacheType: "file"` are supported; an omitted or empty nested type falls back to the top-level type, whose default is `file`.
 
 Imports are synchronous, with one active import per ImageService and no waiting queue. Disconnecting the HTTP client does not cancel an admitted import; wait for completion or retry with backoff on `429`. Local file reads are synchronous and yield between 256 KiB chunks, so slow local storage can still delay daemon work. Integrity proofs use at most 8 MiB plus a 256 KiB data buffer per active import. A `200` means all writes were accepted, not that bytes are pinned, durable across crashes, or guaranteed resident after return.
 
 Import is an optional optimization: failures, partial imports, and later eviction retain the normal source-read path. Producers may remove their staging files after the request finishes. Cache imports use the same capacity, LRU eviction, allocation accounting, and free-space protection as downloaded blobs; they do not pin entries or create a separate retained copy. The ingestion API belongs to ImageService and is available independently of the ublk HTTP adapter. Registry publication, readiness checks, retries, staging cleanup and Fast Sandbox orchestration remain the producer's responsibility. Existing active device and mount lifecycles are unchanged.
+
+#### Local cache first with P2P
+
+To use imported blobs while P2P is enabled, opt into `p2pConfig.cacheFirst` in the daemon's service configuration:
+
+```json
+{
+  "cacheConfig": {"cacheType": "file"},
+  "p2pConfig": {
+    "enable": true,
+    "address": "http://127.0.0.1:9731/accelerator",
+    "cacheFirst": true
+  }
+}
+```
+
+In this mode, image reads always enter the managed file cache. Cached ranges are served locally; missing or evicted ranges are fetched through RegistryFS using the selected P2P accelerator and refill the same cache. Imports may run before the first image is created. Selecting or rechecking acceleration during image creation does not bypass the cache. If the accelerator availability check fails, RegistryFS uses the registry directly while keeping the local cache in front; this does not add per-request failover for accelerator failures after selection.
+
+`cacheFirst` defaults to `false`, preserving the existing P2P cache-bypass behavior, and requires the effective cache type to be `file`. When P2P is enabled without `cacheFirst`, imports return `409` even before the first image selects a read path: a later successful P2P probe could otherwise bypass the imported data. Set `cacheFirst: true` to combine P2P with imports, or disable P2P to use the ordinary file-cache path. Cache-first mode also caches data downloaded through P2P, so a P2P service with its own disk cache may retain a second local copy. Existing cache capacity and eviction policies still apply.
 
 ### Notes
 

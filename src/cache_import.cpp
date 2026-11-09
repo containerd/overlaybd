@@ -58,8 +58,13 @@ CacheImportResult ImageService::import_local_blob(const std::string &path,
     if (m_cache_import_active.test_and_set())
         return {CacheImportStatus::busy, "another local blob import is active; retry later"};
     DEFER(m_cache_import_active.clear());
-    if (global_conf.cacheConfig().cacheType() != "file" || !global_fs.cached_fs)
+    if (global_conf.effectiveCacheType() != "file" || !global_fs.cached_fs)
         return {CacheImportStatus::unsupported, "local import requires the managed file cache"};
+    // Decide from policy even before the first image selects remote_fs. A
+    // successful later P2P probe must not silently bypass an admitted warmup.
+    auto p2p = global_conf.p2pConfig();
+    if (p2p.enable() && !p2p.cacheFirst())
+        return {CacheImportStatus::unsupported, "local import with P2P requires p2pConfig.cacheFirst"};
     if (global_fs.remote_fs && global_fs.remote_fs != global_fs.cached_fs)
         return {CacheImportStatus::unsupported, "active remote read path bypasses the managed cache"};
     int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);

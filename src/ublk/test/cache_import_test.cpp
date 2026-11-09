@@ -155,6 +155,22 @@ int main() {
         auto first = make_blob(source, small, 42);
         assert(import(service, source + "/" + first, first, small) == 200);
         assert(src->opens == 0);
+        // Admission must resolve the same cache type as ImageService::init.
+        for (const auto &config : {"{}", "{\"cacheType\":\"file\"}",
+                                  "{\"cacheType\":\"file\",\"cacheConfig\":{\"cacheType\":\"\"}}",
+                                  "{\"cacheType\":\"ocf\",\"cacheConfig\":{\"cacheType\":\"file\"}}"}) {
+            std::ofstream(configPath) << config;
+            assert(service.global_conf.ParseJSON(configPath));
+            assert(import(service, source + "/" + first, first, small) == 200);
+        }
+        for (const auto &config : {"{\"cacheType\":\"ocf\"}",
+                                  "{\"cacheType\":\"file\",\"cacheConfig\":{\"cacheType\":\"download\"}}"}) {
+            std::ofstream(configPath) << config;
+            assert(service.global_conf.ParseJSON(configPath));
+            assert(import(service, source + "/" + first, first, small) == 409);
+        }
+        std::ofstream(configPath) << "{\"cacheConfig\":{\"cacheType\":\"file\"}}";
+        assert(service.global_conf.ParseJSON(configPath));
         // Reject invalid requests before touching the managed cache.
         int status = 0;
         std::string message;

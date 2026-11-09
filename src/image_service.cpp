@@ -406,14 +406,12 @@ int ImageService::init() {
         return -1;
     }
 
-    std::string cache_type, cache_dir;
+    std::string cache_type = global_conf.effectiveCacheType(), cache_dir;
     uint32_t cache_size_GB, refill_size, block_size;
     if (global_conf.cacheConfig().cacheType().empty()) {
-        cache_type = global_conf.cacheType();
         cache_dir = global_conf.registryCacheDir();
         cache_size_GB = global_conf.registryCacheSizeGB();
     } else {
-        cache_type = global_conf.cacheConfig().cacheType();
         cache_dir = global_conf.cacheConfig().cacheDir();
         cache_size_GB = global_conf.cacheConfig().cacheSizeGB();
     }
@@ -422,6 +420,9 @@ int ImageService::init() {
 
     if (cache_type != "file" && cache_type != "ocf" && cache_type != "download") {
         LOG_ERROR_RETURN(0, -1, "unknown cache type: `", cache_type);
+    }
+    if (global_conf.p2pConfig().cacheFirst() && cache_type != "file") {
+        LOG_ERROR_RETURN(0, -1, "p2pConfig.cacheFirst requires the file cache");
     }
     LOG_INFO("cache config: ", VALUE(cache_type), VALUE(cache_dir),
                                VALUE(cache_size_GB), VALUE(refill_size));
@@ -559,7 +560,8 @@ bool ImageService::enable_acceleration() {
     auto conf = global_conf.p2pConfig();
     if (conf.enable() && check_accelerate_url(conf.address())) {
         ((RegistryFS*)global_fs.underlay_registryfs)->setAccelerateAddress(conf.address().c_str());
-        global_fs.remote_fs = global_fs.srcfs;
+        // Cache misses still use srcfs, whose RegistryFS now targets P2P.
+        global_fs.remote_fs = conf.cacheFirst() ? global_fs.cached_fs : global_fs.srcfs;
         return true;
     } else {
         ((RegistryFS*)(global_fs.underlay_registryfs))->setAccelerateAddress();

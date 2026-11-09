@@ -228,6 +228,7 @@ Default configure file `overlaybd.json` is installed to `/etc/overlaybd/`.
 | download.maxMBps    | The speed limit in MB/s for a downloading task.                                                       |
 | download.blockSize  | The download block size from source, in byte. `262144` is default (256 KB).                           |
 | p2pConfig.enable    | Whether p2p proxy is enabled or not.                                                                  |
+| p2pConfig.cacheFirst | Serve reads from the managed file cache before fetching misses through P2P. Defaults to `false` (the existing P2P cache bypass); requires the effective cache type to be `file`. See [local cache first with P2P](docs/standalone-usage.md#local-cache-first-with-p2p). |
 | p2pConfig.address   | The proxy for p2p download, the format is `localhost:<P2PConfig.Port>/<P2PConfig.APIKey>`, depending on dadip2p.yaml |
 | exporterConfig.enable         | whether or not create a server to show Prometheus metrics.                                  |
 | exporterConfig.uriPrefix      | URI prefix for export metrics.                                                              |

@@ -96,3 +96,12 @@ target_link_libraries(ublkd_cache_import_test
 add_test(NAME ublkd_cache_import_test
     COMMAND ${EXECUTABLE_OUTPUT_PATH}/ublkd_cache_import_test)
 set_tests_properties(ublkd_cache_import_test PROPERTIES TIMEOUT 180)
+
+# Exercises actual RegistryFS requests through a loopback P2P accelerator.
+add_executable(p2p_cache_test p2p_cache_test.cpp)
+target_compile_options(p2p_cache_test PRIVATE -UNDEBUG)
+target_link_libraries(p2p_cache_test
+    photon_static overlaybd_image_lib ${CURL_LIBRARIES}
+    ${OPENSSL_SSL_LIBRARY} ${OPENSSL_CRYPTO_LIBRARY} ${AIO_LIBRARIES})
+add_test(NAME p2p_cache_test COMMAND ${EXECUTABLE_OUTPUT_PATH}/p2p_cache_test)
+set_tests_properties(p2p_cache_test PROPERTIES TIMEOUT 120)
