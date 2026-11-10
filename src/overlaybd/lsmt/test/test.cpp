@@ -24,6 +24,8 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 */
 #include "lsmt-filetest.h"
 #include "photon/fs/localfs.h"
+#include <photon/fs/aligned-file.h>
+#include <photon/fs/extfs/extfs.h>
 #include <photon/fs/forwardfs.h>
 #include <fcntl.h>
 #include <thread>
@@ -33,6 +35,7 @@ IMemoryIndex -> IMemoryIndex0 -> IComboIndex -> Index0 ( set<SegmentMap> ) -> Co
 #include <sys/types.h>
 #include <unistd.h>
 #include <string.h>
+#include <atomic>
 
 #define USE_PTH true // use pthread
 
@@ -1035,8 +1038,8 @@ TEST_F(HybridFileTest, restack_switches_data_file_mode) {
     delete file;
 }
 
-// Hybrid writers hold no m_rw_mtx, so their data writes overlap, while an append-only
-// layer still serializes them. Every thread writes its own disjoint 4K blocks.
+// Hybrid and append writers share the read lock on m_lsmt_rwlock, so their data
+// writes overlap. Every thread writes its own disjoint 4K blocks.
 TEST_F(HybridFileTest, concurrent_writes) {
     const int NTHREADS = 16;
     const uint32_t BLOCK = 4096 / ALIGNMENT;
@@ -1076,7 +1079,13 @@ TEST_F(HybridFileTest, concurrent_writes) {
         auto max_inflight = fdata->max_inflight;
         delete file;
         if (type == RWType::Append) {
-            EXPECT_EQ(1, max_inflight);
+            // append writers run concurrently; data_size is taken after the first
+            // round, the index file holds the records of both rounds
+            EXPECT_GT(max_inflight, 1);
+            EXPECT_EQ((ssize_t)(HeaderTrailer::SPACE + MAX_IMAGE_SIZE), data_size);
+            EXPECT_EQ((ssize_t)(HeaderTrailer::SPACE +
+                                2 * NTHREADS * NWRITES * sizeof(SegmentMapping)),
+                      file_size(lfs, idx_name.back().c_str()));
             continue;
         }
         EXPECT_GT(max_inflight, 1);
@@ -1103,6 +1112,77 @@ TEST_F(HybridFileTest, concurrent_writes) {
         ASSERT_NE(nullptr, reopened);
         verify(reopened);
         delete reopened;
+    }
+}
+
+// Writers keep appending while a restack seals the current layer. Every write that
+// returned success must stay readable afterwards, no matter which side of the
+// restack it landed on.
+TEST_F(HybridFileTest, restack_keeps_concurrent_writes) {
+    const int NTHREADS = 8;
+    const int NWRITES = 64;
+    const size_t BLOCK = 4096;
+
+    for (auto type : {RWType::Append, RWType::Hybrid}) {
+        // restack needs a backing index, so stack the writable layer on a sealed one
+        auto lower_rw = create_file_rw();
+        ASSERT_NE(nullptr, lower_rw);
+        IFileRO *lower = nullptr;
+        ASSERT_EQ(0, lower_rw->close_seal(&lower));
+        delete lower_rw;
+
+        auto writer = create_file_rw(type);
+        ASSERT_NE(nullptr, writer);
+        auto file = stack_files(writer, lower, true, false);
+        ASSERT_NE(nullptr, file);
+        auto upper = create_file_rw(type);
+        ASSERT_NE(nullptr, upper);
+
+        std::vector<std::atomic<int>> acked((size_t)NTHREADS * NWRITES);
+        for (auto &a : acked)
+            a.store(0);
+        std::atomic<int> errors{0};
+        std::atomic<bool> stop{false};
+        std::vector<photon::join_handle *> threads;
+        for (int t = 0; t < NTHREADS; t++) {
+            threads.push_back(photon::thread_enable_join(photon::thread_create11([&, t] {
+                ALIGNED_MEM4K(buf, BLOCK);
+                memset(buf, t + 1, BLOCK);
+                while (!stop.load()) {
+                    for (int j = 0; j < NWRITES; j++) {
+                        off_t off = ((off_t)j * NTHREADS + t) * BLOCK;
+                        if (file->pwrite(buf, BLOCK, off) != (ssize_t)BLOCK) {
+                            errors++;
+                            return;
+                        }
+                        acked[(size_t)j * NTHREADS + t].store(t + 1);
+                        photon::thread_yield();
+                    }
+                }
+            })));
+        }
+
+        // let the writers enter the write path before the seal starts
+        for (int i = 0; i < 8; i++)
+            photon::thread_yield();
+        ASSERT_EQ(0, file->restack(upper)) << rw_type_name(type);
+        stop = true;
+        for (auto th : threads)
+            photon::thread_join(th);
+        EXPECT_EQ(0, errors.load());
+
+        ALIGNED_MEM4K(rbuf, BLOCK);
+        for (int i = 0; i < NTHREADS * NWRITES; i++) {
+            int want = acked[i].load();
+            if (want == 0)
+                continue;
+            ASSERT_EQ((ssize_t)BLOCK, file->pread(rbuf, BLOCK, (off_t)i * BLOCK))
+                << rw_type_name(type) << " block " << i;
+            for (size_t k = 0; k < BLOCK; k++)
+                ASSERT_EQ((char)want, rbuf[k])
+                    << rw_type_name(type) << " block " << i << " byte " << k;
+        }
+        delete file;
     }
 }
 
@@ -2028,6 +2108,31 @@ TEST_F(WarpFileTest, commit_with_uuid) {
     LOG_INFO("uuid after commit is `", uu);
     EXPECT_FALSE(uu_commit.is_null());
     EXPECT_EQ(uu, uu_commit);
+}
+
+TEST_F(FileTest2, resize_with_filesystem) {
+    auto rw = create_file_rw();
+    ASSERT_NE(rw, nullptr);
+
+    auto aligned = photon::fs::new_aligned_file_adaptor(rw, LSMT::ALIGNMENT4K, true, false);
+    ASSERT_NE(aligned, nullptr);
+    ASSERT_EQ(0, photon::fs::make_extfs(aligned));
+    delete aligned;
+
+    struct stat st;
+    ASSERT_EQ(0, rw->fstat(&st));
+    ASSERT_EQ((off_t)vsize, st.st_size);
+
+    const uint64_t target = vsize * 2;
+    ASSERT_EQ(0, rw->resize(target, true));
+    ASSERT_EQ(0, rw->fstat(&st));
+    ASSERT_EQ((off_t)target, st.st_size);
+
+    ASSERT_EQ(0, rw->resize(vsize, true));
+    ASSERT_EQ(0, rw->fstat(&st));
+    ASSERT_EQ((off_t)vsize, st.st_size);
+
+    delete rw;
 }
 
 int main(int argc, char **argv) {

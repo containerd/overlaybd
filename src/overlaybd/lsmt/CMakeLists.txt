@@ -5,6 +5,19 @@ target_include_directories(lsmt_lib PUBLIC
     ${PHOTON_INCLUDE_DIR}
 )
 
+# file.cpp calls photon::fs::resize_extfs(), which needs resize_fs() from the
+# e2fsprogs resize objects. Pass them as link items to every lsmt_lib consumer:
+# a link item is always included, while a member of this static library would
+# only be pulled in when already referenced.
+if (NOT ORIGIN_EXT2FS)
+    target_link_libraries(lsmt_lib INTERFACE
+        ${E2FS_RESIZE_DIR}/resize2fs.o
+        ${E2FS_RESIZE_DIR}/extent.o
+        ${E2FS_RESIZE_DIR}/resource_track.o
+        ${E2FS_LIBRARIES})
+    add_dependencies(lsmt_lib libext2fs_build)
+endif()
+
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
   option(OVERLAYBD_DISABLE_SVE "Force-disable LSMT SVE acceleration" OFF)
   include(CheckCXXSourceCompiles)
