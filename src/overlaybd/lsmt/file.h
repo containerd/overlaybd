@@ -102,8 +102,11 @@ public:
         return this->ioctl(Set_Data_File_Direct_IO, (int)direct);
     }
 
-    // update vsize for current rw layer
-    virtual int update_vsize(size_t vsize) = 0;
+    // Resize the current rw layer, optionally resizing the filesystem on it.
+    virtual int resize(uint64_t target_size, bool resize_fs = false) {
+        errno = ENOSYS;
+        return -1;
+    }
 
     // commit the written content as a new file, without garbages
     // return 0 for success, -1 otherwise

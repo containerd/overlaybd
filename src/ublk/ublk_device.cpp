@@ -895,7 +895,8 @@ int UblkDevice::resize(uint64_t new_size_bytes, bool resize_fs, std::string &err
         err = "kernel lacks UBLK_F_UPDATE_SIZE (mainline >= 6.11 required)";
         return -2;
     }
-    // image layer first (and ext4 if asked): on failure nothing changed
+    // image layer first (and ext4 if asked); a failed ext4 grow keeps the new
+    // vsize in the layer, so the resize must be retried
     if (file_->resize(new_size_bytes, resize_fs) != 0) {
         err = "image resize failed (see the overlaybd log)";
         return -1;

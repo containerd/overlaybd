@@ -42,9 +42,6 @@
 #include "overlaybd/gzip/gz.h"
 #include "overlaybd/gzindex/gzfile.h"
 #include "overlaybd/tar/tar_file.h"
-#ifdef PHOTON_ENABLE_RESIZE
-#include <photon/fs/extfs/extfs.h>
-#endif
 
 #define PARALLEL_LOAD_INDEX 32
 using namespace photon::fs;
@@ -1051,65 +1048,6 @@ int ImageFile::resize(uint64_t target_size, bool resize_fs) {
     if (read_only) {
         LOG_ERROR_RETURN(EROFS, -1, "cannot resize a read-only image (no upper layer)");
     }
-    // a size that is not a multiple of the device block would leave a
-    // truncated tail block
-    uint32_t align = LSMT::ALIGNMENT4K;
-    if (target_size % align != 0) {
-        LOG_ERROR_RETURN(EINVAL, -1, "target size must be ` aligned, got `", align, target_size);
-    }
-
     auto rw = (LSMT::IFileRW *)m_file;
-    struct stat st;
-    if (m_file->fstat(&st) != 0) {
-         LOG_ERRNO_RETURN(0, -1, "fstat failed");
-    }
-    uint64_t current = (uint64_t)st.st_size;
-
-    if (target_size == current && !resize_fs) {
-        LOG_INFO("vsize already equals target (` bytes), nothing to do", target_size);
-        return 0;
-    }
-
-    if (target_size > current) {
-        // Expand: grow block device first, then filesystem
-        if (rw->update_vsize(target_size) != 0) {
-            LOG_ERROR_RETURN(0, -1, "failed to update vsize for expand");
-        }
-    }
-
-    if (resize_fs) {
-#ifdef PHOTON_ENABLE_RESIZE
-        auto aligned = new_aligned_file_adaptor(m_file, LSMT::ALIGNMENT4K, true, false);
-        if (aligned == nullptr) {
-            LOG_ERROR_RETURN(0, -1, "failed to create 4K aligned adaptor for resize");
-        }
-        DEFER(delete aligned);
-        if (photon::fs::resize_extfs(aligned, target_size, 0) != 0) {
-            if (target_size >= current) {
-                LOG_ERROR("resize_extfs failed. "
-                          "Re-run to retry or use e2fsck to recover.");
-            } else {
-                LOG_ERROR("resize_extfs failed during shrink.");
-            }
-            return -1;
-        }
-#else
-        LOG_ERROR_RETURN(ENOSYS, -1, "resize_fs not supported (built without PHOTON_ENABLE_RESIZE)");
-#endif
-    }
-
-    if (target_size < current) {
-        // Shrink: shrinking without resizing the filesystem is unsafe.
-         if (!resize_fs) {
-             LOG_ERROR_RETURN(EINVAL, -1, "cannot shrink without resizing filesystem");
-         }
-        // Shrink: update vsize after filesystem is shrunk
-        if (rw->update_vsize(target_size) != 0) {
-            LOG_ERROR("filesystem resized but failed to update vsize. Re-run to retry.");
-            return -1;
-        }
-    }
-
-    LOG_INFO("resize done: ` -> ` bytes", current, target_size);
-    return 0;
+    return rw->resize(target_size, resize_fs);
 }

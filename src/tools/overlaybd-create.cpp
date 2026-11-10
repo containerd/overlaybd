@@ -76,6 +76,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "-s and --hybrid cannot be used together\n");
         return -1;
     }
+    if (vsize == 0) {
+        fprintf(stderr, "virtual size must be greater than 0\n");
+        return -1;
+    }
 
     build_turboOCI = build_turboOCI || build_fastoci;
 
