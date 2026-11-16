@@ -344,6 +344,9 @@ int UnTar::extract_regfile(const char *filename) {
 int UnTar::extract_hardlink(const char *filename) {
     // a hardlink target is a path inside the target fs, unlike a symlink target
     char *linkname = get_linkname();
+    if (linkname == nullptr)
+        LOG_ERROR_RETURN(ENOMEM, -1, "failed to read link target, filename `", filename);
+    linkname = clean_name(linkname);
     if (!photon::fs::path_level_valid(linkname)) {
         LOG_ERROR_RETURN(EINVAL, -1, "link target ` climbs above the extraction root", linkname);
     }
@@ -357,6 +360,8 @@ int UnTar::extract_hardlink(const char *filename) {
 
 int UnTar::extract_symlink(const char *filename) {
     char *linktgt = get_linkname();
+    if (linktgt == nullptr)
+        LOG_ERROR_RETURN(ENOMEM, -1, "failed to read link target, filename `", filename);
     LOG_DEBUG("  ==> extracting: ` (symlink to `)", filename, linktgt);
     if (fs->symlink(linktgt, filename) == -1) {
         LOG_ERRNO_RETURN(0, -1, "symlink failed, filename `, linktgt `", filename, linktgt);

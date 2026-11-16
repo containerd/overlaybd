@@ -118,11 +118,14 @@ char *TarCore::get_pathname() {
     return clean_name(th_pathname);
 }
 
+// Returns the entry's link target exactly as the archive records it. A symlink
+// target is opaque data to the filesystem, so it must not be rewritten; a
+// hardlink target names another entry and is cleaned by its caller.
 char *TarCore::get_linkname() {
     if (pax && pax->linkpath)
-        return clean_name(pax->linkpath);
+        return pax->linkpath;
     if (header.gnu_longlink)
-        return clean_name(header.gnu_longlink);
+        return header.gnu_longlink;
 
     if (th_linkname == nullptr) {
         th_linkname = (char *)malloc(MAXPATHLEN * sizeof(char));
@@ -131,7 +134,7 @@ char *TarCore::get_linkname() {
     }
 
     snprintf(th_linkname, MAXPATHLEN, "%.100s", header.linkname);
-    return clean_name(th_linkname);
+    return th_linkname;
 }
 
 size_t TarCore::get_size() {
