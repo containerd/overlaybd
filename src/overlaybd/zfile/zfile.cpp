@@ -51,6 +51,9 @@ uint64_t zfile_blk_cnt = 0;
 namespace ZFile {
 
 const static size_t BUF_SIZE = 512;
+// A stored block may expand during compression and also includes its checksum.
+// Use the same overhead allowance as the writer, including for 64KiB raw blocks.
+const static size_t MAX_COMPRESSED_BLOCK_SIZE = MAX_READ_SIZE + BUF_SIZE;
 const static uint64_t MAX_ZFILE_INDEX_SIZE = 1000000000;
 const static uint32_t NOI_WELL_KNOWN_PRIME = 100007;
 const static uint8_t FLAG_VALID_FALSE = 0;
@@ -225,7 +228,7 @@ public:
             size_t min_blksize = (enable_crc ? sizeof(uint32_t) : 0);
             for (ssize_t i = 1; i < (ssize_t)n + 1; i++) {
                 // The stored length includes the CRC and must fit in BlockReader's buffer.
-                if (ibuf[i - 1] <= min_blksize || ibuf[i - 1] > MAX_READ_SIZE) {
+                if (ibuf[i - 1] <= min_blksize || ibuf[i - 1] > MAX_COMPRESSED_BLOCK_SIZE) {
                     LOG_ERRNO_RETURN(EIO, -1, "unexpected block size(id: `):", i - 1, ibuf[i - 1]);
                 }
                 raw_offset += ibuf[i - 1];
@@ -310,7 +313,7 @@ public:
         }
 
         int read_blocks(size_t begin, size_t end) {
-            auto read_size = std::min(MAX_READ_SIZE, get_blocks_length(begin, end));
+            auto read_size = std::min(sizeof(m_buf), get_blocks_length(begin, end));
             auto begin_offset = m_zfile->m_jump_table[begin];
             auto readn = m_zfile->m_file->pread(m_buf, read_size, begin_offset);
             if (readn != (ssize_t)read_size) {
@@ -461,7 +464,7 @@ public:
         uint8_t m_verify = 0;
         uint32_t m_block_size = 0;
         uint8_t m_eno = 0;
-        unsigned char m_buf[MAX_READ_SIZE]; //{};
+        unsigned char m_buf[MAX_COMPRESSED_BLOCK_SIZE]; //{};
     };
 
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
