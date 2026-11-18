@@ -636,6 +636,58 @@ TEST_F(TarTest, layer_names_rooted) {
     check_layer_names("/");
 }
 
+TEST_F(TarTest, untar_keeps_symlink_targets) {
+    // Symlink targets are opaque strings: `readlink` must return them byte
+    // for byte, whether the target is in the ustar header, a GNU long link,
+    // or a PAX `linkpath` record. Hardlink targets name another entry, so a
+    // hardlink written through an unclean path still resolves.
+    std::string long_target = "version https://git-lfs.github.com/spec/v1/" + std::string(100, 'x') + "/";
+    std::vector<std::pair<std::string, std::string>> links = {
+        {"double_slash", "/usr/share/zoneinfo//UTC"},
+        {"trailing_slash", "../../array_api_compat/"},
+        {"leading_dot", "./node_modules/.bin/tsc"},
+        {"dot_dot_inside", "/opt/a/../b"},
+        {"not_a_path", "version https://git-lfs.github.com/spec/v1"},
+        {"long_target", long_target},
+    };
+    std::string src = workdir + "/symlinks_src";
+    std::string cmd = "rm -rf " + src + " && mkdir -p " + src + " && echo data > " + src + "/file";
+    for (auto &link : links) {
+        cmd += " && ln -s '" + link.second + "' " + src + "/" + link.first;
+    }
+    ASSERT_EQ(0, system(cmd.c_str()));
+    for (auto format : {"gnu", "pax"}) {
+        std::string tarname = std::string("symlinks_") + format + ".tar";
+        // tar records the hardlink's target as `./file`, which only resolves
+        // once cleaned.
+        cmd = "cd " + src + " && ln -f file hardlink && tar --format=" + format + " -cf " + workdir + "/" +
+              tarname + " ./file ./hardlink $(ls | grep -v -e '^file$' -e '^hardlink$')";
+        ASSERT_EQ(0, system(cmd.c_str()));
+        auto tarf = fs->open(tarname.c_str(), O_RDONLY, 0666);
+        ASSERT_NE(nullptr, tarf);
+        DEFER(delete tarf);
+        std::string rootfs = std::string("symlinks_rootfs_") + format;
+        ASSERT_EQ(0, system(("rm -rf " + workdir + "/" + rootfs).c_str()));
+        ASSERT_EQ(0, fs->mkdir(rootfs.c_str(), 0755));
+        auto target = photon::fs::new_subfs(fs, rootfs.c_str(), false);
+        ASSERT_NE(nullptr, target);
+        DEFER(delete target);
+        auto tar = new UnTar(tarf, target, 0);
+        DEFER(delete tar);
+        ASSERT_EQ(0, tar->extract_all());
+        for (auto &link : links) {
+            char buf[512] = {0};
+            auto len = target->readlink(link.first.c_str(), buf, sizeof(buf) - 1);
+            ASSERT_EQ((ssize_t)link.second.size(), len) << format << " " << link.first;
+            EXPECT_EQ(link.second, std::string(buf, len)) << format << " " << link.first;
+        }
+        struct stat file_stat, hardlink_stat;
+        ASSERT_EQ(0, target->lstat("file", &file_stat));
+        ASSERT_EQ(0, target->lstat("hardlink", &hardlink_stat));
+        EXPECT_EQ(file_stat.st_ino, hardlink_stat.st_ino) << format;
+    }
+}
+
 TEST(CleanNameTest, clean_name) {
     char name[256] = {0};
     char *cname;
