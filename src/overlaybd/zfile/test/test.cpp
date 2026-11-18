@@ -29,6 +29,7 @@
 #include "../zfile.cpp"
 #include "../compressor.cpp"
 #include <memory>
+#include <random>
 
 #include <string>
 #include <fstream>
@@ -612,8 +613,9 @@ TEST_F(ZFileTest, index_compression_checks_stored_block_limit) {
         for (bool compressed : {false, true}) {
             for (bool overwrite : {false, true}) {
                 for (bool verify : {false, true}) {
-                    for (uint32_t length : {uint32_t(MAX_READ_SIZE - 1), uint32_t(MAX_READ_SIZE),
-                                            uint32_t(MAX_READ_SIZE + 1), uint32_t(MAX_READ_SIZE + 4)}) {
+                    for (uint32_t length : {uint32_t(MAX_READ_SIZE), uint32_t(MAX_READ_SIZE + 4),
+                                            uint32_t(MAX_COMPRESSED_BLOCK_SIZE),
+                                            uint32_t(MAX_COMPRESSED_BLOCK_SIZE + 1)}) {
                         SCOPED_TRACE(::testing::Message() << "algo=" << int(algo)
                             << " compressed=" << compressed << " overwrite=" << overwrite
                             << " verify=" << verify << " length=" << length);
@@ -635,7 +637,66 @@ TEST_F(ZFileTest, index_compression_checks_stored_block_limit) {
                         auto ht = (CompressionFile::HeaderTrailer *)builder.m_ht;
                         ASSERT_EQ(ht->is_index_compressed(), compressed);
                         CompressionFile::JumpTable table;
-                        EXPECT_EQ(load_jump_table(dst.get(), nullptr, table), length <= MAX_READ_SIZE);
+                        EXPECT_EQ(load_jump_table(dst.get(), nullptr, table), length <= MAX_COMPRESSED_BLOCK_SIZE);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(ZFileTest, incompressible_64k_round_trip) {
+    std::vector<unsigned char> data(3 * MAX_READ_SIZE + 12345);
+    std::mt19937 random(20261117);
+    for (auto &byte : data)
+        byte = random() & 0xff;
+    // Exercise both expanded and small stored blocks in the same read buffer.
+    std::fill(data.begin() + 2 * MAX_READ_SIZE, data.begin() + 3 * MAX_READ_SIZE, 0);
+    auto src = unique_ptr<IFile>(lfs->open("incompressible-64k.data", O_CREAT | O_TRUNC | O_RDWR, 0600));
+    ASSERT_NE(src, nullptr);
+    DEFER(lfs->unlink("incompressible-64k.data"););
+    ASSERT_EQ(src->write(data.data(), data.size()), (ssize_t)data.size());
+    for (auto algo : {CompressOptions::LZ4, CompressOptions::ZSTD}) {
+        for (bool verify : {false, true}) {
+            for (bool compress_index : {false, true}) {
+                for (bool use_builder : {false, true}) {
+                    SCOPED_TRACE(::testing::Message() << "algo=" << int(algo)
+                        << " verify=" << verify << " compress_index=" << compress_index
+                        << " use_builder=" << use_builder);
+                    auto dst = unique_ptr<IFile>(lfs->open("incompressible-64k.zfile", O_CREAT | O_TRUNC | O_RDWR, 0600));
+                    ASSERT_NE(dst, nullptr);
+                    DEFER(lfs->unlink("incompressible-64k.zfile"););
+                    CompressArgs args{CompressOptions(algo, MAX_READ_SIZE, verify)};
+                    args.compress_index = compress_index;
+                    if (use_builder) {
+                        auto builder = unique_ptr<IFile>(new_zfile_builder(dst.get(), &args, false));
+                        ASSERT_NE(builder, nullptr);
+                        ASSERT_EQ(builder->write(data.data(), data.size()), (ssize_t)data.size());
+                        ASSERT_EQ(builder->close(), 0);
+                    } else {
+                        ASSERT_EQ(src->lseek(0, SEEK_SET), 0);
+                        ASSERT_EQ(zfile_compress(src.get(), dst.get(), &args), 0);
+                    }
+                    CompressionFile::JumpTable table;
+                    ASSERT_TRUE(load_jump_table(dst.get(), nullptr, table));
+                    ASSERT_GT(table[1] - table[0], MAX_READ_SIZE);
+                    auto decoded = unique_ptr<IFile>(zfile_open_ro(dst.get(), true, false));
+                    ASSERT_NE(decoded, nullptr);
+                    auto check = [&](size_t offset, size_t count) {
+                        std::vector<unsigned char> actual(count, 0x5a);
+                        auto expected = std::min(count, data.size() - offset);
+                        ASSERT_EQ(decoded->pread(actual.data(), count, offset), (ssize_t)expected);
+                        EXPECT_TRUE(std::equal(actual.begin(), actual.begin() + expected, data.begin() + offset));
+                        EXPECT_TRUE(std::all_of(actual.begin() + expected, actual.end(),
+                                               [](unsigned char byte) { return byte == 0x5a; }));
+                    };
+                    check(0, data.size());
+                    check(MAX_READ_SIZE - 7, MAX_READ_SIZE + 37);
+                    check(2 * MAX_READ_SIZE - 1, MAX_READ_SIZE + 2);
+                    check(3 * MAX_READ_SIZE, MAX_READ_SIZE);
+                    check(data.size(), 4096);
+                    if (verify) {
+                        EXPECT_EQ(zfile_validation_check(dst.get()), 0);
                     }
                 }
             }
