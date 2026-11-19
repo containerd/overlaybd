@@ -93,6 +93,7 @@ public:
     static const int Index_Group_Commit = 10;
     static const int RemoteData = 11;
     static const int Set_Data_File_Direct_IO = 13;
+    static const int Set_Append_Only = 14;
 
     int set_index_group_commit(size_t buffer_size) {
         return this->ioctl(Index_Group_Commit, buffer_size);
@@ -102,8 +103,15 @@ public:
         return this->ioctl(Set_Data_File_Direct_IO, (int)direct);
     }
 
-    // update vsize for current rw layer
-    virtual int update_vsize(size_t vsize) = 0;
+    int set_append_only(bool append_only) {
+        return this->ioctl(Set_Append_Only, (int)append_only);
+    }
+
+    // Resize the current rw layer, optionally resizing the filesystem on it.
+    virtual int resize(uint64_t target_size, bool resize_fs = false) {
+        errno = ENOSYS;
+        return -1;
+    }
 
     // commit the written content as a new file, without garbages
     // return 0 for success, -1 otherwise

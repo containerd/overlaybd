@@ -33,10 +33,15 @@ limitations under the License.
 #include "photon/common/uuid.h"
 #include "photon/fs/filesystem.h"
 #include "photon/fs/fiemap.h"
+#include "photon/fs/forwardfs.h"
 #include "photon/fs/virtual-file.h"
 #include <photon/common/alog.h>
 #include <photon/common/utility.h>
 #include <photon/thread/thread.h>
+#include <photon/fs/aligned-file.h>
+#ifdef PHOTON_ENABLE_RESIZE
+#include <photon/fs/extfs/extfs.h>
+#endif
 
 #define PARALLEL_LOAD_INDEX 32
 
@@ -214,7 +219,6 @@ static int merge_files_ro(vector<IFile *> files, const CommitArgs &args);
 static LSMTReadOnlyFile *open_file_ro(IFile *file, bool ownership, bool reserve_tag);
 static HeaderTrailer *verify_ht(IFile *file, char *buf, bool is_trailer = false,
                                 ssize_t st_size = -1);
-
 
 static const int ABORT_FLAG_DETECTED = -2;
 
@@ -718,7 +722,6 @@ public:
         return file->filesystem();
     }
 
-    UNIMPLEMENTED(int update_vsize(size_t vsize) override);
     UNIMPLEMENTED(int close_seal(IFileRO **reopen_as = nullptr) override);
 
     // It can commit a RO file after close_seal()
@@ -752,7 +755,10 @@ public:
     }
 
     virtual ssize_t seek_data(off_t begin, off_t end, vector<Segment> &segs) override {
-
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
         begin /= ALIGNMENT;
         end /= ALIGNMENT;
         photon::scoped_rwlock ilock(m_index_rwlock, photon::RLOCK);
@@ -898,22 +904,26 @@ private:
 
 class LSMTFile : public LSMTReadOnlyFile {
 public:
-    typedef photon::mutex Mutex;
-    typedef photon::scoped_lock Lock;
-
     atomic_uint64_t m_compacted_idx_size; // count of compacted raw-index
 
     bool m_init_concurrency = false;
     bool m_data_file_direct_io = false;
-    // append position (in bytes) of the data file of a hybrid layer
+    bool m_append_only = false;
+    // append position (in bytes) of the data file of a hybrid layer or an append layer
     atomic<uint64_t> m_data_offset{HeaderTrailer::SPACE};
 
     uint8_t m_rw_tag = 0;
     RWType m_rw_type = RWType::Append;
 
-    // lock order: m_rw_mtx, the IndexLog mutex, m_index_rwlock. close_seal() and
-    // restack() expect the caller to have stopped all I/O on this file.
-    Mutex m_rw_mtx;
+    // Protects the structure and metadata of the stacked LSMTFile: m_files,
+    // m_rw_tag, m_rw_type, m_log, m_vsize, m_data_offset, m_data_file_direct_io.
+    // Operations that change these states (restack, resize, close_seal) take the
+    // write lock. Operations that only modify the data file or index without
+    // changing the LSMT structure or metadata (pwrite, discard, zero_range)
+    // take the read lock and run concurrently.
+    // Lock order: m_lsmt_rwlock -> IndexLog::m_mtx -> m_index_rwlock.
+    mutable photon::rwlock m_lsmt_rwlock;
+    photon::mutex m_append_mtx;
     IndexLog *m_log = nullptr;
 
     LSMTFile() {
@@ -933,10 +943,11 @@ public:
 
     ~LSMTFile() {
         LOG_DEBUG(" ~LSMTFile()");
-        if (close() != 0)
+        if (do_close() != 0)
             safe_delete(m_log);
     }
 
+    // fstat() calls this while holding m_lsmt_rwlock; do not take the lock here
     virtual IFile *front_file() override {
         if (m_files[m_rw_tag]) {
             return m_files[m_rw_tag];
@@ -945,6 +956,16 @@ public:
     }
 
     virtual int fstat(struct stat *buf) override {
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::RLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
+        return do_fstat(buf);
+    }
+
+    // lock-free, the caller should hold m_lsmt_rwlock by itself
+    int do_fstat(struct stat *buf) {
         return LSMTReadOnlyFile::fstat(buf);
     }
 
@@ -985,11 +1006,28 @@ public:
         if (request == GetType)
             return LSMTReadOnlyFile::vioctl(request, args);
         if (request == Set_Data_File_Direct_IO) {
+            // take the write lock so this update cannot race an in-flight write
+            photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::WLOCK);
+            if (m_index == nullptr) {
+                errno = EBADF;
+                return -1;
+            }
             m_data_file_direct_io = va_arg(args, int) != 0;
             if (m_data_file_direct_io) {
                 auto offset = m_data_offset.load();
                 m_data_offset.store((offset + ALIGNMENT4K - 1) / ALIGNMENT4K * ALIGNMENT4K);
             }
+            return 0;
+        }
+        if (request == Set_Append_Only) {
+            photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::WLOCK);
+            if (m_index == nullptr) {
+                errno = EBADF;
+                return -1;
+            }
+            if (m_rw_type != RWType::Append)
+                LOG_ERROR_RETURN(EINVAL, -1, "append only is only supported for append layers");
+            m_append_only = va_arg(args, int) != 0;
             return 0;
         }
         if (request != Index_Group_Commit)
@@ -1008,27 +1046,26 @@ public:
     }
 
     virtual int close() override {
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::WLOCK);
+        return do_close();
+    }
+
+    // the caller holds m_lsmt_rwlock; close_seal() already owns it
+    virtual int do_close() {
+        if (m_index == nullptr && m_log == nullptr)
+            return 0;
         LOG_DEBUG("ownership:`, m_log:`", m_file_ownership, m_log);
         if (flush_index_log() != 0)
             return -1;
         safe_delete(m_log);
         return LSMTReadOnlyFile::close();
     }
-    // returns appended offset when success, 0 otherwise
-    static off_t append(IFile *file, const void *buf, size_t count) {
-        off_t pos = file->lseek(0, SEEK_END);
-        if (pos < 0)
-            LOG_ERRNO_RETURN(0, 0, "seek to end failed, file:`", file);
-        // Positioned writes keep alignment adaptors in the I/O path.
-        ssize_t ret = file->pwrite(buf, count, pos);
-        if (ret < (ssize_t)count) {
-            LOG_ERRNO_RETURN(0, 0, "write failed, file:`, ret:`, pos:`, count:`", file, ret, pos,
-                             count);
-        }
-        return pos;
-    }
-
     virtual ssize_t pread(void *buf, size_t count, off_t offset) override {
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::RLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
         return LSMTReadOnlyFile::pread(buf, count, offset);
     }
 
@@ -1036,8 +1073,76 @@ public:
         return commit_mapping(m, [&] {
             photon::scoped_rwlock ilock(m_index_rwlock, photon::WLOCK);
             rw_index()->insert(m);
-            m_vsize = max(m_vsize, (uint64_t)m.end() * ALIGNMENT);
         });
+    }
+
+    // the caller holds m_lsmt_rwlock; returns 0 on success
+    int pad_for_direct_io(const void *buf, size_t count, const char *&src, size_t &padded,
+                          unique_ptr<char, decltype(&free)> &tail) {
+        src = (const char *)buf;
+        // Direct extents use whole 4K blocks so concurrent appends never enter the
+        // alignment adaptor's read-modify-write and stale-size truncate path.
+        padded = m_data_file_direct_io
+                     ? (size_t)((count + ALIGNMENT4K - 1) / ALIGNMENT4K * ALIGNMENT4K)
+                     : count;
+        if (padded != count) {
+            tail.reset((char *)aligned_alloc(ALIGNMENT4K, padded));
+            if (!tail)
+                LOG_ERRNO_RETURN(ENOMEM, -1, "failed to allocate ` bytes", padded);
+            memcpy(tail.get(), src, count);
+            memset(tail.get() + count, 0, padded - count);
+            src = tail.get();
+        }
+        return 0;
+    }
+
+    // the caller holds m_lsmt_rwlock; returns 0 on success
+    int parallelized_append(const void *buf, size_t count, uint64_t offset_in_blocks,
+                            uint8_t tag) {
+        SegmentMapping m(offset_in_blocks, (uint32_t)(count / ALIGNMENT), 0);
+        const char *src = nullptr;
+        size_t padded = 0;
+        unique_ptr<char, decltype(&free)> tail(nullptr, &free);
+        if (pad_for_direct_io(buf, count, src, padded, tail) != 0)
+            return -1;
+        auto pos = m_data_offset.fetch_add(padded);
+        auto written = m_files[m_rw_tag]->pwrite(src, padded, pos);
+        if (written != (ssize_t)padded)
+            LOG_ERRNO_RETURN(0, -1, "append data failed, file:`, ret:`, pos:`, count:`",
+                             m_files[m_rw_tag], written, pos, padded);
+        m.moffset = pos / ALIGNMENT;
+        m.tag = tag;
+        return commit_mapping(m, [&] { index_insert(m); });
+    }
+
+    // the caller holds m_lsmt_rwlock; serialized by m_append_mtx
+    int serialized_append(const void *buf, size_t count, uint64_t offset_in_blocks,
+                          uint8_t tag) {
+        SegmentMapping m(offset_in_blocks, (uint32_t)(count / ALIGNMENT), 0);
+        const char *src = nullptr;
+        size_t padded = 0;
+        unique_ptr<char, decltype(&free)> tail(nullptr, &free);
+        if (pad_for_direct_io(buf, count, src, padded, tail) != 0)
+            return -1;
+        photon::scoped_lock lock(m_append_mtx);
+        auto file = m_files[m_rw_tag];
+        auto pos = file->lseek(0, SEEK_END);
+        if (pos < 0)
+            LOG_ERRNO_RETURN(0, -1, "seek to end failed, file:`", file);
+        if (m_data_file_direct_io && (pos % ALIGNMENT4K) != 0) {
+            auto aligned = (pos + ALIGNMENT4K - 1) / ALIGNMENT4K * ALIGNMENT4K;
+            if (file->ftruncate(aligned) != 0)
+                LOG_ERRNO_RETURN(0, -1, "failed to align EOF to 4K, file:`, pos:`", file, pos);
+            pos = aligned;
+        }
+        auto written = file->pwrite(src, padded, pos);
+        if (written != (ssize_t)padded)
+            LOG_ERRNO_RETURN(0, -1, "append data failed, file:`, ret:`, pos:`, count:`",
+                             file, written, pos, padded);
+        m.moffset = pos / ALIGNMENT;
+        m.tag = tag;
+        m_data_offset.store(pos + padded);
+        return commit_mapping(m, [&] { index_insert(m); });
     }
 
     virtual ssize_t pwritev(const struct iovec *iov, int iovcnt, off_t offset) override {
@@ -1045,12 +1150,23 @@ public:
     }
 
     virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+        // restack() and resize() take the write side, so every writer waits here
+        // while the layer stack, the layer type or m_vsize changes
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::RLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
         return do_pwrite(buf, count, offset);
     }
 
-    ssize_t do_pwrite(const void *buf, size_t count, off_t offset) {
+    // lock-free, the caller should hold m_lsmt_rwlock by itself
+    virtual ssize_t do_pwrite(const void *buf, size_t count, off_t offset) {
         LOG_DEBUG("{offset:`,length:`}", offset, count);
         CHECK_ALIGNMENT(count, offset);
+        if (offset < 0 || (uint64_t)offset > m_vsize || count > m_vsize - (uint64_t)offset)
+            LOG_ERROR_RETURN(EINVAL, -1, "write beyond virtual size: offset:`, len:`, vsize:`",
+                             offset, count, m_vsize);
         auto bytes = count;
         while (count > MAX_IO_SIZE) {
             auto ret = do_pwrite(buf, MAX_IO_SIZE, offset);
@@ -1063,15 +1179,10 @@ public:
         if (hybrid())
             return hybrid_pwrite(buf, count, offset) == 0 ? (ssize_t)bytes : -1;
 
-        Lock lock(m_rw_mtx);
-        m_vsize = max(m_vsize, count + offset);
-        SegmentMapping m((uint64_t)offset / ALIGNMENT, (uint32_t)count / ALIGNMENT, 0);
-        auto moffset = append(m_files[m_rw_tag], buf, count);
-        if (moffset == 0)
-            return -1;
-        m.moffset = (uint64_t)moffset / ALIGNMENT;
-        m.tag = m_rw_tag;
-        if (commit_mapping(m, [&] { index_insert(m); }) != 0)
+        int ret = m_append_only
+                      ? serialized_append(buf, count, (uint64_t)offset / ALIGNMENT, m_rw_tag)
+                      : parallelized_append(buf, count, (uint64_t)offset / ALIGNMENT, m_rw_tag);
+        if (ret != 0)
             return -1;
         return bytes;
     }
@@ -1079,7 +1190,8 @@ public:
     // The ranges already mapped by this writable layer are rewritten in place, everything
     // else (holes, zeroed ranges and the ranges of the lower layers) is appended. As in
     // LSMTSparseFile, concurrent writers are not serialized, since the block layer above
-    // never issues overlapping writes concurrently.
+    // never issues overlapping writes concurrently. The caller should hold the read
+    // side of m_lsmt_rwlock, so the tag and the data file cache read here cannot change.
     int hybrid_pwrite(const void *buf, size_t count, off_t offset) {
         auto tag = m_rw_tag;
         auto file = m_files[tag];
@@ -1089,32 +1201,10 @@ public:
             return (const char *)buf + (block - offset_in_blocks) * ALIGNMENT;
         };
         auto append_data = [&](uint64_t begin, uint64_t end) -> int {
-            SegmentMapping m(begin, (uint32_t)(end - begin), 0);
-            auto len = (size_t)m.length * ALIGNMENT;
-            // Direct extents use whole 4K blocks so concurrent appends never enter the
-            // alignment adaptor's read-modify-write and stale-size truncate path.
-            auto padded = m_data_file_direct_io
-                              ? (len + ALIGNMENT4K - 1) / ALIGNMENT4K * ALIGNMENT4K
-                              : len;
-            auto src = data(begin);
-            unique_ptr<char, decltype(&free)> tail(nullptr, &free);
-            if (padded != len) {
-                tail.reset((char *)aligned_alloc(ALIGNMENT4K, padded));
-                if (!tail)
-                    LOG_ERRNO_RETURN(ENOMEM, -1, "failed to allocate ` bytes", padded);
-                memcpy(tail.get(), src, len);
-                memset(tail.get() + len, 0, padded - len);
-                src = tail.get();
-            }
-            auto pos = m_data_offset.fetch_add(padded);
-            auto ret = file->pwrite(src, padded, pos);
-            if (ret != (ssize_t)padded) {
-                LOG_ERRNO_RETURN(0, -1, "append data failed, file:`, ret:`, pos:`, count:`",
-                                 file, ret, pos, padded);
-            }
-            m.moffset = pos / ALIGNMENT;
-            m.tag = tag;
-            return hybrid_insert(m);
+            auto len = (size_t)(end - begin) * ALIGNMENT;
+            return m_append_only
+                       ? serialized_append(data(begin), len, begin, tag)
+                       : parallelized_append(data(begin), len, begin, tag);
         };
 
         uint64_t cursor = offset_in_blocks;
@@ -1206,19 +1296,23 @@ public:
     }
 
     virtual int discard(SegmentMapping &m) {
-        m.tag = m_rw_tag;
-        if (hybrid()) {
-            struct stat st;
-            if (m_files[m_rw_tag]->fstat(&st) != 0)
-                LOG_ERRNO_RETURN(0, -1, "failed to stat hybrid data file");
-            m.moffset = st.st_size / ALIGNMENT;
-            LOG_DEBUG(m);
-            return hybrid_insert(m);
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::RLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
         }
-        Lock rwlock(m_rw_mtx);
+        if ((uint64_t)m.end() * ALIGNMENT > m_vsize)
+            LOG_ERROR_RETURN(EINVAL, -1,
+                             "discard beyond virtual size: offset:`, len:`, vsize:`",
+                             m.offset * ALIGNMENT, m.length * ALIGNMENT, m_vsize);
+        m.tag = m_rw_tag;
         off_t pos = m_files[m_rw_tag]->lseek(0, SEEK_END);
+        if (pos < 0)
+            LOG_ERRNO_RETURN(0, -1, "seek to end failed, file:`", m_files[m_rw_tag]);
         m.moffset = (uint64_t)(pos / ALIGNMENT);
         LOG_DEBUG(m);
+        if (hybrid())
+            return hybrid_insert(m);
         return commit_mapping(m, [&] { index_insert(m); });
     }
 
@@ -1235,7 +1329,9 @@ public:
         return 0;
     }
 
-    virtual int update_vsize(size_t vsize) override {
+    // not part of IFileRW; LSMT-internal (resize and stack_files). The callers
+    // hold m_lsmt_rwlock or run without concurrent IO.
+    virtual int update_vsize(size_t vsize) {
         LOG_INFO("update vsize for LSMTFile ", VALUE(vsize));
         m_vsize = vsize;
         if (update_header_vsize(m_files[m_rw_tag], vsize) < 0) {
@@ -1247,7 +1343,91 @@ public:
         return 0;
     }
 
+    // A view of this layer for resize(), which already holds the write side:
+    // calls here must not take m_lsmt_rwlock again. Everything the extfs io
+    // manager does not use fails with ENOSYS.
+    class LockedView : public photon::fs::VirtualFile {
+    public:
+        explicit LockedView(LSMTFile *owner) : m_owner(owner) {
+        }
+        IFileSystem *filesystem() override {
+            errno = ENOSYS;
+            return nullptr;
+        }
+        ssize_t pread(void *buf, size_t count, off_t offset) override {
+            return m_owner->LSMTReadOnlyFile::pread(buf, count, offset);
+        }
+        ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+            return m_owner->do_pwrite(buf, count, offset);
+        }
+        int fstat(struct stat *buf) override {
+            return m_owner->do_fstat(buf);
+        }
+        UNIMPLEMENTED(int fsync() override);
+        UNIMPLEMENTED(int fdatasync() override);
+        UNIMPLEMENTED(int close() override);
+        UNIMPLEMENTED(int fchmod(mode_t mode) override);
+        UNIMPLEMENTED(int fchown(uid_t owner, gid_t group) override);
+        UNIMPLEMENTED(int ftruncate(off_t length) override);
+
+    private:
+        LSMTFile *m_owner;
+    };
+
+    // Resize the layer under the write side of m_lsmt_rwlock. The filesystem
+    // resize runs through a view that skips the lock. Grow: layer then filesystem;
+    // shrink: filesystem then layer. A failed filesystem grow keeps the new vsize
+    // and headers, so the caller must retry the resize.
+    int resize(uint64_t target_size, bool resize_fs = false) override {
+        if ((target_size % ALIGNMENT4K) != 0)
+            LOG_ERROR_RETURN(EINVAL, -1, "target size must be 4K aligned, got `", target_size);
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::WLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
+        uint64_t current = m_vsize;
+        bool shrinking = target_size < current;
+        if (shrinking && !resize_fs)
+            LOG_ERROR_RETURN(EINVAL, -1, "cannot shrink without resizing filesystem");
+        if (!shrinking && target_size != current && update_vsize(target_size) != 0)
+            LOG_ERROR_RETURN(0, -1, "failed to update vsize for expand");
+        if (resize_fs) {
+            // resize_extfs() uses a process-wide static backend file, so resizes
+            // must not run concurrently; TODO: use a standalone resize tool.
+            static photon::mutex extfs_resize_mtx;
+            photon::scoped_lock extfs_lock(extfs_resize_mtx);
+            LockedView view(this);
+#ifdef PHOTON_ENABLE_RESIZE
+            auto aligned = new_aligned_file_adaptor(&view, ALIGNMENT4K, true, false);
+            if (aligned == nullptr)
+                LOG_ERROR_RETURN(0, -1, "failed to create 4K aligned adaptor for resize");
+            DEFER(delete aligned);
+            if (photon::fs::resize_extfs(aligned, target_size, 0) != 0) {
+                if (!shrinking) {
+                    LOG_ERROR("resize_extfs failed. "
+                              "Re-run to retry or use e2fsck to recover.");
+                } else {
+                    LOG_ERROR("resize_extfs failed during shrink.");
+                }
+                return -1;
+            }
+#else
+            LOG_ERROR_RETURN(ENOSYS, -1,
+                             "resize_fs not supported (built without PHOTON_ENABLE_RESIZE)");
+#endif
+        }
+        if (shrinking && update_vsize(target_size) != 0)
+            LOG_ERROR_RETURN(0, -1, "failed to update vsize");
+        return 0;
+    }
+
     virtual int commit(const CommitArgs &args) const override {
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::RLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
         if (m_files.size() > 1) {
             LOG_ERROR_RETURN(ENOTSUP, -1, "not supported: commit stacked files");
         }
@@ -1267,6 +1447,11 @@ public:
     }
 
     virtual int close_seal(IFileRO **reopen_as = nullptr) override {
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::WLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
         if (flush_index_log() != 0)
             return -1;
         auto m_index0 = (IMemoryIndex0 *)m_index;
@@ -1297,7 +1482,7 @@ public:
                                     HeaderTrailer::SPACE / ALIGNMENT, index_offset / ALIGNMENT);
             if (new_index == nullptr) {
                 LOG_ERROR("create memory index of reopen file failed.");
-                return close();
+                return do_close();
             }
             auto p = new LSMTReadOnlyFile;
             p->m_index = new_index;
@@ -1307,10 +1492,15 @@ public:
             m_file_ownership = false;
             *reopen_as = p;
         }
-        return close();
+        return do_close();
     }
 
     virtual int fsync() override {
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::RLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
         auto commit_ret = flush_index_log();
         if (commit_ret != 0)
             return commit_ret;
@@ -1333,6 +1523,11 @@ public:
     }
 
     virtual DataStat data_stat() const override {
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::RLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return DataStat();
+        }
         struct stat buf;
         auto ret = m_files[m_rw_tag]->fstat(&buf);
         if (ret != 0) {
@@ -1347,6 +1542,11 @@ public:
     }
 
     virtual int flatten(IFile *as) override {
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::RLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
         unique_ptr<IComboIndex> pmi;
         {
             photon::scoped_rwlock ilock(m_index_rwlock, photon::RLOCK);
@@ -1369,8 +1569,11 @@ public:
         IMemoryIndex *new_backing = nullptr;  // new backing index of the combo index
     };
 
-    // the caller holds m_rw_mtx and the WLOCK of m_index_rwlock
+    // the caller holds m_lsmt_rwlock (write side) and the WLOCK of m_index_rwlock
     int prepare_restack(LSMTFile *upper, RestackPlan &plan) {
+        // the upper may have been created before a grow; keep the live size
+        if (upper->m_vsize != m_vsize && upper->update_vsize(m_vsize) != 0)
+            LOG_ERROR_RETURN(0, -1, "failed to sync the upper's vsize");
         /* ==== close_seal the top RW layer and reopen it. ==== */
         auto fseal = (LSMTFile*)open_file_rw(m_files[m_rw_tag], m_log->file(), false);
         if (fseal==nullptr){
@@ -1415,6 +1618,7 @@ public:
         m_vsize = upper->m_vsize;
         m_data_offset = upper->m_data_offset.load();
         m_data_file_direct_io = upper->m_data_file_direct_io;
+        m_append_only = upper->m_append_only;
         ((IComboIndex *)m_index)->apply_commit(plan.new_backing);
         plan.new_backing = nullptr;
         // the new upper takes over writes here, under the same locks as the seal
@@ -1431,7 +1635,13 @@ public:
     }
 
     int restack(IFileRW *upper_layer, const std::function<int()> &commit) override {
-        Lock _(m_rw_mtx);
+        // exclude every writer: the seal, the commit callback and the layer stack
+        // swap below must not interleave with a write transaction
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::WLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
         if (flush_index_log() != 0)
             LOG_ERRNO_RETURN(0, -1, "flush index log before restack failed");
         photon::scoped_rwlock ilock(m_index_rwlock, photon::WLOCK);
@@ -1459,21 +1669,23 @@ public:
         m_filetype = LSMTFileType::SparseRW;
     }
 
-    virtual int close() override {
+    virtual int do_close() override {
+        if (m_index == nullptr && m_log == nullptr)
+            return 0;
         safe_delete(m_log);
-        return LSMTReadOnlyFile::close();
+        return LSMTFile::do_close();
     }
 
-    virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
-        return do_sparse_pwrite(buf, count, offset);
-    }
-
-    ssize_t do_sparse_pwrite(const void *buf, size_t count, off_t offset) {
+    // lock-free, the caller should hold m_lsmt_rwlock by itself
+    ssize_t do_pwrite(const void *buf, size_t count, off_t offset) override {
         LOG_DEBUG("{offset:`,length:`}", offset, count);
         CHECK_ALIGNMENT(count, offset);
-
+        if (offset < 0 || (uint64_t)offset > m_vsize || count > m_vsize - (uint64_t)offset)
+            LOG_ERROR_RETURN(EINVAL, -1, "write beyond virtual size: offset:`, len:`, vsize:`",
+                             offset, count, m_vsize);
+        auto bytes = count;
         while (count > MAX_IO_SIZE) {
-            auto ret = do_sparse_pwrite(buf, MAX_IO_SIZE, offset);
+            auto ret = do_pwrite(buf, MAX_IO_SIZE, offset);
             if (ret < (ssize_t)MAX_IO_SIZE)
                 return -1;
             (char *&)buf += MAX_IO_SIZE;
@@ -1487,21 +1699,27 @@ public:
             (uint64_t)moffset / (uint64_t)ALIGNMENT,
         };
         m.tag = m_rw_tag;
-        ssize_t ret = -1;
-        {
-            ret = m_files[m_rw_tag]->pwrite(buf, count, moffset);
-            if (ret != (ssize_t)count) {
-                LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`",
-                                 m_files[m_rw_tag], ret, moffset, count);
-            }
-            LOG_DEBUG("insert segment: `", m);
-            index_insert(m);
+        auto ret = m_files[m_rw_tag]->pwrite(buf, count, moffset);
+        if (ret != (ssize_t)count) {
+            LOG_ERRNO_RETURN(0, -1, "write failed, file:`, ret:`, pos:`, count:`",
+                             m_files[m_rw_tag], ret, moffset, count);
         }
-        return ret;
+        LOG_DEBUG("insert segment: `", m);
+        index_insert(m);
+        return bytes;
     }
 
     // virtual int discard(off_t offset, off_t len) override
     virtual int discard(SegmentMapping &m) override {
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::RLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
+        if ((uint64_t)m.end() * ALIGNMENT > m_vsize)
+            LOG_ERROR_RETURN(EINVAL, -1,
+                             "discard beyond virtual size: offset:`, len:`, vsize:`",
+                             m.offset * ALIGNMENT, m.length * ALIGNMENT, m_vsize);
         m.moffset = (uint64_t)(m.offset + (HeaderTrailer::SPACE / ALIGNMENT));
         LOG_DEBUG(m);
         index_insert(m);
@@ -1513,6 +1731,16 @@ public:
     // survives a reopen as FIEMAP_EXTENT_UNWRITTEN, instead of turning into a
     // hole that falls through to the lower layers
     int zero_range(off_t offset, off_t len) override {
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::RLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
+        if (offset < 0 || (uint64_t)offset > m_vsize ||
+            (uint64_t)len > m_vsize - (uint64_t)offset)
+            LOG_ERROR_RETURN(EINVAL, -1,
+                             "zero range beyond virtual size: offset:`, len:`, vsize:`",
+                             offset, len, m_vsize);
         auto moffset = BASE_MOFFSET + offset;
         if (m_files[m_rw_tag]->fallocate(FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE, moffset,
                                          len) != 0) {
@@ -1587,7 +1815,9 @@ public:
         return 0;
     }
 
-    virtual int update_vsize(size_t vsize) override {
+    // not part of IFileRW; LSMT-internal (resize and stack_files). The callers
+    // hold m_lsmt_rwlock or run without concurrent IO.
+    int update_vsize(size_t vsize) override {
         LOG_INFO("update vsize for LSMTSparseFile ", VALUE(vsize));
         if ((vsize % ALIGNMENT4K) != 0)
             LOG_ERROR_RETURN(EINVAL, -1, "sparse layer virtual size must be 4K aligned, got `",
@@ -1616,8 +1846,12 @@ public:
         }
     }
 
-    virtual ssize_t pwrite(const void *buf, size_t count, off_t offset) override {
+    // lock-free, the caller should hold m_lsmt_rwlock by itself
+    ssize_t do_pwrite(const void *buf, size_t count, off_t offset) override {
         LOG_DEBUG("write fs meta {offset: `, len: `}", offset, count);
+        if (offset < 0 || (uint64_t)offset > m_vsize || count > m_vsize - (uint64_t)offset)
+            LOG_ERROR_RETURN(EINVAL, -1, "write beyond virtual size: offset:`, len:`, vsize:`",
+                             offset, count, m_vsize);
         auto tag = m_rw_tag + (uint8_t)SegmentType::fsMeta;
         SegmentMapping m{
             (uint64_t)offset / (uint64_t)ALIGNMENT,
@@ -1646,6 +1880,16 @@ public:
         va_end(tmp);
         LOG_DEBUG("RemoteMapping: {offset: `, count: `, roffset: `}", lba.offset, lba.count,
                   lba.roffset);
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::RLOCK);
+        if (m_index == nullptr) {
+            errno = EBADF;
+            return -1;
+        }
+        if (lba.offset < 0 || (uint64_t)lba.offset > m_vsize ||
+            (uint64_t)lba.count > m_vsize - (uint64_t)lba.offset)
+            LOG_ERROR_RETURN(EINVAL, -1,
+                             "remote mapping beyond virtual size: offset:`, len:`, vsize:`",
+                             lba.offset, lba.count, m_vsize);
         size_t nwrite = 0;
         while (lba.count > 0) {
             SegmentMapping m;
@@ -1706,6 +1950,7 @@ public:
     }
 
     int commit(const CommitArgs &args) const override {
+        photon::scoped_rwlock lsmt_lock(m_lsmt_rwlock, photon::RLOCK);
         auto m_index0 = (IMemoryIndex0 *)m_index;
         unique_ptr<SegmentMapping[]> mapping;
         size_t raw_index_size;
@@ -2401,6 +2646,7 @@ IFileRW *stack_files(IFileRW *upper_layer, IFileRO *lower_layers, bool ownership
     rst->m_vsize = u->m_vsize;
     rst->m_data_offset = u->m_data_offset.load();
     rst->m_data_file_direct_io = u->m_data_file_direct_io;
+    rst->m_append_only = u->m_append_only;
     rst->m_file_ownership = ownership;
     rst->m_files.reserve(delta + l->m_files.size());
     rst->m_uuid.reserve(1 + l->m_uuid.size());
