@@ -78,5 +78,5 @@ A failed seal needs no rollback: it only appends, leaving an unreachable index a
 ## Limitations
 
 - Snapshots are not supported with a warpfile upper layer (`upper.target`).
-- With a hybrid or sparse upper, writes do not take the snapshot's write lock, so the caller must pause writes while a snapshot runs.
+- Write paths and snapshots are mutually exclusive through a read-write lock; writes block until the snapshot finishes, so the caller does not need to pause writes.
 - Snapshots on one device are serialized; a running snapshot holds the device's write path.
