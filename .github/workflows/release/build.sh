@@ -33,7 +33,7 @@ if [[ ${OS} =~ "ubuntu" ]]; then
     export TZ="Etc/UTC"
     apt-get update -y
     apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev rpm wget make g++ git dpkg-dev sudo pkg-config
-    apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm libzstd-dev libext2fs-dev zlib1g-dev
+    apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libzstd-dev libext2fs-dev zlib1g-dev
 
     DISTRO=${OS/:/1~}
     PACKAGE_RELEASE="-DPACKAGE_RELEASE=${RELEASE_NO}.${DISTRO}"
@@ -125,6 +125,6 @@ fi
 # Build
 mkdir build
 cd build
-${CMAKE} .. -DOBD_VER="overlaybd/${COMMIT_ID}" -DPACKAGE_VERSION=${PACKAGE_VERSION} -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTING=0 -DENABLE_DSA=0 -DENABLE_ISAL=0 ${PACKAGE_RELEASE} ${COMPILER}
+${CMAKE} .. -DOBD_VER="overlaybd/${COMMIT_ID}" -DPACKAGE_VERSION=${PACKAGE_VERSION} -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTING=0 ${PACKAGE_RELEASE} ${COMPILER}
 make -j8
 ${CPACK} --verbose

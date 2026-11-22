@@ -39,8 +39,6 @@ jobs:
         echo "RELEASE_VERSION=${releasever}" >> $GITHUB_ENV
     - name: Checkout
       uses: actions/checkout@v7
-      with:
-        submodules: true
     - name: Setup buildx instance
       uses: docker/setup-buildx-action@v4
     - name: Build
