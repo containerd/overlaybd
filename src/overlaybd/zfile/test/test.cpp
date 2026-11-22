@@ -285,22 +285,11 @@ TEST_F(ZFileTest, ht_check) {
     EXPECT_EQ(is_zfile(dst), -1);
 }
 
-TEST_F(ZFileTest, dsa) {
-    const int buf_size = 1024;
-    const int crc_count = 3000;
-    int ret = 0;
-
-    for (auto i = 0; i < crc_count; i++) {
-        void *buf = malloc(buf_size);
-        DEFER(free(buf));
-        uint32_t checksum_dsa = crc32::crc32c(buf, buf_size);
-        uint32_t checksum_sse = crc32::testing::crc32c_fast(buf, buf_size, 0);
-        if (checksum_dsa != checksum_sse) {
-            ret = 1;
-        }
-    }
-
-    ASSERT_EQ(ret, 0);
+TEST_F(ZFileTest, legacy_crc32c) {
+    // Legacy metadata and data-block checksums for the same 512 bytes.
+    const char data[512] = "123456789";
+    EXPECT_EQ(0x3aed893fU, zfile_crc32c(data, sizeof(data)));
+    EXPECT_EQ(0x1de869e4U, crc32c_salt(data, sizeof(data)));
 }
 
 TEST_F(ZFileTest, verify_builder) {
@@ -498,7 +487,7 @@ TEST_F(ZFileTest, index_compression_rejects_bad_metadata_and_payload) {
                 auto ht = (CompressionFile::HeaderTrailer *)data;
                 mutate(*ht);
                 ht->digest = 0;
-                ht->digest = crc32::crc32c(data, sizeof(data));
+                ht->digest = zfile_crc32c(data, sizeof(data));
                 ASSERT_EQ(dst->pwrite(data, sizeof(data), metadata_offset), 512);
                 EXPECT_FALSE(load_jump_table(dst.get(), nullptr, table));
             };
@@ -524,7 +513,7 @@ TEST_F(ZFileTest, index_compression_rejects_bad_metadata_and_payload) {
             reject_metadata("wrong index checksum", [](auto &ht) { ht.index_crc ^= 1; });
             reject_metadata("truncated codec stream with valid CRC", [&](auto &ht) {
                 ht.index_size = 1;
-                ht.index_crc = crc32::crc32c(&first_byte, 1);
+                ht.index_crc = zfile_crc32c(&first_byte, 1);
             });
 
             // Metadata integrity must be checked before using any changed fields.
@@ -568,7 +557,7 @@ TEST_F(ZFileTest, index_compression_rejects_inconsistent_raw_index) {
         // The file claims two blocks but the raw index contains only one entry.
         ht->original_file_size = 8192;
         ht->digest = 0;
-        ht->digest = crc32::crc32c(metadata, sizeof(metadata));
+        ht->digest = zfile_crc32c(metadata, sizeof(metadata));
         ASSERT_EQ(dst->pwrite(metadata, sizeof(metadata), metadata_offset), 512);
         EXPECT_FALSE(load_jump_table(dst.get(), nullptr, table));
     }

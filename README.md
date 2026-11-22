@@ -75,7 +75,6 @@ You need git to checkout the source code:
 ```bash
 git clone https://github.com/containerd/overlaybd.git
 cd overlaybd
-git submodule update --init
 ```
 
 The whole project is managed by CMake. Binaries and resource files will be installed to `/opt/overlaybd/`.
@@ -103,18 +102,6 @@ cmake -D ORIGIN_EXT2FS=1 ..
 ```
 
 For more information about `ORIGIN_EXT2FS` go to [USERSPACE_CONVERTOR](https://github.com/containerd/accelerated-container-image/blob/main/docs/USERSPACE_CONVERTOR.md#libext2fs).
-
-If you want to use DSA hardware to accelerate CRC calculation.
-
-```bash
-cmake -D ENABLE_DSA=1 ..
-```
-
-If you want to use avx512 to accelerate CRC calculation.
-
-```bash
-cmake -D ENABLE_ISAL=1 ..
-```
 
 If you want to use QAT to accelerate compression/decompression.However, currently only the decompression part has been integrated. Since LZ4 is already a highly efficient compression algorithm, our tests show that QAT can only outperform the CPU at a 4KB block size and a batch size of 256 when the compression ratio significantly exceeds a threshold.
 

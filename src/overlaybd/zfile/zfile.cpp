@@ -23,13 +23,17 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdint.h>
+#if defined(__linux__) && defined(__aarch64__)
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#endif
+#include <photon/common/checksum/crc32c.h>
 #include <photon/common/utility.h>
 #include <photon/common/uuid.h>
 #include <photon/fs/virtual-file.h>
 #include <photon/fs/forwardfs.h>
 #include <photon/photon.h>
 #include <photon/thread/thread.h>
-#include "crc32/crc32c.h"
 #include "compressor.h"
 #include "lz4/lz4.h"
 #include <zstd.h>
@@ -60,8 +64,24 @@ const static uint8_t FLAG_VALID_FALSE = 0;
 const static uint8_t FLAG_VALID_TRUE = 1;
 const static uint8_t FLAG_VALID_CRC_CHECK = 2;
 
-inline uint32_t crc32c_salt(void *buf, size_t size) {
-    return crc32::crc32c_extend(buf, size, NOI_WELL_KNOWN_PRIME);
+inline uint32_t zfile_crc32c(const void *buf, size_t size, uint32_t seed = 0) {
+    // Photon v0.9.6 checks for CRC instructions, but its large-buffer path also
+    // needs carry-less multiplication. Select the Photon backend once.
+    static const auto compute = [] {
+#if defined(__x86_64__)
+        if (!__builtin_cpu_supports("pclmul"))
+            return crc32c_sw;
+#elif defined(__linux__) && defined(__aarch64__)
+        if (!(getauxval(AT_HWCAP) & HWCAP_PMULL))
+            return crc32c_sw;
+#endif
+        return is_crc32c_hw_available() ? crc32c_hw : crc32c_sw;
+    }();
+    return compute(static_cast<const uint8_t *>(buf), size, seed);
+}
+
+inline uint32_t crc32c_salt(const void *buf, size_t size) {
+    return zfile_crc32c(buf, size, NOI_WELL_KNOWN_PRIME);
 }
 /* ZFile Format:
     | Header (512B) | dict (optional) | compressed block 0 [checksum0] | compressed block 1
@@ -142,7 +162,7 @@ public:
             auto saved_crc = this->digest;
             this->digest = 0;
             DEFER(this->digest = saved_crc;);
-            auto crc = crc32::crc32c(this, CompressionFile::HeaderTrailer::SPACE);
+            auto crc = zfile_crc32c(this, CompressionFile::HeaderTrailer::SPACE);
             LOG_INFO("zfile digest: ` (` expected)", HEX(crc).width(8), HEX(saved_crc).width(8));
             return crc == saved_crc;
         }
@@ -533,7 +553,7 @@ public:
             int retry = 3;
         again:
             if (m_ht.opt.verify) {
-                auto c = crc32c_salt((void *)block.buffer(), block.compressed_size);
+                auto c = crc32c_salt(block.buffer(), block.compressed_size);
                 if (c != block.crc32_code()) {
                     if ((valid == FLAG_VALID_TRUE) && (retry--)) {
                         int reload_res = block.reload();
@@ -815,7 +835,7 @@ public:
         if (stored_bytes && m_dest->write(data, stored_bytes) != (ssize_t)stored_bytes)
             LOG_ERRNO_RETURN(0, -1, "failed to write index");
         // Checksum covers the stored representation, before any decompression.
-        ht->index_crc = stored_bytes ? crc32::crc32c(data, stored_bytes) : 0;
+        ht->index_crc = stored_bytes ? zfile_crc32c(data, stored_bytes) : 0;
         ht->index_offset = moffset;
         return 0;
     }
@@ -1242,7 +1262,7 @@ bool load_jump_table(IFile *file, CompressionFile::HeaderTrailer *pheader_traile
     }
     if (pht->is_digest_enabled()) {
         LOG_INFO("check jumptable CRC32 (` expected)", HEX(pht->index_crc).width(8));
-        auto crc = index_bytes ? crc32::crc32c(read_buf, index_bytes) : 0;
+        auto crc = index_bytes ? zfile_crc32c(read_buf, index_bytes) : 0;
         if (crc != pht->index_crc) {
             LOG_ERRNO_RETURN(0, false, "checksum of jumptable is incorrect. {got: `, expected: `}",
                  HEX(crc).width(8),  HEX(pht->index_crc).width(8)
@@ -1325,7 +1345,7 @@ static int write_header_trailer(IFile *file, bool is_header, bool is_sealed, boo
 
     pht->set_digest_enable(); // by default
     pht->digest = 0;
-    pht->digest = crc32::crc32c(pht, CompressionFile::HeaderTrailer::SPACE);
+    pht->digest = zfile_crc32c(pht, CompressionFile::HeaderTrailer::SPACE);
     LOG_INFO("save header/trailer with digest: `", HEX(pht->digest).width(8));
     if (offset == -1) {
         return (int)file->write(pht, CompressionFile::HeaderTrailer::SPACE);

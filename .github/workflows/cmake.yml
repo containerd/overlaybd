@@ -26,7 +26,7 @@ jobs:
       run: |
         sudo apt-get update -y
         sudo apt-get install -y libgflags-dev libcurl4-openssl-dev libssl-dev libaio-dev libnl-3-dev libnl-genl-3-dev libzstd-dev
-        sudo apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool libpci-dev nasm pkg-config help2man
+        sudo apt-get install -y uuid-dev libjson-c-dev libkmod-dev libsystemd-dev autoconf automake libtool pkg-config help2man
         sudo apt-get install -y libext2fs-dev fio jq lsscsi
         wget https://github.com/google/googletest/archive/refs/tags/release-1.11.0.tar.gz
         tar -zxvf release-1.11.0.tar.gz
@@ -42,12 +42,11 @@ jobs:
       shell: bash
       working-directory: ${{github.workspace}}/build
       run: |
-        git submodule update --init
         # Force the ublk frontend ON: its unit test (ublk_dispatch_test) is pure
         # logic that needs no ublk-capable kernel, and BUILD_UBLK_FRONTEND now
         # auto-detects kernel support by default, which would skip it on a runner
         # whose kernel/modules do not expose ublk.
-        cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TESTING=1 -DBUILD_UBLK_FRONTEND=on -DENABLE_DSA=1 -DENABLE_ISAL=1
+        cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_TESTING=1 -DBUILD_UBLK_FRONTEND=on
 
     - name: Build
       working-directory: ${{github.workspace}}/build

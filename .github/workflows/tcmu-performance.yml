@@ -30,8 +30,8 @@ jobs:
         sudo apt-get install -y \
           autoconf automake fio help2man jq libaio-dev libcurl4-openssl-dev \
           libext2fs-dev libgflags-dev libjson-c-dev libkmod-dev libnl-3-dev \
-          libnl-genl-3-dev libpci-dev libssl-dev libsystemd-dev libtool \
-          libzstd-dev lsscsi nasm pkg-config uuid-dev
+          libnl-genl-3-dev libssl-dev libsystemd-dev libtool \
+          libzstd-dev lsscsi pkg-config uuid-dev
 
     - name: Record runner information
       run: |
@@ -46,19 +46,11 @@ jobs:
         current_build="$GITHUB_WORKSPACE/build"
         result_dir="$RUNNER_TEMP/tcmu-performance-results"
         mkdir -p "$result_dir"
-        # Match the regular CMake workflow. actions/checkout's recursive,
-        # shallow submodule mode can leave DML tag refs without their trees.
-        git submodule update --init
         # Build production binaries only; unit tests and their GoogleTest
         # dependency are covered by the regular CMake workflow.
-        # DSA and ISA-L only change zfile CRC acceleration. Keep them disabled
-        # in both builds so this benchmark measures the TCMU implementation;
-        # older baselines also leaked ISA-L's -mavx512f into every consumer.
         cmake -S "$GITHUB_WORKSPACE" -B "$current_build" \
           -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-          -DBUILD_TESTING=0 \
-          -DENABLE_DSA=0 \
-          -DENABLE_ISAL=0
+          -DBUILD_TESTING=0
         if ! cmake --build "$current_build" --parallel "$(nproc)" \
             2>&1 | tee "$result_dir/current-build.log"; then
           first_error=$(grep -Eim1 'error:|fatal:|undefined reference|No space left' \
@@ -74,6 +66,7 @@ jobs:
         baseline_build="$RUNNER_TEMP/overlaybd-baseline-build"
         git clone --filter=blob:none https://github.com/containerd/overlaybd.git "$baseline_src"
         git -C "$baseline_src" checkout "$BASELINE_SHA"
+        # The pinned baseline still has the optional Intel CRC backends.
         git -C "$baseline_src" submodule update --init --recursive
         cmake -S "$baseline_src" -B "$baseline_build" \
           -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \

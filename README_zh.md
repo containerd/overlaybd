@@ -75,7 +75,6 @@ modprobe ublk_drv ## UBLK, linux v6.0+ requires
 ```bash
 git clone https://github.com/containerd/overlaybd.git
 cd overlaybd
-git submodule update --init
 ```
 
 整个项目由 CMake 管理。二进制文件和资源文件将被安装到 `/opt/overlaybd/`。
@@ -103,18 +102,6 @@ cmake -D ORIGIN_EXT2FS=1 ..
 ```
 
 关于 `ORIGIN_EXT2FS` 的更多信息请参阅 [USERSPACE_CONVERTOR](https://github.com/containerd/accelerated-container-image/blob/main/docs/USERSPACE_CONVERTOR.md#libext2fs)。
-
-如果你希望使用 DSA 硬件加速 CRC 计算。
-
-```bash
-cmake -D ENABLE_DSA=1 ..
-```
-
-如果你希望使用 avx512 加速 CRC 计算。
-
-```bash
-cmake -D ENABLE_ISAL=1 ..
-```
 
 如果你希望使用 QAT 加速压缩/解压。不过目前仅集成了解压部分。由于 LZ4 本身已是一种高效压缩算法，我们的测试表明，只有当压缩比显著超过某一阈值、且在 4KB 块大小和 256 批量大小时，QAT 才能优于 CPU。
 

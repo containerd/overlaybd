@@ -29,10 +29,10 @@ limitations under the License.
 #include "prefetch.h"
 #include "tools/comm_func.h"
 #include "overlaybd/lsmt/file.h"
-#include "overlaybd/zfile/crc32/crc32c.h"
 
 #include <photon/common/alog.h>
 #include <photon/common/alog-stdstring.h>
+#include <photon/common/checksum/crc32c.h>
 #include <photon/fs/forwardfs.h>
 #include <photon/fs/localfs.h>
 #include <photon/thread/thread11.h>
@@ -257,7 +257,7 @@ public:
         }
 
         for (auto &each : m_record_array) {
-            hdr.checksum = crc32::crc32c_extend(&each, sizeof(TraceFormat), hdr.checksum);
+            hdr.checksum = crc32c_extend(&each, sizeof(TraceFormat), hdr.checksum);
             n_written = m_trace_file->write(&each, sizeof(TraceFormat));
             if (n_written != sizeof(TraceFormat)) {
                 m_trace_file->ftruncate(0);
@@ -304,7 +304,7 @@ public:
             if (n_read != sizeof(TraceFormat)) {
                 LOG_ERRNO_RETURN(0, -1, "Prefetch: reload content failed");
             }
-            checksum = crc32::crc32c_extend(&fmt, sizeof(TraceFormat), checksum);
+            checksum = crc32c_extend(&fmt, sizeof(TraceFormat), checksum);
             // Save in memory
             m_replay_queue.push(fmt);
         }
