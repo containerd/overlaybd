@@ -39,6 +39,9 @@ using namespace photon::fs;
  *      trace file exist but empty                      => Start Recording
  *      lock file deleted or prefetcher destructed      => Stop Recording
  *      trace file exist and not empty                  => Replay
+ *    Malformed binary traces disable replay without replaying any records.
+ *    Binary records must have nonnegative, nonoverflowing ranges of 1 byte to 1 MiB.
+ *    Replay skips reads outside the registered source layer's size.
  *
  ==== dynamic mode: reload specified the data from a external file list ====
  *  overlaybd will read the filelist to prefetch from the value of  'recordTracePath' in config.v1.json

@@ -50,6 +50,11 @@ add_test(
     COMMAND ${EXECUTABLE_OUTPUT_PATH}/trace_test
 )
 
+add_test(
+    NAME binary_trace_test
+    COMMAND ${EXECUTABLE_OUTPUT_PATH}/trace_test --gtest_filter=BinaryTraceTest.*
+)
+
 if (NOT ORIGIN_EXT2FS)
     set_source_files_properties(
         ${E2FS_RESIZE_DIR}/resize2fs.o

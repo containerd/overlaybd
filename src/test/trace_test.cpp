@@ -78,6 +78,304 @@ int download_erofs_img(const std::string &url, const std::string &out)
     return 0;
 }
 
+namespace {
+
+using Trace = PrefetcherImpl::TraceFormat;
+using Header = PrefetcherImpl::TraceHeader;
+using Op = Prefetcher::TraceOp;
+
+class ReplayTestFile : public ForwardFile_Ownership {
+public:
+    vector<pair<size_t, off_t>> reads;
+    bool fail_stat = false;
+    bool negative_size = false;
+
+    explicit ReplayTestFile(IFile *file) : ForwardFile_Ownership(file, true) {}
+
+    ssize_t pread(void *buf, size_t count, off_t offset) override {
+        reads.emplace_back(count, offset);
+        if (count > PrefetcherImpl::MAX_IO_SIZE) {
+            ADD_FAILURE() << "Replay read exceeds buffer capacity";
+            errno = EINVAL;
+            return -1;
+        }
+        return m_file->pread(buf, count, offset);
+    }
+
+    int fstat(struct stat *st) override {
+        if (fail_stat) {
+            errno = EIO;
+            return -1;
+        }
+        auto ret = m_file->fstat(st);
+        if (ret == 0 && negative_size) {
+            st->st_size = -1;
+        }
+        return ret;
+    }
+};
+
+class ShortTraceFile : public ForwardFile_Ownership {
+public:
+    int read_calls = 0;
+    bool fail_read;
+
+    ShortTraceFile(IFile *file, bool fail)
+        : ForwardFile_Ownership(file, true), fail_read(fail) {}
+
+    ssize_t read(void *buf, size_t count) override {
+        if (++read_calls == 3) {
+            if (fail_read) {
+                errno = EIO;
+                return -1;
+            }
+            return m_file->read(buf, count - 1);
+        }
+        return m_file->read(buf, count);
+    }
+};
+
+class BinaryTraceTest : public ::testing::Test {
+protected:
+    PrefetcherImpl prefetch{1};
+    unique_ptr<ReplayTestFile> source;
+    string trace_path;
+    string source_path;
+
+    IFile *temporary_file(string &path) {
+        char name[] = "/tmp/overlaybd-binary-trace-XXXXXX";
+        int fd = mkstemp(name);
+        if (fd < 0) {
+            return nullptr;
+        }
+        close(fd);
+        path = name;
+        return open_localfile_adaptor(name, O_RDWR);
+    }
+
+    void SetUp() override {
+        prefetch.m_trace_file = temporary_file(trace_path);
+        ASSERT_NE(nullptr, prefetch.m_trace_file);
+        auto file = temporary_file(source_path);
+        ASSERT_NE(nullptr, file);
+        source.reset(new ReplayTestFile(file));
+        ASSERT_EQ(0, file->ftruncate(2 * PrefetcherImpl::MAX_IO_SIZE));
+        prefetch.register_src_file(0, source.get());
+    }
+
+    void TearDown() override {
+        if (!trace_path.empty()) {
+            unlink(trace_path.c_str());
+        }
+        if (!source_path.empty()) {
+            unlink(source_path.c_str());
+        }
+    }
+
+    size_t write_trace(const vector<Trace> &records) {
+        Header hdr = {};
+        hdr.magic = PrefetcherImpl::TRACE_MAGIC;
+        hdr.data_size = records.size() * sizeof(Trace);
+        for (const auto &trace : records) {
+            hdr.checksum = crc32::crc32c_extend(&trace, sizeof(trace), hdr.checksum);
+        }
+        EXPECT_EQ(0, prefetch.m_trace_file->ftruncate(0));
+        EXPECT_EQ(0, prefetch.m_trace_file->lseek(0, SEEK_SET));
+        EXPECT_EQ(static_cast<ssize_t>(sizeof(hdr)),
+                  prefetch.m_trace_file->write(&hdr, sizeof(hdr)));
+        for (const auto &trace : records) {
+            EXPECT_EQ(static_cast<ssize_t>(sizeof(trace)),
+                      prefetch.m_trace_file->write(&trace, sizeof(trace)));
+        }
+        EXPECT_EQ(0, prefetch.m_trace_file->lseek(0, SEEK_SET));
+        return sizeof(hdr) + hdr.data_size;
+    }
+
+    void expect_rejected(size_t file_size) {
+        EXPECT_EQ(-1, prefetch.reload(file_size));
+        EXPECT_TRUE(prefetch.m_replay_queue.empty());
+        EXPECT_EQ(0, prefetch.replay_worker_thread());
+        EXPECT_TRUE(source->reads.empty());
+    }
+};
+
+TEST_F(BinaryTraceTest, ReplaysCapacityAndValidRecords) {
+    auto size = write_trace({
+        {Op::READ, 0, PrefetcherImpl::MAX_IO_SIZE, PrefetcherImpl::MAX_IO_SIZE},
+        {Op::READ, 0, 4096, 0},
+        {Op::WRITE, 0, 4096, 0},
+        {Op::READ, 1, 4096, 0},
+    });
+    ASSERT_EQ(0, prefetch.reload(size));
+    ASSERT_EQ(4U, prefetch.m_replay_queue.size());
+    ASSERT_EQ(0, prefetch.replay_worker_thread());
+    ASSERT_EQ(2U, source->reads.size());
+    EXPECT_EQ(make_pair(size_t(PrefetcherImpl::MAX_IO_SIZE),
+                       off_t(PrefetcherImpl::MAX_IO_SIZE)), source->reads[0]);
+    EXPECT_EQ(make_pair(size_t(4096), off_t(0)), source->reads[1]);
+}
+
+TEST_F(BinaryTraceTest, RejectsInvalidRecordsWithoutPartialReplay) {
+    const Trace invalid[] = {
+        {Op::READ, 0, 0, 0},
+        {Op::READ, 0, PrefetcherImpl::MAX_IO_SIZE + 1, 0},
+        {Op::READ, 0, numeric_limits<size_t>::max(), 0},
+        {Op::READ, 0, 4096, -1},
+        {Op::READ, 0, 1, numeric_limits<off_t>::max()},
+        {Op::READ, 0, PrefetcherImpl::MAX_IO_SIZE,
+         numeric_limits<off_t>::max() - PrefetcherImpl::MAX_IO_SIZE + 1},
+        {static_cast<Op>('?'), 0, 4096, 0},
+    };
+    for (const auto &trace : invalid) {
+        SCOPED_TRACE(::testing::Message() << "count=" << trace.count
+                                         << " offset=" << trace.offset);
+        auto size = write_trace({{Op::READ, 0, 4096, 0}, trace});
+        expect_rejected(size);
+    }
+}
+
+TEST_F(BinaryTraceTest, AcceptsRepresentableRangeEnd) {
+    auto size = write_trace({
+        {Op::READ, 0, PrefetcherImpl::MAX_IO_SIZE,
+         numeric_limits<off_t>::max() - PrefetcherImpl::MAX_IO_SIZE},
+    });
+    EXPECT_EQ(0, prefetch.reload(size));
+    EXPECT_EQ(1U, prefetch.m_replay_queue.size());
+    EXPECT_EQ(0, prefetch.replay_worker_thread());
+    EXPECT_TRUE(source->reads.empty());
+}
+
+TEST_F(BinaryTraceTest, RejectsMalformedHeaders) {
+    auto size = write_trace({{Op::READ, 0, 4096, 0}});
+    Header hdr = {};
+    hdr.magic = PrefetcherImpl::TRACE_MAGIC;
+    hdr.data_size = numeric_limits<size_t>::max() - sizeof(Header) + 2;
+    ASSERT_EQ(static_cast<ssize_t>(sizeof(hdr)),
+              prefetch.m_trace_file->pwrite(&hdr, sizeof(hdr), 0));
+    expect_rejected(1);
+
+    size = write_trace({{Op::READ, 0, 4096, 0}});
+    hdr.data_size = sizeof(Trace) + 1;
+    ASSERT_EQ(static_cast<ssize_t>(sizeof(hdr)),
+              prefetch.m_trace_file->pwrite(&hdr, sizeof(hdr), 0));
+    ASSERT_EQ(0, prefetch.m_trace_file->ftruncate(size + 1));
+    expect_rejected(size + 1);
+
+    size = write_trace({{Op::READ, 0, 4096, 0}});
+    expect_rejected(size - 1);
+
+    size = write_trace({});
+    hdr.magic = 0;
+    hdr.data_size = 0;
+    ASSERT_EQ(static_cast<ssize_t>(sizeof(hdr)),
+              prefetch.m_trace_file->pwrite(&hdr, sizeof(hdr), 0));
+    expect_rejected(size);
+}
+
+TEST_F(BinaryTraceTest, RejectsChecksumWithoutPartialReplay) {
+    auto size = write_trace({{Op::READ, 0, 4096, 0}});
+    Header hdr = {};
+    ASSERT_EQ(static_cast<ssize_t>(sizeof(hdr)),
+              prefetch.m_trace_file->pread(&hdr, sizeof(hdr), 0));
+    hdr.checksum ^= 1;
+    ASSERT_EQ(static_cast<ssize_t>(sizeof(hdr)),
+              prefetch.m_trace_file->pwrite(&hdr, sizeof(hdr), 0));
+    expect_rejected(size);
+}
+
+TEST_F(BinaryTraceTest, RejectsIncompleteReadsWithoutPartialReplay) {
+    auto size = write_trace({{Op::READ, 0, 4096, 0}, {Op::READ, 0, 4096, 4096}});
+    ASSERT_EQ(0, prefetch.m_trace_file->ftruncate(sizeof(Header) - 1));
+    expect_rejected(size);
+
+    size = write_trace({{Op::READ, 0, 4096, 0}, {Op::READ, 0, 4096, 4096}});
+    ASSERT_EQ(0, prefetch.m_trace_file->ftruncate(size - 1));
+    expect_rejected(size);
+
+    for (bool fail : {false, true}) {
+        size = write_trace({{Op::READ, 0, 4096, 0}, {Op::READ, 0, 4096, 4096}});
+        prefetch.m_trace_file = new ShortTraceFile(prefetch.m_trace_file, fail);
+        expect_rejected(size);
+    }
+}
+
+TEST_F(BinaryTraceTest, FailedReloadClearsPreviousQueue) {
+    auto size = write_trace({{Op::READ, 0, 4096, 0}});
+    ASSERT_EQ(0, prefetch.reload(size));
+    ASSERT_FALSE(prefetch.m_replay_queue.empty());
+    ASSERT_EQ(0, prefetch.m_trace_file->lseek(0, SEEK_SET));
+    expect_rejected(size - 1);
+}
+
+TEST_F(BinaryTraceTest, ConstructorDisablesInvalidTrace) {
+    write_trace({{Op::READ, 0, 4096, 0},
+                 {Op::READ, 0, PrefetcherImpl::MAX_IO_SIZE + 1, 0}});
+    unique_ptr<Prefetcher> loaded(new_prefetcher(trace_path, 1));
+    ASSERT_NE(nullptr, loaded);
+    EXPECT_EQ(Prefetcher::Mode::Disabled, loaded->get_mode());
+    EXPECT_EQ(-1, loaded->replay());
+    auto impl = static_cast<PrefetcherImpl *>(loaded.get());
+    EXPECT_TRUE(impl->m_replay_queue.empty());
+}
+
+TEST_F(BinaryTraceTest, ConstructorReplaysValidTrace) {
+    write_trace({{Op::READ, 0, PrefetcherImpl::MAX_IO_SIZE, 0}});
+    unique_ptr<Prefetcher> loaded(new_prefetcher(trace_path, 2));
+    ASSERT_NE(nullptr, loaded);
+    ASSERT_EQ(Prefetcher::Mode::Replay, loaded->get_mode());
+    auto impl = static_cast<PrefetcherImpl *>(loaded.get());
+    impl->register_src_file(0, source.get());
+    ASSERT_EQ(0, loaded->replay());
+    ASSERT_NE(nullptr, impl->m_replay_thread);
+    photon::thread_join(impl->m_replay_thread);
+    impl->m_replay_thread = nullptr;
+    ASSERT_EQ(1U, source->reads.size());
+    EXPECT_EQ(make_pair(size_t(PrefetcherImpl::MAX_IO_SIZE), off_t(0)), source->reads[0]);
+}
+
+TEST_F(BinaryTraceTest, ReplayIndependentlyChecksBounds) {
+    prefetch.m_replay_queue.push({Op::READ, 0, 0, 0});
+    prefetch.m_replay_queue.push({Op::READ, 0, PrefetcherImpl::MAX_IO_SIZE + 1, 0});
+    prefetch.m_replay_queue.push({Op::READ, 0, 4096, -1});
+    prefetch.m_replay_queue.push({Op::READ, 0, 1, numeric_limits<off_t>::max()});
+    prefetch.m_replay_queue.push({static_cast<Op>('?'), 0, 4096, 0});
+    prefetch.m_replay_queue.push({Op::READ, 0, 4096, 2 * PrefetcherImpl::MAX_IO_SIZE});
+    prefetch.m_replay_queue.push({Op::READ, 0, 0, 2 * PrefetcherImpl::MAX_IO_SIZE + 1});
+    prefetch.m_replay_queue.push({Op::READ, 0, 4096, 2 * PrefetcherImpl::MAX_IO_SIZE - 1});
+    prefetch.m_replay_queue.push({Op::READ, 0, PrefetcherImpl::MAX_IO_SIZE, 0});
+    ASSERT_EQ(0, prefetch.replay_worker_thread());
+    ASSERT_EQ(1U, source->reads.size());
+    EXPECT_EQ(make_pair(size_t(PrefetcherImpl::MAX_IO_SIZE), off_t(0)), source->reads[0]);
+}
+
+TEST_F(BinaryTraceTest, ReplaySkipsUnavailableLayerSize) {
+    source->fail_stat = true;
+    prefetch.m_replay_queue.push({Op::READ, 0, 4096, 0});
+    ASSERT_EQ(0, prefetch.replay_worker_thread());
+    EXPECT_TRUE(source->reads.empty());
+}
+
+TEST_F(BinaryTraceTest, ReplaySkipsNegativeLayerSize) {
+    source->negative_size = true;
+    prefetch.m_replay_queue.push({Op::READ, 0, 4096, 0});
+    ASSERT_EQ(0, prefetch.replay_worker_thread());
+    EXPECT_TRUE(source->reads.empty());
+}
+
+TEST_F(BinaryTraceTest, MissingTraceFileFailsReload) {
+    delete prefetch.m_trace_file;
+    prefetch.m_trace_file = nullptr;
+    expect_rejected(sizeof(Header));
+}
+
+TEST_F(BinaryTraceTest, EmptyTraceIsValid) {
+    auto size = write_trace({});
+    EXPECT_EQ(0, prefetch.reload(size));
+    EXPECT_TRUE(prefetch.m_replay_queue.empty());
+}
+
+} // namespace
+
 TEST(trace, case0) {
 
     return;

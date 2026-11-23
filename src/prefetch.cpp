@@ -15,6 +15,7 @@ limitations under the License.
 */
 #include <cerrno>
 #include <memory>
+#include <limits>
 #include <string>
 #include <vector>
 #include <map>
@@ -89,7 +90,10 @@ public:
 
         // Reload if going to replay
         if (m_mode == Mode::Replay) {
-            reload(file_size);
+            if (reload(file_size) != 0) {
+                m_mode = Mode::Disabled;
+                LOG_ERROR("Prefetch: disabling replay after trace reload failed");
+            }
         }
     }
 
@@ -172,15 +176,39 @@ public:
     int replay_worker_thread() {
         auto buf = new char[MAX_IO_SIZE];
         DEFER(delete []buf);
+        map<uint32_t, off_t> layer_sizes;
         while (!m_replay_queue.empty() && !m_replay_stopped) {
             auto trace = m_replay_queue.front();
             m_replay_queue.pop();
+            if (!valid_trace(trace)) {
+                LOG_WARN("Prefetch: skipping invalid replay record: `", trace);
+                continue;
+            }
             auto iter = m_src_files.find(trace.layer_index);
             if (iter == m_src_files.end()) {
                 continue;
             }
             auto src_file = iter->second;
             if (trace.op == PrefetcherImpl::TraceOp::READ) {
+                auto size = layer_sizes.find(trace.layer_index);
+                if (size == layer_sizes.end()) {
+                    struct stat st = {};
+                    off_t layer_size = -1;
+                    if (src_file->fstat(&st) != 0) {
+                        LOG_WARN("Prefetch: replay fstat failed: `, layer `",
+                                 ERRNO(), trace.layer_index);
+                    } else if (st.st_size < 0) {
+                        LOG_WARN("Prefetch: invalid size for layer `", trace.layer_index);
+                    } else {
+                        layer_size = st.st_size;
+                    }
+                    size = layer_sizes.emplace(trace.layer_index, layer_size).first;
+                }
+                if (size->second < 0 || trace.offset > size->second ||
+                    trace.count > static_cast<uint64_t>(size->second - trace.offset)) {
+                    LOG_WARN("Prefetch: skipping replay range outside layer: `", trace);
+                    continue;
+                }
                 ssize_t n_read = src_file->pread(buf, trace.count, trace.offset);
                 if (n_read != (ssize_t)trace.count) {
                     LOG_WARN("Prefetch: replay pread failed: `, `, expect: `, got: `", ERRNO(),
@@ -212,6 +240,12 @@ public:
 
     static const int MAX_IO_SIZE = 1024 * 1024;
     static const uint32_t TRACE_MAGIC = 3270449184; // CRC32 of `Container Image Trace Format`
+
+    static bool valid_trace(const TraceFormat &trace) {
+        return (trace.op == TraceOp::READ || trace.op == TraceOp::WRITE) &&
+               trace.count > 0 && trace.count <= MAX_IO_SIZE && trace.offset >= 0 &&
+               trace.count <= static_cast<uint64_t>(numeric_limits<off_t>::max() - trace.offset);
+    }
 
     vector<TraceFormat> m_record_array;
     queue<TraceFormat> m_replay_queue;
@@ -283,6 +317,10 @@ public:
     }
 
     int reload(size_t trace_file_size) {
+        m_replay_queue = queue<TraceFormat>();
+        if (m_trace_file == nullptr) {
+            LOG_ERROR_RETURN(0, -1, "Prefetch: trace file is not open");
+        }
         // Reload header
         TraceHeader hdr = {};
         ssize_t n_read = m_trace_file->read(&hdr, sizeof(TraceHeader));
@@ -292,11 +330,16 @@ public:
         if (TRACE_MAGIC != hdr.magic) {
             LOG_ERROR_RETURN(0, -1, "Prefetch: trace magic mismatch");
         }
-        if (trace_file_size != hdr.data_size + sizeof(TraceHeader)) {
+        if (trace_file_size < sizeof(TraceHeader) ||
+            hdr.data_size != trace_file_size - sizeof(TraceHeader)) {
             LOG_ERROR_RETURN(0, -1, "Prefetch: trace file size mismatch");
+        }
+        if (hdr.data_size % sizeof(TraceFormat) != 0) {
+            LOG_ERROR_RETURN(0, -1, "Prefetch: incomplete trace record");
         }
 
         // Reload content
+        queue<TraceFormat> traces;
         uint32_t checksum = 0;
         TraceFormat fmt = {};
         for (size_t i = 0; i < hdr.data_size / sizeof(TraceFormat); ++i) {
@@ -305,16 +348,18 @@ public:
                 LOG_ERRNO_RETURN(0, -1, "Prefetch: reload content failed");
             }
             checksum = crc32::crc32c_extend(&fmt, sizeof(TraceFormat), checksum);
+            if (!valid_trace(fmt)) {
+                LOG_ERROR_RETURN(0, -1, "Prefetch: invalid trace record: `", fmt);
+            }
             // Save in memory
-            m_replay_queue.push(fmt);
+            traces.push(fmt);
         }
 
         if (checksum != hdr.checksum) {
-            queue<TraceFormat> tmp;
-            m_replay_queue.swap(tmp);
             LOG_ERROR_RETURN(0, -1, "Prefetch: reload checksum error");
         }
 
+        m_replay_queue.swap(traces);
         LOG_INFO("Prefetch: Reload ` records", m_replay_queue.size());
         return 0;
     }
