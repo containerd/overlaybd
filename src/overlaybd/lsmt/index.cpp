@@ -497,6 +497,9 @@ public:
     size_t lookup(Segment s, SegmentMapping *pm, size_t n) const override {
         if (s.length == 0)
             return 0;
+        // an offset beyond KeyType is beyond all the mappings
+        if (s.offset >= static_cast<KeyType>(-1))
+            return 0;
 
         auto lb = this->pbegin + this->lbpt->template search<SearchPolicy<KeyType>>(static_cast<KeyType>(s.offset));
         if (lb->end() <= s.offset)
@@ -1186,7 +1189,9 @@ IMemoryIndex *merge_memory_indexes(const IMemoryIndex **pindexes, size_t n) {
     if (!merge_indexes_catch(0, mapping, pi, n, 0, UINT64_MAX))
         return nullptr;
 
-    if (pindexes[0]->vsize() < static_cast<uint64_t>(UINT32_MAX) * ALIGNMENT
+    // 32-bit keys require all the mappings to fit in them
+    bool fits32 = mapping.empty() || mapping.back().end() < UINT32_MAX;
+    if (fits32 && pindexes[0]->vsize() < static_cast<uint64_t>(UINT32_MAX) * ALIGNMENT
         && mapping.size() < NODES_PER_LEVEL_32[MAX_LEVEL_32-1]) {
         return new_index_with_lineriazed_bptree<uint32_t>(std::move(mapping), pindexes[0]->vsize());
     }

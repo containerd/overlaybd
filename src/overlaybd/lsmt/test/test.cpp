@@ -129,6 +129,23 @@ TEST(Index, lookup) {
     lookup_test<LevelIndex>(mapping, {6, 100}, {{6, 4, 6}, {10, 10, 50}, {100, 6, 20}});
 }
 
+TEST(Index, lookup_beyond_32bit_keys) {
+    const static SegmentMapping mapping[] = {{0, 10, 0}, {10, 10, 50}, {100, 10, 20}};
+    Index idx(mapping, LEN(mapping), false);
+    const IMemoryIndex *indexes[] = {&idx};
+    auto mi = merge_memory_indexes(indexes, LEN(indexes));
+    ASSERT_NE(mi, nullptr);
+    SegmentMapping out[10];
+    EXPECT_EQ(mi->lookup(Segment{5, 10}, out, LEN(out)), 2UL);
+    for (uint64_t offset : {(1ULL << 32) - 1, 1ULL << 32, (1ULL << 33) + 105}) {
+        Segment s;
+        s.offset = offset;
+        s.length = 10;
+        EXPECT_EQ(mi->lookup(s, out, LEN(out)), 0UL) << "offset: " << offset;
+    }
+    delete mi;
+}
+
 const static SegmentMapping mapping0[] = {{0, 20, 0},    {10, 15, 50},    {30, 100, 20}, {5, 10, 3},
                                           {40, 10, 123}, {200, 10, 2133}, {150, 100, 21}};
 
@@ -1399,6 +1416,40 @@ TEST_F(FileTest2, commit_zfile) {
     verify_file((IFileRO *)file);
     delete zfile;
     delete file;
+}
+
+TEST_F(FileTest, ro_layer_larger_than_2TiB) {
+    vsize = 8ULL << 40;
+    const uint64_t BLK = 4096, STEP = 64ULL << 30;
+    ALIGNED_MEM4K(data, BLK);
+    ALIGNED_MEM4K(expected, BLK);
+    auto fill = [&](char *p, uint64_t offset) {
+        for (uint64_t i = 0; i < BLK / sizeof(offset); i++)
+            ((uint64_t *)p)[i] = offset + i;
+    };
+    auto file = create_file_rw();
+    ASSERT_NE(file, nullptr);
+    // starts at offset 0 like a file system, then goes on out of order
+    for (uint64_t i = 0; i < 128; i++) {
+        auto offset = i * 37 % 128 * STEP;
+        fill(data, offset);
+        ASSERT_EQ(file->pwrite(data, BLK, offset), (ssize_t)BLK);
+    }
+    auto fcommit = lfs->open(layer_name.back().c_str(), O_RDWR | O_CREAT | O_TRUNC, S_IRWXU);
+    CommitArgs args(fcommit);
+    ASSERT_EQ(file->commit(args), 0);
+    delete fcommit;
+    delete file;
+
+    IFile *layers[] = {lfs->open(layer_name.back().c_str(), O_RDONLY)};
+    auto ro = ::open_files_ro(layers, 1, true);
+    ASSERT_NE(ro, nullptr);
+    for (uint64_t offset = 0; offset < vsize; offset += STEP) {
+        fill(expected, offset);
+        ASSERT_EQ(ro->pread(data, BLK, offset), (ssize_t)BLK);
+        ASSERT_EQ(memcmp(data, expected, BLK), 0) << "offset: " << offset;
+    }
+    delete ro;
 }
 
 TEST_F(FileTest3, stack_files) {
