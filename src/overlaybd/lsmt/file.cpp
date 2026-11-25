@@ -2231,7 +2231,7 @@ void *do_parallel_load_index(void *param) {
             }
         }
         pi = create_memory_index(p, job->ht.index_size, verify_begin,
-                                 job->ht.index_offset / ALIGNMENT);
+                                 job->ht.index_offset / ALIGNMENT, true, job->ht.virtual_size);
         if (!pi) {
             delete[] p;
             job->set_error(EIO);
