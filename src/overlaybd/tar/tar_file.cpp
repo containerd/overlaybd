@@ -159,6 +159,11 @@ public:
         return m_file->pwritev(iov, iovcnt, offset + base_offset);
     }
     virtual int fallocate(int mode, off_t offset, off_t len) override {
+        // fallocate(mode, 0, -1) discards the whole file, tar header included, and
+        // must not be shifted; truncating to base_offset leaves a non-4KB-aligned
+        // size that Photon's full-file cache takes as the real file size.
+        if (offset == 0 && len == -1)
+            return m_file->fallocate(mode, 0, -1);
         return m_file->fallocate(mode, offset + base_offset, len);
     }
     virtual int fadvise(off_t offset, off_t len, int advice) override {

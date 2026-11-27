@@ -628,6 +628,52 @@ TEST_F(TarTest, tar_header_check) {
     EXPECT_EQ(FILE_SIZE, ret);
 }
 
+// Records what TarFile forwards to the wrapped file.
+class FallocateRecorder : public photon::fs::ForwardFile_Ownership {
+public:
+    FallocateRecorder(photon::fs::IFile *file)
+        : photon::fs::ForwardFile_Ownership(file, true) {
+    }
+    int fallocate(int mode, off_t offset, off_t len) override {
+        last_offset = offset;
+        last_len = len;
+        return 0;
+    }
+    off_t last_offset = -1;
+    off_t last_len = 0;
+};
+
+TEST_F(TarTest, tar_fallocate_whole_file) {
+    const std::string fn = "fallocate.tar";
+    {
+        auto file = fs->open(fn.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+        ASSERT_NE(nullptr, file);
+        auto writer = new_tar_file(file, true);
+        ASSERT_NE(nullptr, writer);
+        std::string content(8 * T_BLOCKSIZE, 'f');
+        ASSERT_EQ((ssize_t)content.size(),
+                  writer->pwrite(content.data(), content.size(), 0));
+        delete writer;
+    }
+
+    auto file = fs->open(fn.c_str(), O_RDONLY);
+    ASSERT_NE(nullptr, file);
+    auto recorder = new FallocateRecorder(file);
+    auto tar_file = new_tar_file_adaptor(recorder);
+    ASSERT_NE(nullptr, tar_file);
+    DEFER(delete tar_file);
+
+    // discarding the whole file covers the tar header and is not shifted
+    ASSERT_EQ(0, tar_file->fallocate(0, 0, -1));
+    EXPECT_EQ(0, recorder->last_offset);
+    EXPECT_EQ(-1, recorder->last_len);
+
+    // offsets inside the tar content are still shifted by the header
+    ASSERT_EQ(0, tar_file->fallocate(0, 4096, 512));
+    EXPECT_EQ(4096 + 3 * T_BLOCKSIZE, recorder->last_offset);
+    EXPECT_EQ(512, recorder->last_len);
+}
+
 TEST_F(TarTest, layer_names_unrooted) {
     check_layer_names("");
 }
