@@ -41,6 +41,7 @@
 #include "comm_func.h"
 #include "sha256file.h"
 #include "qcow2converter.h"
+#include "../overlaybd/tar/compact_conversion.h"
 
 
 using namespace std;
@@ -84,10 +85,14 @@ int main(int argc, char **argv) {
     std::string image_config_path, input_path, gz_index_path, config_path, sha256_checksum;
     string tarheader;
     bool raw = false, mkfs = false, verbose = false, qcow2 = false, extract_rootfs = true;
+    bool compact_layout = false;
 
     CLI::App app{"this is overlaybd-apply, apply OCIv1 tar layer or qcow2 image to overlaybd format"};
     app.add_flag("--raw", raw, "apply to raw image")->default_val(false);
     app.add_flag("--mkfs", mkfs, "mkfs before apply")->default_val(false);
+    app.add_flag("--compact-layout", compact_layout,
+                 "place file data before compacted ext4 metadata (Append layers only)")
+        ->default_val(false);
     app.add_flag("--from_qcow2", qcow2, "convert from qcow2 image file instead of tar")->default_val(false);
     app.add_flag("--extract-rootfs,!--no-extract-rootfs", extract_rootfs,
                  "Only extract rootfs partitions (default: on). "
@@ -100,6 +105,11 @@ int main(int argc, char **argv) {
     app.add_option("input_path", input_path, "input OCIv1 tar layer path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     app.add_option("image_config_path", image_config_path, "overlaybd image config path")->type_name("FILEPATH")->check(CLI::ExistingFile)->required();
     CLI11_PARSE(app, argc, argv);
+
+    if (compact_layout && (raw || qcow2 || !gz_index_path.empty())) {
+        fprintf(stderr, "--compact-layout requires a plain Append layer and tar input\n");
+        return -1;
+    }
 
     set_log_output_level(verbose ? 0 : 1);
     photon::init(photon_event_engine_from_config(config_path), photon::INIT_IO_DEFAULT);
@@ -134,11 +144,16 @@ int main(int argc, char **argv) {
     }
 
     bool gen_turboOCI = (gz_index_path != "" );
-
-    auto aligned_file = new_aligned_file_adaptor(imgfile, 4096, true, false);
-    DEFER(delete aligned_file);
-    auto target = create_ext4fs(aligned_file, mkfs, !gen_turboOCI);
-    DEFER(delete target);
+    photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
+    std::unique_ptr<photon::fs::IFile> aligned_file;
+    std::unique_ptr<photon::fs::IFileSystem> target;
+    if (!compact_layout) {
+        aligned_file.reset(new_aligned_file_adaptor(imgfile, 4096, true, false));
+        if (aligned_file == nullptr) {
+            LOG_ERRNO_RETURN(0, -1, "failed to create aligned file adaptor");
+        }
+        target.reset(create_ext4fs(aligned_file.get(), mkfs, !gen_turboOCI));
+    }
 
     photon::fs::IFile* src_file = nullptr;
     SHA256File* checksum_file = nullptr;
@@ -170,24 +185,35 @@ int main(int argc, char **argv) {
         src_file = checksum_file = new_sha256_file(src_file, true);
     }
 
-    photon::fs::IFile* base_file = raw ? nullptr : ((ImageFile *)imgfile)->get_base();
-
-    auto tar = new UnTar(src_file, target, 0, 4096, base_file, gen_turboOCI);
-
-    if (tar->extract_all() < 0) {
-        fprintf(stderr, "failed to extract\n");
-        exit(-1);
-    } else {
+    auto verify_checksum = [&]() -> int {
         if (checksum_file != nullptr) {
             auto calc = checksum_file->sha256_checksum();
             if (calc != sha256_checksum) {
                 fprintf(stderr, "sha256 checksum mismatch, expect: %s, got: %s\n", sha256_checksum.c_str(), calc.c_str());
-                exit(-1);
+                errno = EBADMSG;
+                return -1;
             }
         }
-        fprintf(stdout, "overlaybd-apply done\n");
-        fprintf(stderr, "%s\n",  sha256_checksum.c_str());
+        return 0;
+    };
+
+    if (compact_layout) {
+        if (CompactConversion::apply(src_file, imgfile, base_file, mkfs, verify_checksum) < 0) {
+            fprintf(stderr, "failed to apply compact layer, %s\n", strerror(errno));
+            return -1;
+        }
+    } else {
+        UnTar tar(src_file, target.get(), 0, 4096, base_file, gen_turboOCI);
+        if (tar.extract_all() < 0) {
+            fprintf(stderr, "failed to extract\n");
+            exit(-1);
+        }
+        if (verify_checksum() < 0) {
+            return -1;
+        }
     }
+    fprintf(stdout, "overlaybd-apply done\n");
+    fprintf(stderr, "%s\n",  sha256_checksum.c_str());
 
     return 0;
 }

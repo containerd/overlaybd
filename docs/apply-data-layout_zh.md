@@ -1,0 +1,94 @@
+# overlaybd 数据布局优化(EXT4)
+
+[English](apply-data-layout.md)
+
+`overlaybd-apply` 通过 **e2fsprogs** 把 OCI tar 层转换为 overlaybd 层, 通过调整文件数据 payload 和 ext4 元数据在layer中的布局，可有效改善元数据访问的局部性。
+
+## 显式启用
+
+紧凑布局默认关闭。普通 Append 可写层可通过 `--compact-layout` 或
+`--compact-layout=true` 启用：
+
+```bash
+overlaybd-create layer.data layer.index 64
+overlaybd-apply --mkfs --compact-layout layer.tar image.json
+overlaybd-commit --seal layer.data layer.index
+```
+
+其中 `image.json` 的 `upper.data` 和 `upper.index` 指向上述文件。不指定开关或设置
+`--compact-layout=false` 时保持原写入流程。开关只对本次命令生效，不保存在层中。
+Sparse、Hybrid、raw、TurboOCI 和 qcow2 转换不支持此选项；显式启用时会在写入文件系统前报错。
+
+`overlaybd-create --mkfs --compact-layout layer.data layer.index 64` 也会合并
+mkfs 的重复写入，仅追加最终元数据块。此用法要求同时指定 `--mkfs`，生成可直接使用的
+空 ext4 文件系统；后续 apply 若也需要紧凑布局，仍需显式传入该开关。
+
+两个命令都在 `$TMPDIR`（未设置或为空时使用 `/tmp`）中创建临时稀疏文件。
+需为写过的元数据预留暂存空间，apply 还需保存 tar 头部。临时文件创建后立即解除路径关联，
+关闭时自动删除。
+
+## 新布局
+
+全新层在一次 apply 中完成格式化和文件回放后，sealed 布局如下：
+
+```text
+旧：| Header | 数据 | fsmeta | 数据 | fsmeta 副本 | 数据 | ... | index | Trailer |
+
+新：| Header 4 KiB | payload：逐文件 4 KiB 对齐 | fsmeta：有效元数据 | index | Trailer 4 KiB |
+                   [4096, payload_end)          [payload_end, index_offset)
+```
+
+- **payload**：按 tar 顺序暂存所有普通文件的数据；每个非空文件起点和占用长度均按 4 KiB 对齐，尾部补零，空文件不占空间。
+- **fsmeta**：最终有效的元数据块，按逻辑地址升序紧凑追加，无重复副本。
+- **index / Trailer**：`overlaybd-commit --seal` 原地追加，数据不重排。
+
+结果仍是标准 sealed LSMT，没有新格式版本、tag 或外部 payload 文件。
+
+已有内容不会重排。例如，先通过 create 格式化，再对同一可写层 apply，会保留
+`Header | mkfs 元数据 | 新 payload | 新元数据`。同层多次 apply 也可能留下之前的前缀；
+紧凑布局只约束每次操作新增内容的排列。使用全新 upper 层可获得上图所示的完整布局。
+
+## 基本原理
+
+```text
+tar 流 → 顺序追加 payload（逐文件对齐，不建映射）+ 临时 tar 头部（记录 payload 偏移）
+临时头部 → ext4 只回放元数据 → FsMetaFile（稀疏文件，原逻辑偏移）
+                └─ 普通文件：fallocate + FIEMAP → 待安装 ext4 块到 payload 的映射
+关闭 ext4 → 剔除 payload 块 → 有效 fsmeta 紧凑追加 → 安装完整块 payload 映射
+commit --seal → 合并相邻映射，原地追加 index 和 Trailer
+```
+
+`CompactConversion::apply()` 统一管理上述生命周期，包括暂存文件、对齐后的镜像视图
+和 ext4 关闭。输入完成校验的回调在 payload 暂存后、打开或格式化 ext4 前执行，
+因此校验失败不会发布 payload 映射。`CompactConversion::mkfs()` 为 create 复用同一套
+元数据暂存生命周期。命令行工具负责准备输入和选择模式，不再选择物理 upper 文件，
+也不再提供关闭 ext4 的回调。
+
+## 收益实测
+
+将 10 个 SWE评测镜像转换成大小为块大小为 64GB 的 overlaybd 镜像，共 182 层。挂载后跑 du/find，统计并对比新旧布局的访问区间分布：
+
+| 指标（du+find，MB 为十进制） | 旧版 | 新版 | 变化 |
+|---|---:|---:|---:|
+| LSMT 请求 MB | 1949.475 | 1948.631 | 近乎不变 |
+| LSMT 后半段字节占比 | 63.20% | 99.92% | 更集中 |
+| LSMT 位置 p5–p95 跨度 | 90.82% | 6.38% | 更集中 |
+| LSMT 触及 1 MiB 块 | 12851 | 1276 | −90.07% |
+| ZFile 本地请求 MB | 110.352 | 103.290 | −6.40% |
+| ZFile 唯一 4 KiB 覆盖 MB | 436.945 | 56.717 | −87.02% |
+| ZFile 唯一 1 MiB 覆盖 MB | 6299.222 | 271.553 | −95.69% |
+| sealed 合计 MB | 44574.161 | 32020.957 | −28.16% |
+| ZFile 合计 MB | 17818.462 | 17192.135 | −3.52% |
+
+- **访问集中**：新版 99.95% 的 R 请求字节落在 fsmeta 区，该区只占数据区 5.80%；压缩空间中 fsmeta 对应区间占读取字节 99.45%。
+- **较粗回填粒度的覆盖明显减少**：请求字节仅下降 6.40%，对齐 4 KiB/1 MiB 的唯一覆盖分别下降 87.02%/95.69%。
+
+## 相关代码
+
+| 文件 | 内容 |
+|---|---|
+| `src/tools/overlaybd-apply.cpp` | 命令行选项与输入准备 |
+| `src/overlaybd/tar/compact_conversion.{h,cpp}` | 暂存文件所有权、ext4 生命周期、紧凑 mkfs 和完整 tar 转换 |
+| `src/overlaybd/tar/libtar.cpp` | TarCore::dump_tar_headers、extract_staged、apply_pending；逐文件对齐与零尾 |
+| `src/overlaybd/tar/fsmeta_file.{h,cpp}` | 稀疏 fsmeta 暂存、有效块紧凑追加 |
+| `src/overlaybd/lsmt/file.cpp` | StagedData 映射、close_seal 与索引合并 |

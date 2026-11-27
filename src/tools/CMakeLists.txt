@@ -52,3 +52,15 @@ install(TARGETS
 if (NOT ORIGIN_EXT2FS)
     install(TARGETS overlaybd-resize DESTINATION /opt/overlaybd/bin)
 endif()
+
+if(BUILD_TESTING)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(
+        NAME compact_layout_cli_test
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/compact_layout_test.py
+            --create $<TARGET_FILE:overlaybd-create>
+            --apply $<TARGET_FILE:overlaybd-apply>
+            --commit $<TARGET_FILE:overlaybd-commit>
+    )
+    set_tests_properties(compact_layout_cli_test PROPERTIES TIMEOUT 180)
+endif()

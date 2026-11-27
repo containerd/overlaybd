@@ -241,12 +241,11 @@ TEST_F(ErofsTest, tar_meta) {
     auto tar_idx = fs->open("test.tar.meta", O_TRUNC | O_CREAT | O_RDWR, 0644);
     auto imgfile = createDevice("mock", src_file);
     DEFER(delete imgfile;);
-    auto tar2 = new UnTar(src_file, nullptr, 0, 4096, nullptr, true);
-    auto obj_count = tar2->dump_tar_headers(tar_idx);
+    TarCore tar2(src_file, 0, 4096);
+    auto obj_count = tar2.dump_tar_headers(tar_idx);
     EXPECT_NE(-1, obj_count);
     LOG_INFO("objects count: `", obj_count);
     tar_idx->lseek(0,0);
-    delete tar2;
 
     auto tar3 = new LibErofs(imgfile, 4096, true);
     ASSERT_EQ(0, tar3->extract_tar(tar_idx, true, true));

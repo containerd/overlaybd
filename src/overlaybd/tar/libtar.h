@@ -31,6 +31,10 @@
 #include <string>
 #include <list>
 #include <map>
+#include <functional>
+#include "../lsmt/index.h"
+
+class FsMetaFile;
 
 #define T_BLOCKSIZE     512
 #define T_NAMELEN       100
@@ -166,6 +170,11 @@ public:
     char *get_linkname();
     size_t get_size();
     int read_header(photon::fs::IFile *dump = nullptr);
+    // Return the object count; regular headers record offsets in the source tar.
+    // With staged_data, append 4K-aligned payload and record its offsets instead.
+    // Staging requires seekable headers for offset updates and exclusive access to staged_data.
+    ssize_t dump_tar_headers(photon::fs::IFile *headers,
+                            photon::fs::IFile *staged_data = nullptr);
     bool has_pax_header() {
         return pax != nullptr;
     }
@@ -193,14 +202,15 @@ public:
           : TarCore(src_file, options, fs_blocksize), fs(target_fs),
             fs_base_file(bf), meta_only(meta_only), from_tar_idx(from_tar_idx) {
             xattr_fs = dynamic_cast<photon::fs::IFileSystemXAttr *>(target_fs);
-            if (!xattr_fs) {
+            if (target_fs && !xattr_fs) {
                 LOG_WARN("xattr is not supported by target fs");
             }
         }
 
     int extract_all();
-    // return number of objects in this tarfile
-    ssize_t dump_tar_headers(photon::fs::IFile* file);
+    // Extract headers dumped with staged_data, then install their payload mappings.
+    int extract_staged() { return extract_staged(nullptr, {}); }
+    int extract_staged(FsMetaFile *fsmeta, const std::function<void()> &close_fs);
 
 private:
     photon::fs::IFileSystem *fs = nullptr; // target
@@ -208,12 +218,17 @@ private:
     photon::fs::IFile *fs_base_file = nullptr;
     bool meta_only = false;
     bool from_tar_idx = false;
+    bool defer_mapping = false;
+    // mappings by inode, applied once the fs metadata is synced; roffset -1 marks a tail
+    std::map<ino_t, std::vector<LSMT::RemoteMapping>> pending;
     std::set<std::string> unpackedPaths;
     std::list<std::pair<std::string, int>> dirs; // <path, utime>
 
     int extract_file(const char *filename);
     int extract_regfile(const char *filename);
     int extract_regfile_meta_only(const char *filename);
+    int map_regfile_data(photon::fs::IFile *fout, size_t size, off_t offset);
+    int apply_pending();
     int extract_hardlink(const char *filename);
     int extract_symlink(const char *filename);
     int extract_dir(const char *filename);
@@ -221,6 +236,7 @@ private:
 
     int set_file_perms(const char *filename);
     int convert_whiteout(const char *filename);
+    int unlink_file(const char *path, const struct stat &st);
 
     int mkdir_hier(const std::string_view &dir);
     int remove_all(const std::string &path, bool rmdir = true);

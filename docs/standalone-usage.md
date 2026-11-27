@@ -139,6 +139,9 @@ Use `overlaybd-create` to create a writable layer.
   /opt/overlaybd/bin/overlaybd-create ${data_file} ${index_file} ${virtual size}
 ```
 use `-s` to for creating sparse-file writable layer.
+For Append layers, `--mkfs --compact-layout` formats ext4 with compacted metadata.
+Compact layout is opt-in and must also be passed separately to `overlaybd-apply`
+when desired; see [data layout](apply-data-layout.md) for examples and limits.
 The upper option in overlaybd config file must be set to use a writable layer. Only one writable layer is avialable and it always workes as the top layer.Example:
 ```json
 {
