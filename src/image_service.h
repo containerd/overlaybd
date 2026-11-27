@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <mutex>
 #include <string>
 #include "config.h"
 #include "exporter_server.h"
@@ -75,6 +76,10 @@ private:
     std::pair<std::string, std::string> reload_auth(const char *remote_path);
     void set_result_file(std::string &filename, std::string &data);
     std::string m_config_path;
+    rapidjson::Document m_default_dl_cfg;
+    bool m_has_default_dl_cfg = false;
+    std::mutex m_accel_mtx;
+    std::mutex m_image_files_mtx;
     std::unordered_map<std::string, ImageFile*> m_image_files; // dev_id -> ImageFile*
 };
 
