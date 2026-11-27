@@ -13,6 +13,7 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 */
+#include <cstdint>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -675,11 +676,99 @@ ERROR_EXIT:
     return NULL;
 }
 
+static bool parse_upper_rw_type(const std::string &rw_type, LSMT::RWType &out) {
+    if (rw_type.empty() || rw_type == "append") {
+        out = LSMT::RWType::Append;
+        return true;
+    }
+    if (rw_type == "sparse") {
+        out = LSMT::RWType::Sparse;
+        return true;
+    }
+    if (rw_type == "hybrid") {
+        out = LSMT::RWType::Hybrid;
+        return true;
+    }
+    return false;
+}
+
+// Create an empty LSMT RW upper layer in-process when createIfMissing is set
+// and neither data nor index exists yet, avoiding an external overlaybd-create
+// subprocess on the hot open/acquire path.
+static int ensure_upper_created(ImageConfigNS::UpperConfig &upper) {
+    if (!upper.createIfMissing())
+        return 0;
+    if (!upper.target().empty()) {
+        LOG_ERROR("upper.createIfMissing is not supported with turboOCI target `", upper.target());
+        errno = EINVAL;
+        return -1;
+    }
+    bool data_exists = path_exists(upper.data());
+    bool idx_exists = path_exists(upper.index());
+    if (data_exists && idx_exists)
+        return 0;
+    if (data_exists != idx_exists) {
+        LOG_ERROR("refusing to auto-create upper layer with half-present state: data=` (exists=`), index=` (exists=`)",
+                  upper.data(), data_exists, upper.index(), idx_exists);
+        errno = EEXIST;
+        return -1;
+    }
+    uint64_t vsize_gb = upper.vsize();
+    if (vsize_gb == 0 || vsize_gb > (UINT64_MAX >> 30)) {
+        LOG_ERROR("invalid upper.vsize ` GiB for createIfMissing", vsize_gb);
+        errno = EINVAL;
+        return -1;
+    }
+    LSMT::RWType rw_type = LSMT::RWType::Append;
+    if (!parse_upper_rw_type(upper.rwType(), rw_type)) {
+        LOG_ERROR("invalid upper.rwType ` (expected append, sparse, or hybrid)", upper.rwType());
+        errno = EINVAL;
+        return -1;
+    }
+
+    const int flag = O_RDWR | O_EXCL | O_CREAT;
+    const mode_t mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+    IFile *fdata = open_localfile_adaptor(upper.data().c_str(), flag, mode);
+    if (!fdata) {
+        LOG_ERROR("create upper data ` failed: `", upper.data(), strerror(errno));
+        return -1;
+    }
+    IFile *findex = open_localfile_adaptor(upper.index().c_str(), flag, mode);
+    if (!findex) {
+        int saved = errno;
+        LOG_ERROR("create upper index ` failed: `", upper.index(), strerror(saved));
+        delete fdata;
+        ::unlink(upper.data().c_str());
+        errno = saved;
+        return -1;
+    }
+    LSMT::LayerInfo args(fdata, findex);
+    args.virtual_size = vsize_gb << 30;
+    args.rw_type = rw_type;
+    LSMT::IFileRW *created = LSMT::create_file_rw(args, false);
+    if (!created) {
+        int saved = errno;
+        LOG_ERROR("LSMT::create_file_rw failed for upper data=`, index=`", upper.data(), upper.index());
+        delete fdata;
+        delete findex;
+        ::unlink(upper.data().c_str());
+        ::unlink(upper.index().c_str());
+        errno = saved;
+        return -1;
+    }
+    delete created;
+    delete fdata;
+    delete findex;
+    return 0;
+}
+
 LSMT::IFileRW *ImageFile::open_upper(ImageConfigNS::UpperConfig &upper) {
     IFile *data_file = NULL;
     IFile *idx_file = NULL;
     IFile *target_file = NULL;
     LSMT::IFileRW *ret = NULL;
+    if (ensure_upper_created(upper) != 0)
+        return NULL;
     auto engine = image_service.global_conf.ioEngine();
     if (!upper.target().empty() || engine == ioengine_posixaio)
         engine = ioengine_psync;

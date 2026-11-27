@@ -59,13 +59,19 @@ struct UpperConfig : public ConfigUtils::Config {
     APPCFG_PARA(data, std::string, "");
     APPCFG_PARA(target, std::string, "");
     APPCFG_PARA(gzipIndex, std::string, "");
+    APPCFG_PARA(createIfMissing, bool, false);
+    APPCFG_PARA(vsize, uint64_t, 0);
+    APPCFG_PARA(rwType, std::string, "");
 
     static bool is_valid(rapidjson::Value &v) {
         using ConfigUtils::FieldType;
         return ConfigUtils::HasValidFields(v, {{"index", FieldType::String},
                                               {"data", FieldType::String},
                                               {"target", FieldType::String},
-                                              {"gzipIndex", FieldType::String}});
+                                              {"gzipIndex", FieldType::String},
+                                              {"createIfMissing", FieldType::Bool},
+                                              {"vsize", FieldType::Uint64},
+                                              {"rwType", FieldType::String}});
     }
     bool is_valid() { return is_valid(*this); }
 };

@@ -1583,6 +1583,106 @@ TEST_F(CreateSnapshotTest, recover_uncommitted_seal_of_sparse_upper) {
     delete imgfile;
 }
 
+TEST_F(CreateSnapshotTest, auto_create_upper_hybrid_and_reopen) {
+    const std::string data_path = "/tmp/overlaybd/auto_hybrid_data.lsmt";
+    const std::string index_path = "/tmp/overlaybd/auto_hybrid_index.lsmt";
+    const std::string cfg_path = "/tmp/overlaybd/auto_hybrid_cfg.json";
+    ::unlink(data_path.c_str());
+    ::unlink(index_path.c_str());
+
+    std::string cfg = R"({
+    "lowers": [
+        { "file": "/opt/overlaybd/baselayers/ext4_64" }
+    ],
+    "upper": {
+        "data": "/tmp/overlaybd/auto_hybrid_data.lsmt",
+        "index": "/tmp/overlaybd/auto_hybrid_index.lsmt",
+        "createIfMissing": true,
+        "vsize": 1,
+        "rwType": "hybrid"
+    }
+})";
+    write_file(cfg_path, cfg);
+
+    ImageFile *imgfile = imgservice->create_image_file(cfg_path.c_str(), "");
+    ASSERT_NE(imgfile, nullptr);
+    EXPECT_EQ(::access(data_path.c_str(), F_OK), 0);
+    EXPECT_EQ(::access(index_path.c_str(), F_OK), 0);
+
+    const size_t len = 64 * 1024;
+    ALIGNED_MEM4K(buf, len);
+    for (size_t i = 0; i < len; i++)
+        buf[i] = static_cast<char>((i * 31 + 7) & 0xff);
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf, len, 0), (ssize_t)len);
+    delete imgfile;
+
+    // Reopening with createIfMissing=true must preserve the existing upper data.
+    imgfile = imgservice->create_image_file(cfg_path.c_str(), "");
+    ASSERT_NE(imgfile, nullptr);
+    ALIGNED_MEM4K(buf0, len);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf0, len, 0), (ssize_t)len);
+    for (size_t i = 0; i < len; i++)
+        EXPECT_EQ(buf0[i], buf[i]);
+    delete imgfile;
+
+    ::unlink(data_path.c_str());
+    ::unlink(index_path.c_str());
+    ::unlink(cfg_path.c_str());
+}
+
+TEST_F(CreateSnapshotTest, auto_create_upper_validation_and_half_state) {
+    const std::string data_path = "/tmp/overlaybd/auto_bad_data.lsmt";
+    const std::string index_path = "/tmp/overlaybd/auto_bad_index.lsmt";
+    const std::string cfg_path = "/tmp/overlaybd/auto_bad_cfg.json";
+    ::unlink(data_path.c_str());
+    ::unlink(index_path.c_str());
+
+    // Missing vsize when createIfMissing=true must fail.
+    write_file(cfg_path, R"({
+    "lowers": [{ "file": "/opt/overlaybd/baselayers/ext4_64" }],
+    "upper": {
+        "data": "/tmp/overlaybd/auto_bad_data.lsmt",
+        "index": "/tmp/overlaybd/auto_bad_index.lsmt",
+        "createIfMissing": true,
+        "rwType": "hybrid"
+    }
+})");
+    EXPECT_EQ(imgservice->create_image_file(cfg_path.c_str(), ""), nullptr);
+
+    // Invalid rwType must fail.
+    write_file(cfg_path, R"({
+    "lowers": [{ "file": "/opt/overlaybd/baselayers/ext4_64" }],
+    "upper": {
+        "data": "/tmp/overlaybd/auto_bad_data.lsmt",
+        "index": "/tmp/overlaybd/auto_bad_index.lsmt",
+        "createIfMissing": true,
+        "vsize": 1,
+        "rwType": "unknown"
+    }
+})");
+    EXPECT_EQ(imgservice->create_image_file(cfg_path.c_str(), ""), nullptr);
+
+    // Half-present state (data exists, index absent) must fail without clobbering data.
+    write_file(data_path, "existing");
+    write_file(cfg_path, R"({
+    "lowers": [{ "file": "/opt/overlaybd/baselayers/ext4_64" }],
+    "upper": {
+        "data": "/tmp/overlaybd/auto_bad_data.lsmt",
+        "index": "/tmp/overlaybd/auto_bad_index.lsmt",
+        "createIfMissing": true,
+        "vsize": 1,
+        "rwType": "hybrid"
+    }
+})");
+    EXPECT_EQ(imgservice->create_image_file(cfg_path.c_str(), ""), nullptr);
+    EXPECT_EQ(::access(data_path.c_str(), F_OK), 0);
+    EXPECT_NE(::access(index_path.c_str(), F_OK), 0);
+
+    ::unlink(data_path.c_str());
+    ::unlink(index_path.c_str());
+    ::unlink(cfg_path.c_str());
+}
+
 int main(int argc, char** argv) {
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     DEFER(photon::fini(););
