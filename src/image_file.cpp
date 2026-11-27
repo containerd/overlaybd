@@ -696,6 +696,11 @@ static bool parse_upper_rw_type(const std::string &rw_type, LSMT::RWType &out) {
 // and neither data nor index exists yet, avoiding an external overlaybd-create
 // subprocess on the hot open/acquire path.
 static int ensure_upper_created(ImageConfigNS::UpperConfig &upper) {
+    if (!upper.is_valid()) {
+        LOG_ERROR("invalid upper config fields");
+        errno = EINVAL;
+        return -1;
+    }
     if (!upper.createIfMissing())
         return 0;
     if (!upper.target().empty()) {
@@ -714,7 +719,9 @@ static int ensure_upper_created(ImageConfigNS::UpperConfig &upper) {
         return -1;
     }
     uint64_t vsize_gb = upper.vsize();
-    if (vsize_gb == 0 || vsize_gb > (UINT64_MAX >> 30)) {
+    const uint64_t max_vsize_gb =
+        (LSMT::Segment::MAX_OFFSET * static_cast<uint64_t>(LSMT::ALIGNMENT)) >> 30;
+    if (vsize_gb == 0 || vsize_gb > max_vsize_gb) {
         LOG_ERROR("invalid upper.vsize ` GiB for createIfMissing", vsize_gb);
         errno = EINVAL;
         return -1;
@@ -840,6 +847,10 @@ ERROR_EXIT:
 }
 
 int ImageFile::init_image_file() {
+    if (!conf.is_valid()) {
+        set_failed("invalid image config");
+        LOG_ERROR_RETURN(EINVAL, -1, "invalid image config: `", config_path);
+    }
     // a pending snapshot must be rolled back before any layer is opened
     if (recover_pending_snapshot() != 0) {
         set_failed("failed to recover the pending snapshot");

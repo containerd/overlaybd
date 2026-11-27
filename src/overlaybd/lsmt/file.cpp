@@ -2028,9 +2028,18 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
     LOG_DEBUG("RWFile uuid: `", rst->m_uuid[0]);
     rst->m_vsize = args.virtual_size;
     rst->m_file_ownership = ownership;
-    write_header_trailer(fdata, true, false, true, 0, 0, args);
-    if (args.rw_type != RWType::Sparse) {
-        write_header_trailer(findex, true, false, false, HeaderTrailer::SPACE, 0, args);
+    if (write_header_trailer(fdata, true, false, true, 0, 0, args) !=
+            static_cast<int>(HeaderTrailer::SPACE) ||
+        (args.rw_type != RWType::Sparse &&
+         write_header_trailer(findex, true, false, false, HeaderTrailer::SPACE, 0, args) !=
+             static_cast<int>(HeaderTrailer::SPACE)) ||
+        (args.rw_type == RWType::Sparse &&
+         fdata->ftruncate(args.virtual_size + HeaderTrailer::SPACE) != 0)) {
+        int saved = errno != 0 ? errno : EIO;
+        rst->m_file_ownership = false;
+        delete rst;
+        errno = saved;
+        return nullptr;
     }
     if (findex && !(rst->m_log = IndexLog::open(findex, ownership))) {
         rst->m_file_ownership = false;
@@ -2042,9 +2051,6 @@ IFileRW *create_file_rw(const LayerInfo &args, bool ownership) {
     LOG_INFO("Layer Info: { UUID:`, Parent_UUID: `, RWType: ` Virtual size: `, Version: `.` }", raw,
              args.parent_uuid, rw_type_name(args.rw_type), rst->m_vsize, tmp.version,
              tmp.sub_version);
-    if (args.rw_type == RWType::Sparse) {
-        fdata->ftruncate(args.virtual_size + HeaderTrailer::SPACE);
-    }
     return rst;
 }
 
