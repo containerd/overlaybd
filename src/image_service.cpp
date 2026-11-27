@@ -302,6 +302,19 @@ int ImageService::read_global_config_and_set() {
     }
     // display in log file
     LOG_INFO("log config: ", VALUE(log_level), VALUE(log_path), VALUE(log_size), VALUE(log_num));
+
+    // Cache the default download section once so create_image_file() does not
+    // re-open and re-parse service.json on every image open.
+    m_has_default_dl_cfg = false;
+    if (!global_conf.IsNull() && global_conf.HasMember("download")) {
+        m_default_dl_cfg.CopyFrom(global_conf["download"], m_default_dl_cfg.GetAllocator());
+        m_has_default_dl_cfg = true;
+    }
+    // Pre-populate scalar fields whose APPCFG_PARA accessor uses
+    // GetValueByPointerWithDefault (which inserts missing keys into global_conf),
+    // keeping subsequent concurrent reads from worker/queue threads read-only.
+    (void)global_conf.ublkThreadPoolSize();
+    (void)global_conf.credentialFilePath();
     return 0;
 }
 
@@ -533,6 +546,7 @@ int ImageService::init() {
                 gzip_cache_fs, refill_size, cache_size_GB,
                 10000000, (uint64_t)1048576 * 4096, global_fs.io_alloc);
         }
+        global_fs.remote_fs = global_fs.cached_fs;
     }
     if (global_conf.serviceConfig().enable()) {
         // auto sock_path = global_conf.serviceConfig().domainSocket();
@@ -557,30 +571,38 @@ int ImageService::init() {
 
 bool ImageService::enable_acceleration() {
     auto conf = global_conf.p2pConfig();
-    if (conf.enable() && check_accelerate_url(conf.address())) {
-        ((RegistryFS*)global_fs.underlay_registryfs)->setAccelerateAddress(conf.address().c_str());
+    if (!conf.enable()) {
+        std::lock_guard<std::mutex> lock(m_accel_mtx);
+        if (global_fs.remote_fs != global_fs.cached_fs) {
+            ((RegistryFS *)(global_fs.underlay_registryfs))->setAccelerateAddress();
+            global_fs.remote_fs = global_fs.cached_fs;
+        }
+        return false;
+    }
+    // Probe outside m_accel_mtx: check_accelerate_url() yields in Photon network I/O.
+    bool accel = check_accelerate_url(conf.address());
+    std::lock_guard<std::mutex> lock(m_accel_mtx);
+    if (accel) {
+        ((RegistryFS *)global_fs.underlay_registryfs)->setAccelerateAddress(conf.address().c_str());
         global_fs.remote_fs = global_fs.srcfs;
         return true;
     } else {
-        ((RegistryFS*)(global_fs.underlay_registryfs))->setAccelerateAddress();
+        ((RegistryFS *)(global_fs.underlay_registryfs))->setAccelerateAddress();
         global_fs.remote_fs = global_fs.cached_fs;
         return false;
     }
 }
 
 ImageFile *ImageService::create_image_file(const char *config_path, const std::string &dev_id) {
-    ImageConfigNS::GlobalConfig defaultDlCfg;
-    if (!defaultDlCfg.ParseJSON(m_config_path)) {
-        LOG_WARN("default download config parse failed, ignore");
-    }
     ImageConfigNS::ImageConfig cfg;
     if (!cfg.ParseJSON(config_path)) {
         LOG_ERROR_RETURN(0, nullptr, "error parse image config");
     }
 
-    if (!cfg.HasMember("download") && !defaultDlCfg.IsNull() &&
-        defaultDlCfg.HasMember("download")) {
-        cfg.AddMember("download", defaultDlCfg["download"], cfg.GetAllocator());
+    if (!cfg.HasMember("download") && m_has_default_dl_cfg) {
+        rapidjson::Value dl_copy;
+        dl_copy.CopyFrom(m_default_dl_cfg, cfg.GetAllocator());
+        cfg.AddMember("download", dl_copy, cfg.GetAllocator());
     }
 
     if (enable_acceleration()) {
@@ -606,7 +628,8 @@ ImageFile *ImageService::create_image_file(const char *config_path, const std::s
 int ImageService::register_image_file(const std::string& dev_id, ImageFile* file) {
     if (dev_id.empty())
         return 0;
-    if(find_image_file(dev_id) != nullptr)
+    std::lock_guard<std::mutex> lock(m_image_files_mtx);
+    if (m_image_files.find(dev_id) != m_image_files.end())
         LOG_ERROR_RETURN(0, -1, "dev id exists: `", dev_id);
     m_image_files[dev_id] = file;
     LOG_INFO("Registered image file for dev_id: `", dev_id);
@@ -616,12 +639,14 @@ int ImageService::register_image_file(const std::string& dev_id, ImageFile* file
 int ImageService::unregister_image_file(const std::string& dev_id) {
     if (dev_id.empty())
         return 0;
+    std::lock_guard<std::mutex> lock(m_image_files_mtx);
     m_image_files.erase(dev_id);
     LOG_INFO("Unregistered image file for dev_id: `", dev_id);
     return 0;
 }
 
 ImageFile* ImageService::find_image_file(const std::string& dev_id) {
+    std::lock_guard<std::mutex> lock(m_image_files_mtx);
     auto it = m_image_files.find(dev_id);
     return (it != m_image_files.end()) ? it->second : nullptr;
 }

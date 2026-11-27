@@ -211,14 +211,17 @@ static struct ublksrv_tgt_type obd_tgt_type = {
 // add silently wedged the device added before it. Never let the first
 // attempt fail.
 static unsigned probe_queue_ring_flags() {
-    struct io_uring probe;
-    int r = io_uring_queue_init(2, &probe, IORING_SETUP_COOP_TASKRUN);
-    if (r == 0) {
-        io_uring_queue_exit(&probe);
-        return IORING_SETUP_COOP_TASKRUN;
-    }
-    LOG_WARN("IORING_SETUP_COOP_TASKRUN unsupported (`), queues run without it", r);
-    return 0;
+    static const unsigned flags = []() -> unsigned {
+        struct io_uring probe;
+        int r = io_uring_queue_init(2, &probe, IORING_SETUP_COOP_TASKRUN);
+        if (r == 0) {
+            io_uring_queue_exit(&probe);
+            return IORING_SETUP_COOP_TASKRUN;
+        }
+        LOG_WARN("IORING_SETUP_COOP_TASKRUN unsupported (`), queues run without it", r);
+        return 0;
+    }();
+    return flags;
 }
 
 // The queue thread owns its own photon env and acts as the event-loop master:
@@ -862,16 +865,16 @@ int ublk_kernel_del_dev(int dev_id) {
 // UBLK_F_UPDATE_SIZE support, probed once per process (GET_FEATURES itself
 // is 6.5+; on kernels without it the probe fails -> no support)
 static bool kernel_supports_update_size() {
-    static int cached = -1;
-    if (cached < 0) {
+    static const bool supported = []() -> bool {
         uint64_t features = 0;
         int r = ublk_raw_ctrl_cmd_buf(UBLK_U_CMD_GET_FEATURES, -1, &features,
                                       sizeof(features));
-        cached = (r >= 0 && (features & UBLK_F_UPDATE_SIZE)) ? 1 : 0;
-        if (!cached)
+        bool ok = (r >= 0 && (features & UBLK_F_UPDATE_SIZE));
+        if (!ok)
             LOG_WARN("UBLK_F_UPDATE_SIZE unavailable (probe `), online resize disabled", r);
-    }
-    return cached == 1;
+        return ok;
+    }();
+    return supported;
 }
 
 int UblkDevice::resize(uint64_t new_size_bytes, bool resize_fs, std::string &err) {
