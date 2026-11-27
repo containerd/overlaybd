@@ -1583,6 +1583,217 @@ TEST_F(CreateSnapshotTest, recover_uncommitted_seal_of_sparse_upper) {
     delete imgfile;
 }
 
+TEST_F(CreateSnapshotTest, auto_create_upper_hybrid_and_reopen) {
+    const std::string data_path = "/tmp/overlaybd/auto_hybrid_data.lsmt";
+    const std::string index_path = "/tmp/overlaybd/auto_hybrid_index.lsmt";
+    const std::string cfg_path = "/tmp/overlaybd/auto_hybrid_cfg.json";
+    ::unlink(data_path.c_str());
+    ::unlink(index_path.c_str());
+
+    std::string cfg = R"({
+    "lowers": [
+        { "file": "/opt/overlaybd/baselayers/ext4_64" }
+    ],
+    "upper": {
+        "data": "/tmp/overlaybd/auto_hybrid_data.lsmt",
+        "index": "/tmp/overlaybd/auto_hybrid_index.lsmt",
+        "createIfMissing": true,
+        "vsize": 1,
+        "rwType": "hybrid"
+    }
+})";
+    write_file(cfg_path, cfg);
+
+    ImageFile *imgfile = imgservice->create_image_file(cfg_path.c_str(), "");
+    ASSERT_NE(imgfile, nullptr);
+    EXPECT_EQ(::access(data_path.c_str(), F_OK), 0);
+    EXPECT_EQ(::access(index_path.c_str(), F_OK), 0);
+
+    const size_t len = 64 * 1024;
+    ALIGNED_MEM4K(buf, len);
+    for (size_t i = 0; i < len; i++)
+        buf[i] = static_cast<char>((i * 31 + 7) & 0xff);
+    EXPECT_EQ(PWRITEV_SINGLE(imgfile, buf, len, 0), (ssize_t)len);
+    delete imgfile;
+
+    // Reopening with createIfMissing=true must preserve the existing upper data.
+    imgfile = imgservice->create_image_file(cfg_path.c_str(), "");
+    ASSERT_NE(imgfile, nullptr);
+    ALIGNED_MEM4K(buf0, len);
+    EXPECT_EQ(PREADV_SINGLE(imgfile, buf0, len, 0), (ssize_t)len);
+    for (size_t i = 0; i < len; i++)
+        EXPECT_EQ(buf0[i], buf[i]);
+    delete imgfile;
+
+    ::unlink(data_path.c_str());
+    ::unlink(index_path.c_str());
+    ::unlink(cfg_path.c_str());
+}
+
+TEST_F(CreateSnapshotTest, auto_create_upper_validation_and_half_state) {
+    const std::string data_path = "/tmp/overlaybd/auto_bad_data.lsmt";
+    const std::string index_path = "/tmp/overlaybd/auto_bad_index.lsmt";
+    const std::string cfg_path = "/tmp/overlaybd/auto_bad_cfg.json";
+    ::unlink(data_path.c_str());
+    ::unlink(index_path.c_str());
+
+    // Missing vsize when createIfMissing=true must fail.
+    write_file(cfg_path, R"({
+    "lowers": [{ "file": "/opt/overlaybd/baselayers/ext4_64" }],
+    "upper": {
+        "data": "/tmp/overlaybd/auto_bad_data.lsmt",
+        "index": "/tmp/overlaybd/auto_bad_index.lsmt",
+        "createIfMissing": true,
+        "rwType": "hybrid"
+    }
+})");
+    EXPECT_EQ(imgservice->create_image_file(cfg_path.c_str(), ""), nullptr);
+
+    // Invalid rwType must fail.
+    write_file(cfg_path, R"({
+    "lowers": [{ "file": "/opt/overlaybd/baselayers/ext4_64" }],
+    "upper": {
+        "data": "/tmp/overlaybd/auto_bad_data.lsmt",
+        "index": "/tmp/overlaybd/auto_bad_index.lsmt",
+        "createIfMissing": true,
+        "vsize": 1,
+        "rwType": "unknown"
+    }
+})");
+    EXPECT_EQ(imgservice->create_image_file(cfg_path.c_str(), ""), nullptr);
+
+    // Mistyped upper fields must be rejected cleanly without aborting the daemon.
+    for (const char *bad_upper : {
+             R"({"data":"/tmp/overlaybd/auto_bad_data.lsmt","index":"/tmp/overlaybd/auto_bad_index.lsmt","createIfMissing":"true","vsize":1})",
+             R"({"data":"/tmp/overlaybd/auto_bad_data.lsmt","index":"/tmp/overlaybd/auto_bad_index.lsmt","createIfMissing":true,"vsize":-1})",
+             R"({"data":"/tmp/overlaybd/auto_bad_data.lsmt","index":"/tmp/overlaybd/auto_bad_index.lsmt","createIfMissing":true,"vsize":"1"})",
+             R"({"data":"/tmp/overlaybd/auto_bad_data.lsmt","index":"/tmp/overlaybd/auto_bad_index.lsmt","createIfMissing":true,"vsize":1,"rwType":1})"}) {
+        std::string bad_cfg =
+            std::string(R"({"lowers":[{"file":"/opt/overlaybd/baselayers/ext4_64"}],"upper":)") +
+            bad_upper + "}";
+        write_file(cfg_path, bad_cfg);
+        EXPECT_EQ(imgservice->create_image_file(cfg_path.c_str(), ""), nullptr);
+    }
+
+    // vsize exceeding LSMT's 50-bit sector offset limit (512 PiB) must fail.
+    write_file(cfg_path, R"({
+    "lowers": [{ "file": "/opt/overlaybd/baselayers/ext4_64" }],
+    "upper": {
+        "data": "/tmp/overlaybd/auto_bad_data.lsmt",
+        "index": "/tmp/overlaybd/auto_bad_index.lsmt",
+        "createIfMissing": true,
+        "vsize": 536870912,
+        "rwType": "hybrid"
+    }
+})");
+    EXPECT_EQ(imgservice->create_image_file(cfg_path.c_str(), ""), nullptr);
+
+    // Half-present state (data exists, index absent) must fail without clobbering data.
+    write_file(data_path, "existing");
+    write_file(cfg_path, R"({
+    "lowers": [{ "file": "/opt/overlaybd/baselayers/ext4_64" }],
+    "upper": {
+        "data": "/tmp/overlaybd/auto_bad_data.lsmt",
+        "index": "/tmp/overlaybd/auto_bad_index.lsmt",
+        "createIfMissing": true,
+        "vsize": 1,
+        "rwType": "hybrid"
+    }
+})");
+    EXPECT_EQ(imgservice->create_image_file(cfg_path.c_str(), ""), nullptr);
+    EXPECT_EQ(::access(data_path.c_str(), F_OK), 0);
+    EXPECT_NE(::access(index_path.c_str(), F_OK), 0);
+
+    ::unlink(data_path.c_str());
+    ::unlink(index_path.c_str());
+    ::unlink(cfg_path.c_str());
+}
+
+namespace {
+class FailCreateIOFile : public photon::fs::ForwardFile_Ownership {
+public:
+    bool fail_write = false;
+    bool fail_truncate = false;
+
+    explicit FailCreateIOFile(photon::fs::IFile *file)
+        : photon::fs::ForwardFile_Ownership(file, true) {}
+
+    ssize_t write(const void *buf, size_t count) override {
+        if (fail_write) {
+            errno = ENOSPC;
+            return -1;
+        }
+        return m_file->write(buf, count);
+    }
+
+    int ftruncate(off_t length) override {
+        if (fail_truncate) {
+            errno = EFBIG;
+            return -1;
+        }
+        return m_file->ftruncate(length);
+    }
+};
+} // namespace
+
+TEST_F(CreateSnapshotTest, create_file_rw_propagates_io_errors) {
+    const std::string data_path = "/tmp/overlaybd/fail_io_data.lsmt";
+    const std::string index_path = "/tmp/overlaybd/fail_io_index.lsmt";
+    ::unlink(data_path.c_str());
+    ::unlink(index_path.c_str());
+
+    // Header write failure on fdata returns nullptr and preserves ENOSPC.
+    {
+        FailCreateIOFile fdata(photon::fs::open_localfile_adaptor(
+            data_path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600));
+        FailCreateIOFile findex(photon::fs::open_localfile_adaptor(
+            index_path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600));
+        fdata.fail_write = true;
+        LSMT::LayerInfo args(&fdata, &findex);
+        args.virtual_size = 1 << 20;
+        args.rw_type = LSMT::RWType::Hybrid;
+        auto *created = LSMT::create_file_rw(args, false);
+        int saved = errno;
+        EXPECT_EQ(created, nullptr);
+        EXPECT_EQ(saved, ENOSPC);
+    }
+
+    // Header write failure on findex returns nullptr and preserves ENOSPC.
+    {
+        FailCreateIOFile fdata(photon::fs::open_localfile_adaptor(
+            data_path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600));
+        FailCreateIOFile findex(photon::fs::open_localfile_adaptor(
+            index_path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600));
+        findex.fail_write = true;
+        LSMT::LayerInfo args(&fdata, &findex);
+        args.virtual_size = 1 << 20;
+        args.rw_type = LSMT::RWType::Hybrid;
+        auto *created = LSMT::create_file_rw(args, false);
+        int saved = errno;
+        EXPECT_EQ(created, nullptr);
+        EXPECT_EQ(saved, ENOSPC);
+    }
+
+    // ftruncate failure on sparse layer returns nullptr and preserves EFBIG.
+    {
+        FailCreateIOFile fdata(photon::fs::open_localfile_adaptor(
+            data_path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600));
+        FailCreateIOFile findex(photon::fs::open_localfile_adaptor(
+            index_path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600));
+        fdata.fail_truncate = true;
+        LSMT::LayerInfo args(&fdata, &findex);
+        args.virtual_size = 1 << 20;
+        args.rw_type = LSMT::RWType::Sparse;
+        auto *created = LSMT::create_file_rw(args, false);
+        int saved = errno;
+        EXPECT_EQ(created, nullptr);
+        EXPECT_EQ(saved, EFBIG);
+    }
+
+    ::unlink(data_path.c_str());
+    ::unlink(index_path.c_str());
+}
+
 int main(int argc, char** argv) {
     photon::init(photon::INIT_EVENT_DEFAULT, photon::INIT_IO_DEFAULT);
     DEFER(photon::fini(););
